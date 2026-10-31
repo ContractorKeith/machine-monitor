@@ -8,9 +8,10 @@ and Linux. It is a clean-room Go reimplementation of the ideas in
 feature-parity matrix in `docs/PLAN.md` shipped on all three OSes.
 
 ## Status
-Packages for M0–M8 are merged. The pass-1 skeptic gaps (#45–#49) are fixed: discovery,
-Tailscale, `pair`, the Settings and Add device views, and a 250-device hub TUI on loopback. Pass-2
-fixes are tracked in #56–#59. No release is tagged yet. Last touched 2026-10-31.
+M0–M8 built, followed by three skeptic-review fix rounds (#45–#49, #56–#59, #64–#66).
+The final targeted check at `6ee69c8` judged it ready to tag `v0.1.0` for real-world
+testing on macOS and Windows; only Low findings remain (#71) plus #43. No release
+is tagged yet. Last touched 2026-10-31.
 
 ## Pointers
 - `docs/PLAN.md` — the build plan: architecture, feature matrix, milestones, acceptance.
