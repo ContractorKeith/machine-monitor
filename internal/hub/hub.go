@@ -27,6 +27,7 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/config"
 	"github.com/ContractorKeith/machine-monitor/internal/history"
 	"github.com/ContractorKeith/machine-monitor/internal/power"
+	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
 // Limits and timings, as upstream.
@@ -51,6 +52,9 @@ type Options struct {
 	// Collector samples this machine so the hub monitors itself, as upstream's hub runs its
 	// own agent. nil turns self-monitoring off.
 	Collector collect.Collector
+	// Procs lists this machine's processes, added to its own report while a viewer has its
+	// Processes open (procs.go). nil never lists them.
+	Procs func(ctx context.Context) ([]report.Process, error)
 	// Interval is how often Run samples Collector; 2 s when zero.
 	Interval time.Duration
 	// Now is the clock; time.Now when nil.
@@ -71,7 +75,8 @@ type Hub struct {
 	history *history.Store
 	alerts  *alerts.Engine
 	rate    *rateLimiter
-	pair    pairState // the active pairing code (pair.go)
+	pair    pairState   // the active pairing code (pair.go)
+	act     actionState // command queue and processes on demand (commands.go, procs.go)
 
 	mu       sync.Mutex
 	cfg      hubConfig

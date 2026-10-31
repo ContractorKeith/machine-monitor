@@ -1,0 +1,24 @@
+machine-monitor · ws-01   1 Dashboard  2 Device  3 Processes  6 Alerts       ?/q
+    PID USER       CPU↓       MEM   GPU   GPU MEM NAME         CMD              
+   4242 keith      88.0   6.0 GiB     —         — ollama                        
+     17 root        0.1   8.0 MiB     —         — sshd                          
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+2 of 2 processes · sort CPU ↓ · / filter · s sort · r reverse                   

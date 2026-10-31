@@ -9,6 +9,7 @@ type keyMap struct {
 	Up, Down, PageUp, PageDown, Top, Bottom       key.Binding
 	Filter, Sort, Reverse, Clear                  key.Binding
 	Left, Right, MoveUp, MoveDown, Rename, Remove key.Binding // hub mode
+	Wake, Power                                   key.Binding // hub mode actions
 
 	hub bool // hub mode: help lists the device keys
 }
@@ -22,6 +23,8 @@ func newKeyMap(hub bool) keyMap {
 		MoveDown:  key.NewBinding(key.WithKeys("J"), key.WithHelp("J", "move card later")),
 		Rename:    key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "rename device")),
 		Remove:    key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "remove device")),
+		Wake:      key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "wake offline device")),
+		Power:     key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "power menu")),
 		Dashboard: key.NewBinding(key.WithKeys("1"), key.WithHelp("1", "dashboard")),
 		Device:    key.NewBinding(key.WithKeys("2"), key.WithHelp("2", "device")),
 		Processes: key.NewBinding(key.WithKeys("3"), key.WithHelp("3", "processes")),
@@ -53,8 +56,8 @@ func (k keyMap) FullHelp() [][]key.Binding {
 		{k.Dashboard, k.Device, k.Processes, k.Alerts, k.Next, k.Help, k.Quit},
 		{k.Up, k.Down, k.PageUp, k.PageDown, k.Top, k.Bottom},
 	}
-	if k.hub { // the process list is local-only, so its keys make room for the device keys
-		return append(groups, []key.Binding{k.Left, k.Right, k.MoveUp, k.MoveDown, k.Rename, k.Remove})
+	if k.hub {
+		groups = append(groups, []key.Binding{k.Left, k.Right, k.MoveUp, k.MoveDown, k.Rename, k.Remove, k.Wake, k.Power})
 	}
 	return append(groups, []key.Binding{k.Filter, k.Sort, k.Reverse, k.Clear})
 }

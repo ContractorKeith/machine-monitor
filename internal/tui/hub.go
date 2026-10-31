@@ -79,6 +79,9 @@ func waitEvent(ch <-chan client.Event) tea.Cmd {
 
 // updateHub handles hub-mode messages; ok is false for anything else.
 func (m model) updateHub(msg tea.Msg) (model, tea.Cmd, bool) {
+	if next, cmd, ok := m.updateActions(msg); ok {
+		return next, cmd, true
+	}
 	switch msg := msg.(type) {
 	case streamMsg:
 		m.events = msg.ch
@@ -174,6 +177,11 @@ func (m *model) apply(ev client.Event) {
 		}
 	case client.EventRemoved:
 		m.removeDev(ev.ID)
+	case client.EventActionResult:
+		if n := actionResultNotice(ev.Raw); n != "" {
+			m.notice = n
+		}
+		return
 	default:
 		return // alerts and the rest arrive with their own views
 	}
@@ -295,6 +303,10 @@ func (m model) gridKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.notice = ""
 		}
 		return m, nil
+	case key.Matches(msg, k.Wake):
+		return m.wake()
+	case key.Matches(msg, k.Power):
+		return m.openPower()
 	default:
 		return m, nil
 	}
@@ -536,6 +548,8 @@ func (m model) hubHost() string {
 // hubStatus is the hub-mode footer: an open prompt, the connection state, or the keys.
 func (m model) hubStatus() string {
 	switch {
+	case m.act.menu != "":
+		return m.actionPrompt()
 	case m.rename.Focused():
 		name := m.renameID
 		if d := m.cur(); d != nil && d.id == m.renameID {

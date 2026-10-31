@@ -1,5 +1,6 @@
 // Package client is the read side of a hub's API (PLAN §5 "Connected TUI", §6): the device
-// snapshot, the live SSE stream with reconnects, and rename, remove and reorder.
+// snapshot, the live SSE stream with reconnects, rename, remove and reorder, processes on
+// demand and remote actions.
 //
 // Every request carries the hub key as a Bearer token. Before the first request on each
 // connection the client checks the hub's proof of the key (GET /api/info?nonce=), so the key
@@ -293,4 +294,25 @@ func (c *Client) SetOrder(ctx context.Context, ids []string) error {
 		ids = []string{}
 	}
 	return c.do(ctx, "PUT", "/api/order", map[string][]string{"ids": ids}, nil)
+}
+
+// Processes is a device's process list as GET /api/devices/:id/processes returns it.
+type Processes = hub.ProcessesReply
+
+// Processes is GET /api/devices/:id/processes. Each call keeps the device sending its list
+// for hub.ProcsWatch, so a viewer calls it about every report interval while it shows the
+// list. Procs is nil until the device has sent one.
+func (c *Client) Processes(ctx context.Context, id string) (*Processes, error) {
+	var out Processes
+	if err := c.do(ctx, "GET", "/api/devices/"+url.PathEscape(id)+"/processes", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Action is POST /api/devices/:id/action: "wake" (Wake-on-LAN from the hub), or "sleep",
+// "restart" or "shutdown" for a device that allows them. A power action is only queued;
+// its outcome arrives later as an actionResult event.
+func (c *Client) Action(ctx context.Context, id, action string) error {
+	return c.do(ctx, "POST", "/api/devices/"+url.PathEscape(id)+"/action", map[string]string{"action": action}, nil)
 }

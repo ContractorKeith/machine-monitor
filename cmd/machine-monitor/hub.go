@@ -18,6 +18,7 @@ import (
 	_ "github.com/ContractorKeith/machine-monitor/internal/collect/all" // register probes
 	"github.com/ContractorKeith/machine-monitor/internal/config"
 	"github.com/ContractorKeith/machine-monitor/internal/hub"
+	"github.com/ContractorKeith/machine-monitor/internal/tui"
 )
 
 // runHub is `machine-monitor hub [--port 7777]`: a headless hub that also monitors this machine.
@@ -45,7 +46,8 @@ func runHub(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	logger := log.New(stderr, "", log.LstdFlags)
-	h, err := hub.New(hub.Options{Paths: paths, Port: *port, Collector: collect.New(), Logf: logger.Printf})
+	h, err := hub.New(hub.Options{Paths: paths, Port: *port, Collector: collect.New(),
+		Procs: tui.SystemProcesses().Processes, Logf: logger.Printf})
 	if err != nil {
 		fmt.Fprintf(stderr, "machine-monitor hub: %v\n", err)
 		return 1

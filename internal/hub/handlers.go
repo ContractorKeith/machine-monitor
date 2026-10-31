@@ -1,7 +1,8 @@
 package hub
 
-// HTTP routes (PLAN §6). Pairing is in pair.go. Installers, processes on demand, power
-// actions and the remote (Tailscale) endpoints arrive in later milestones.
+// HTTP routes (PLAN §6). Pairing is in pair.go, processes on demand in procs.go and remote
+// actions in commands.go. Installers and the remote (Tailscale) endpoints arrive in later
+// milestones.
 //
 // Ported from Forward-Future/device-monitor server.js @ c3a4c41
 // (MIT, © 2026 Matt): https://github.com/Forward-Future/device-monitor
@@ -48,6 +49,8 @@ func (h *Hub) Handler() http.Handler {
 	key("PUT /api/order", h.handleOrder)
 	key("PATCH /api/devices/{id}", h.handleRename)
 	key("DELETE /api/devices/{id}", h.handleRemove)
+	key("GET /api/devices/{id}/processes", h.handleProcesses)
+	key("POST /api/devices/{id}/action", h.handleAction)
 	// Everything else, including a known path with the wrong method, is a JSON 404, as upstream.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusNotFound, errorBody("not found"))
@@ -300,6 +303,7 @@ func (h *Hub) handleRemove(w http.ResponseWriter, r *http.Request) {
 		h.logf("hub: remove history %s: %v", id, err)
 	}
 	h.alerts.RemoveDevice(id)
+	h.forgetActions(id)
 	h.broadcast(map[string]any{"type": "removed", "id": id})
 	sendJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

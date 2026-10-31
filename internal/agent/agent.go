@@ -33,6 +33,16 @@ type Options struct {
 	// Procs lists this machine's processes, sent only while the hub asks (reply procs:true).
 	// nil never sends them.
 	Procs func(ctx context.Context) ([]report.Process, error)
+	// AllowPowerActions lets the hub sleep, restart or shut down this machine with signed
+	// commands (actions.go). Off by default.
+	AllowPowerActions bool
+	// SeenFile is where accepted command ids are kept until they expire, so a restart
+	// doesn't re-accept a captured command (beside client.json). "" keeps them in memory.
+	SeenFile string
+	// Exec runs a verified power action; SystemExecutor when nil.
+	Exec Executor
+	// Now is the clock commands are checked against; time.Now when nil.
+	Now func() time.Time
 	// Version goes into each report as agent: "machine-monitor/<version>".
 	Version string
 	// Interval between reports; DefaultInterval when zero.
@@ -45,11 +55,11 @@ type Options struct {
 	Logf func(format string, args ...any)
 }
 
-// reply is the body of a successful POST /api/report. Commands (signed power actions) are
-// M7 and ignored here.
+// reply is the body of a successful POST /api/report.
 type reply struct {
-	OK    bool `json:"ok"`
-	Procs bool `json:"procs"`
+	OK       bool      `json:"ok"`
+	Procs    bool      `json:"procs"`
+	Commands []Command `json:"commands"`
 }
 
 // Run reports to the hub every Interval until ctx is done. While the hub is down or
@@ -72,7 +82,16 @@ func Run(ctx context.Context, opt Options) error {
 	if opt.HTTP == nil {
 		opt.HTTP = NewHTTPClient()
 	}
-	a := &runner{opt: opt}
+	if opt.Exec == nil {
+		opt.Exec = SystemExecutor
+	}
+	if opt.Now == nil {
+		opt.Now = time.Now
+	}
+	a := &runner{opt: opt, guard: guard{key: opt.Key, allow: opt.AllowPowerActions, path: opt.SeenFile}}
+	if err := a.guard.load(opt.Now()); err != nil {
+		a.logf("agent: remembered command ids: %v (starting with none)", err)
+	}
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 	for {
@@ -104,6 +123,9 @@ type runner struct {
 	wantProcs bool // the hub's last reply asked for processes
 	fails     int
 	state     string // last logged state, so repeats aren't logged
+
+	guard   guard                 // checks power commands (actions.go)
+	results []report.ActionResult // outcomes of commands run, sent one per report
 }
 
 // step sends one report: prove the hub if needed, collect, POST.
@@ -131,6 +153,13 @@ func (a *runner) step(ctx context.Context) error {
 	}
 	r.Token = a.opt.Key
 	r.Agent = "machine-monitor/" + a.opt.Version
+	r.Features, r.Actions = a.features(), nil
+	if a.opt.AllowPowerActions {
+		r.Actions = SupportedActions()
+	}
+	if len(a.results) > 0 {
+		r.ActionResult = &a.results[0]
+	}
 	body, err := json.Marshal(r)
 	if err != nil {
 		return err
@@ -140,8 +169,30 @@ func (a *runner) step(ctx context.Context) error {
 		a.proven, a.wantProcs = false, false
 		return err
 	}
+	if r.ActionResult != nil && len(a.results) > 0 { // delivered
+		a.results = a.results[1:]
+	}
 	a.wantProcs = rep.Procs
+	a.runCommands(ctx, r.ID, rep.Commands)
 	return nil
+}
+
+// features is what this agent can do on request, for the report's "features".
+func (a *runner) features() []string {
+	f := []string{}
+	if a.opt.Procs != nil {
+		f = append(f, "procs")
+	}
+	if a.opt.AllowPowerActions {
+		f = append(f, "actions")
+	}
+	return f
+}
+
+func (a *runner) logf(format string, args ...any) {
+	if a.opt.Logf != nil {
+		a.opt.Logf(format, args...)
+	}
 }
 
 // post sends one report and decodes the reply.
