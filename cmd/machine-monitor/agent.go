@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/ContractorKeith/machine-monitor/internal/agent"
@@ -66,22 +67,28 @@ func runAgent(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "machine-monitor agent: no hub or no valid key: run machine-monitor connect URL")
 		return 1
 	}
-	return startAgentWith(hubURL, key, *allowPower, stderr)
+	seen := ""
+	if *allowPower {
+		seen = filepath.Join(filepath.Dir(paths.Client), "agent-commands.json")
+	}
+	return startAgentWith(hubURL, key, *allowPower, seen, stderr)
 }
 
 // startAgent runs the report loop, power actions off, until SIGINT or SIGTERM.
 func startAgent(hubURL, key string, stderr io.Writer) int {
-	return startAgentWith(hubURL, key, false, stderr)
+	return startAgentWith(hubURL, key, false, "", stderr)
 }
 
 // startAgentWith runs the report loop until SIGINT or SIGTERM.
-func startAgentWith(hubURL, key string, allowPower bool, stderr io.Writer) int {
+// seenFile keeps accepted command ids across restarts (agent.Options.SeenFile).
+func startAgentWith(hubURL, key string, allowPower bool, seenFile string, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	logger := log.New(stderr, "", log.LstdFlags)
 	procs := tui.SystemProcesses()
 	err := agent.Run(ctx, agent.Options{HubURL: hubURL, Key: key, Collector: collect.New(),
-		Procs: procs.Processes, AllowPowerActions: allowPower, Version: version, Logf: logger.Printf})
+		Procs: procs.Processes, AllowPowerActions: allowPower,
+		SeenFile: seenFile, Version: version, Logf: logger.Printf})
 	if err != nil {
 		fmt.Fprintf(stderr, "machine-monitor agent: %v\n", err)
 		return 1

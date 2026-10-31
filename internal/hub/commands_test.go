@@ -216,6 +216,9 @@ func TestProcessesOnDemand(t *testing.T) {
 	if p := th.keyed("GET", "/api/devices/dev-2/processes", ""); decode[ProcessesReply](t, p).Supported {
 		t.Error("dev-2 doesn't send processes but is supported")
 	}
+	if rep := th.report("dev-2", nil); rep.Procs {
+		t.Error("a device that can't send processes was asked to")
+	}
 	if w := th.keyed("GET", "/api/devices/nope-1/processes", ""); w.Code != 404 {
 		t.Errorf("unknown device: %d", w.Code)
 	}

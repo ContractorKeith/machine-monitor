@@ -214,6 +214,15 @@ func (m model) actionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if k != "y" && k != "Y" {
 		return m, nil
 	}
+	// The device may have gone offline or turned power actions off while the prompt was up.
+	switch {
+	case !d.online:
+		m.notice = d.name + " went offline · " + action + " not sent"
+		return m, nil
+	case !slices.Contains(d.allowedActions(), action):
+		m.notice = "Remote " + action + " is no longer allowed on " + d.name + " · not sent"
+		return m, nil
+	}
 	name := d.name
 	return m, m.hubCall(func(ctx context.Context, h Hub) tea.Msg {
 		return actionMsg{action: action, name: name, err: h.(ActionHub).Action(ctx, id, action)}

@@ -202,6 +202,21 @@ func TestPowerMenu(t *testing.T) {
 		t.Errorf("actionResult footer = %q", s)
 	}
 
+	// The device drops off (or turns actions off) while the confirmation is up: not sent.
+	m = runActs(t, m, keyMsg("P"), keyMsg("r"))
+	m = runActs(t, m, hubMsg{client.Event{Type: client.EventStatus, Online: map[string]bool{ws: false}}})
+	m = runActs(t, m, keyMsg("y"))
+	if len(f.Calls()) != 1 || !strings.Contains(m.hubStatus(), "went offline") {
+		t.Errorf("sent to an offline device: %q, footer %q", f.Calls(), m.hubStatus())
+	}
+	m = runActs(t, m, hubMsg{client.Event{Type: client.EventStatus, Online: map[string]bool{ws: true}}})
+	m = runActs(t, m, keyMsg("P"), keyMsg("r"))
+	m.editDev(ws, func(d *device) { r := *d.last; r.Actions = []string{"shutdown"}; d.last = &r })
+	m = runActs(t, m, keyMsg("y"))
+	if len(f.Calls()) != 1 || !strings.Contains(m.hubStatus(), "no longer allowed") {
+		t.Errorf("sent a withdrawn action: %q, footer %q", f.Calls(), m.hubStatus())
+	}
+
 	m = runActs(t, m, keyMsg("l"), keyMsg("P")) // the Mac doesn't allow power actions
 	if m.act.menu != "" || !strings.Contains(m.hubStatus(), "--allow-power-actions") {
 		t.Errorf("menu %q footer %q", m.act.menu, m.hubStatus())

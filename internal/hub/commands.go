@@ -6,8 +6,13 @@ package hub
 // only for a device whose agent advertises the action (it runs with --allow-power-actions).
 //
 // Upstream signs "device-monitor-cmd:<id>:<action>". Here the signature also covers the
-// device id and the time the command was queued, so an agent can refuse a command meant
-// for another device or one replayed after its TTL; see SignCommand.
+// device id and the time the command was queued, so an agent can refuse a command copied
+// from another device's reply or replayed after its TTL; see SignCommand.
+//
+// What the signature does not do: the key is the hub token, which every paired agent and
+// TUI holds. It stops someone on the network path who lacks the key from injecting or
+// altering a command, but any key holder can sign a valid command for any device. Per-device
+// keys are issue #43.
 //
 // Ported from Forward-Future/device-monitor server.js (commands, /api/devices/:id/action)
 // @ c3a4c41 (MIT, © 2026 Matt): https://github.com/Forward-Future/device-monitor

@@ -175,7 +175,7 @@ Keep upstream's API paths and JSON shapes so both sides interoperate. Changes ar
 | `GET /api/history/:id?range=&from=&to=&points=` | key | Downsampled history |
 | `GET /api/energy?bounds=` · `GET/PUT /api/energy/settings` | key | Energy summaries and price settings |
 | `GET/PUT /api/alerts` · `POST /api/alerts/test` · `DELETE /api/alerts/log` | key | Alerts |
-| `GET /api/devices/:id/processes` · `POST /api/devices/:id/action` | key | Processes; wake/sleep/restart/shutdown |
+| `GET /api/devices/:id/processes` · `POST /api/devices/:id/action` | key | Processes; wake/sleep/restart/shutdown. Commands are HMAC-signed with the shared hub key: this stops injection by anyone without the key, not forgery by another key holder (per-device keys: #43) |
 | `PATCH/DELETE /api/devices/:id` · `PUT /api/order` | key | Rename, remove, reorder |
 | `GET /install.sh` · `GET /install.ps1` | key | Agent installer (downloads release binary, pins SHA-256) |
 

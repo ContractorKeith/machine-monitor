@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -57,8 +60,9 @@ func TestVerify(t *testing.T) {
 		{"action swapped", Command{ID: good.ID, Action: "shutdown", T: good.T, Sig: good.Sig}, true, false},
 		{"time swapped", Command{ID: good.ID, Action: good.Action, T: good.T - 1, Sig: good.Sig}, true, false},
 		{"expired", signed(ourKey, "dev-1", good.ID, "restart", cmdNow.Add(-CommandTTL-time.Second)), true, false},
-		{"from the future", signed(ourKey, "dev-1", good.ID, "restart", cmdNow.Add(CommandTTL+time.Second)), true, false},
-		{"skewed but in time", signed(ourKey, "dev-1", good.ID, "restart", cmdNow.Add(30*time.Second)), true, true},
+		{"just in time", signed(ourKey, "dev-1", good.ID, "restart", cmdNow.Add(-CommandTTL)), true, true},
+		{"from the future", signed(ourKey, "dev-1", good.ID, "restart", cmdNow.Add(maxSkew+time.Second)), true, false},
+		{"hub clock a little ahead", signed(ourKey, "dev-1", good.ID, "restart", cmdNow.Add(maxSkew)), true, true},
 		{"unknown action", signed(ourKey, "dev-1", good.ID, "format", cmdNow), true, false},
 		{"bad id", signed(ourKey, "dev-1", "A1B2C3D4E5F6", "restart", cmdNow), true, false},
 	}
@@ -108,7 +112,7 @@ func TestBadCommandsIgnored(t *testing.T) {
 		Actions  []string `json:"actions"`
 	}
 	json.Unmarshal(f.reports()[0], &first)
-	if !slices.Equal(first.Features, []string{"actions"}) || !slices.Equal(first.Actions, PowerActions) {
+	if !slices.Equal(first.Features, []string{"actions"}) || !slices.Equal(first.Actions, SupportedActions()) {
 		t.Fatalf("report advertises %v %v", first.Features, first.Actions)
 	}
 
@@ -337,5 +341,57 @@ func TestPowerCommand(t *testing.T) {
 	}
 	if _, err := powerCommand("plan9", "sleep"); err == nil {
 		t.Error("unsupported OS accepted")
+	}
+}
+
+// TestSeenSurvivesRestart: an accepted id is saved, so a new agent process refuses the
+// same command; expired ids are dropped when the file is loaded.
+func TestSeenSurvivesRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent-commands.json")
+	good := signed(ourKey, "dev-1", "a1b2c3d4e5f6", "restart", cmdNow)
+	g := guard{key: ourKey, allow: true, path: path}
+	if err := g.load(cmdNow); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.verify(good, "dev-1", cmdNow); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" {
+		if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o600 {
+			t.Errorf("seen file: %v %v, want mode 0600", fi.Mode(), err)
+		}
+	}
+
+	again := guard{key: ourKey, allow: true, path: path} // the agent restarted
+	if err := again.load(cmdNow.Add(10 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := again.verify(good, "dev-1", cmdNow.Add(10*time.Second)); err == nil {
+		t.Error("captured command accepted again after a restart")
+	}
+
+	later := guard{key: ourKey, allow: true, path: path}
+	if err := later.load(cmdNow.Add(CommandTTL + maxSkew + time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if len(later.seen) != 0 {
+		t.Errorf("expired ids kept on load: %v", later.seen)
+	}
+
+	os.WriteFile(path, []byte("{damaged"), 0o600)
+	if err := (&guard{path: path}).load(cmdNow); err == nil {
+		t.Error("damaged file not reported")
+	}
+}
+
+func TestSupportedActions(t *testing.T) {
+	want := PowerActions
+	switch runtime.GOOS {
+	case "linux", "darwin", "windows":
+	default:
+		want = nil
+	}
+	if got := SupportedActions(); !slices.Equal(got, want) {
+		t.Errorf("SupportedActions() = %v, want %v", got, want)
 	}
 }

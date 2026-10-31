@@ -1,20 +1,28 @@
 package agent
 
 // Signed power actions (PLAN §3 row 25, M7). Off unless the agent runs with
-// --allow-power-actions; then each report advertises them (features "actions", actions
-// sleep/restart/shutdown) and the hub may put commands in its reply. A command runs only
-// if it passes verify: a known action this agent allows, a valid HMAC from the hub key
-// over this device's id, the command id, the action and the time it was queued, queued
-// within CommandTTL (either side of this machine's clock, for skew), and an id not seen
-// before. Anything else is logged and ignored, so a LAN MITM can't inject or replay one.
+// --allow-power-actions; then each report advertises the actions this OS supports
+// (features "actions") and the hub may put commands in its reply. A command runs only if
+// it passes verify: a known action this agent allows, a valid HMAC from the hub key over
+// this device's id, the command id, the action and the time it was queued, queued at most
+// CommandTTL ago (and at most maxSkew ahead of this machine's clock), and an id not seen
+// before. Accepted ids are saved (SeenFile, 0600) until they would expire, so restarting
+// the agent doesn't make a captured command run again. Anything else is logged and
+// ignored, so someone on the network path without the hub key can't inject or replay one.
+//
+// The key is the hub token every paired machine shares, so the signature proves a command
+// came from a holder of the hub key, not from the hub: any paired machine or TUI can sign
+// a command for any device. Per-device keys are issue #43.
 
 import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,15 +31,19 @@ import (
 	"slices"
 	"time"
 
+	"github.com/ContractorKeith/machine-monitor/internal/config"
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
 // PowerActions are the remote actions an agent can allow.
 var PowerActions = []string{"sleep", "restart", "shutdown"}
 
-// CommandTTL is how far a command's queue time may be from this machine's clock, matching
-// the hub's TTL.
+// CommandTTL is how long after it was queued a command may run, matching the hub's TTL.
 const CommandTTL = 60 * time.Second
+
+// maxSkew is how far in this machine's future a command's queue time may be: a hub clock
+// slightly ahead of ours.
+const maxSkew = 5 * time.Second
 
 // maxSeen caps remembered command ids. Only the key holder can add one, and ids leave
 // after CommandTTL, so the cap is never reached in use; past it commands are refused.
@@ -65,10 +77,54 @@ func CommandSig(key, device, id, action string, t int64) string {
 type guard struct {
 	key   string
 	allow bool
+	path  string               // where seen ids are saved; "" keeps them in memory only
 	seen  map[string]time.Time // command id -> when it may be forgotten
 }
 
-// verify checks one command for device at now, and on success remembers its id.
+// load reads the saved ids, dropping expired ones. A missing file is no ids; a damaged
+// one is reported and treated as none (anyone who can write it already owns the machine).
+func (g *guard) load(now time.Time) error {
+	g.seen = map[string]time.Time{}
+	if g.path == "" {
+		return nil
+	}
+	b, err := os.ReadFile(g.path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var saved map[string]int64 // id -> forget after, Unix ms
+	if err := json.Unmarshal(b, &saved); err != nil {
+		return fmt.Errorf("%s: %w", g.path, err)
+	}
+	for id, ms := range saved {
+		if until := time.UnixMilli(ms); cmdIDRE.MatchString(id) && now.Before(until) && len(g.seen) < maxSeen {
+			g.seen[id] = until
+		}
+	}
+	return nil
+}
+
+// save writes the seen ids.
+func (g *guard) save() error {
+	if g.path == "" {
+		return nil
+	}
+	out := make(map[string]int64, len(g.seen))
+	for id, until := range g.seen {
+		out[id] = until.UnixMilli()
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return err
+	}
+	return config.WriteFile0600(g.path, b)
+}
+
+// verify checks one command for device at now and, on success, records its id (saved
+// before verify returns, so the command can't run twice even across a restart).
 func (g *guard) verify(c Command, device string, now time.Time) error {
 	for id, until := range g.seen {
 		if now.After(until) {
@@ -78,14 +134,16 @@ func (g *guard) verify(c Command, device string, now time.Time) error {
 	switch {
 	case !g.allow:
 		return errors.New("power actions are off on this machine (--allow-power-actions)")
-	case !slices.Contains(PowerActions, c.Action) || !cmdIDRE.MatchString(c.ID):
+	case !slices.Contains(SupportedActions(), c.Action) || !cmdIDRE.MatchString(c.ID):
 		return errors.New("unknown command")
 	case !hmac.Equal([]byte(c.Sig), []byte(CommandSig(g.key, device, c.ID, c.Action, c.T))):
 		return errors.New("bad signature")
 	}
 	queued := time.UnixMilli(c.T)
-	if d := now.Sub(queued); d > CommandTTL || d < -CommandTTL {
+	if d := now.Sub(queued); d > CommandTTL {
 		return errors.New("expired")
+	} else if d < -maxSkew {
+		return errors.New("queued in the future (hub clock ahead?)")
 	}
 	if _, dup := g.seen[c.ID]; dup {
 		return errors.New("already run (replayed)")
@@ -96,9 +154,24 @@ func (g *guard) verify(c Command, device string, now time.Time) error {
 	if g.seen == nil {
 		g.seen = map[string]time.Time{}
 	}
-	// Past this the TTL check refuses it anyway.
-	g.seen[c.ID] = now.Add(2 * CommandTTL)
+	// Past this the TTL check refuses it anyway: queued <= now+maxSkew.
+	g.seen[c.ID] = now.Add(CommandTTL + maxSkew)
+	if err := g.save(); err != nil {
+		delete(g.seen, c.ID)
+		return fmt.Errorf("can't record the command id: %w", err)
+	}
 	return nil
+}
+
+// SupportedActions are the PowerActions this OS has a command for.
+func SupportedActions() []string {
+	var out []string
+	for _, a := range PowerActions {
+		if _, err := powerCommand(runtime.GOOS, a); err == nil {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // runCommands verifies and runs each command, queueing one actionResult per command run.

@@ -36,6 +36,9 @@ type Options struct {
 	// AllowPowerActions lets the hub sleep, restart or shut down this machine with signed
 	// commands (actions.go). Off by default.
 	AllowPowerActions bool
+	// SeenFile is where accepted command ids are kept until they expire, so a restart
+	// doesn't re-accept a captured command (beside client.json). "" keeps them in memory.
+	SeenFile string
 	// Exec runs a verified power action; SystemExecutor when nil.
 	Exec Executor
 	// Now is the clock commands are checked against; time.Now when nil.
@@ -85,7 +88,10 @@ func Run(ctx context.Context, opt Options) error {
 	if opt.Now == nil {
 		opt.Now = time.Now
 	}
-	a := &runner{opt: opt, guard: guard{key: opt.Key, allow: opt.AllowPowerActions}}
+	a := &runner{opt: opt, guard: guard{key: opt.Key, allow: opt.AllowPowerActions, path: opt.SeenFile}}
+	if err := a.guard.load(opt.Now()); err != nil {
+		a.logf("agent: remembered command ids: %v (starting with none)", err)
+	}
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 	for {
@@ -149,7 +155,7 @@ func (a *runner) step(ctx context.Context) error {
 	r.Agent = "machine-monitor/" + a.opt.Version
 	r.Features, r.Actions = a.features(), nil
 	if a.opt.AllowPowerActions {
-		r.Actions = PowerActions
+		r.Actions = SupportedActions()
 	}
 	if len(a.results) > 0 {
 		r.ActionResult = &a.results[0]
@@ -163,7 +169,7 @@ func (a *runner) step(ctx context.Context) error {
 		a.proven, a.wantProcs = false, false
 		return err
 	}
-	if r.ActionResult != nil { // delivered
+	if r.ActionResult != nil && len(a.results) > 0 { // delivered
 		a.results = a.results[1:]
 	}
 	a.wantProcs = rep.Procs

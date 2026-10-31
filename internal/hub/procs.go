@@ -56,7 +56,9 @@ func (h *Hub) handleProcesses(w http.ResponseWriter, r *http.Request) {
 	if h.act.watch == nil {
 		h.act.watch = map[string]time.Time{}
 	}
-	h.act.watch[id] = now.Add(ProcsWatch)
+	if out.Supported { // a device that can't send processes isn't asked to
+		h.act.watch[id] = now.Add(ProcsWatch)
+	}
 	if p := h.act.procs[id]; p != nil && now.UnixMilli()-p.T < ProcsWatch.Milliseconds() {
 		out.Procs = p
 	}
