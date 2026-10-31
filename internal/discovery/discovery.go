@@ -34,13 +34,20 @@ const (
 
 	maxReply = 512 // upstream drops larger replies
 
-	// Reply limits, so the responder can't be used to reflect traffic at a spoofed source:
-	// at most replyPerSource replies per source and replyGlobal in all, per replyWindow. A
-	// client's probe reaches a hub a few times at most (255.255.255.255 plus a directed
-	// broadcast per network).
-	replyWindow    = time.Second
-	replyPerSource = 5
-	replyGlobal    = 50
+	// Reply limits, so the responder can't be used to reflect traffic at a spoofed source,
+	// and a flood from a few sources can't hide the hub from everyone else (skeptic report
+	// N2). Each source has a token bucket of replyPerSource replies that refills at
+	// replySourceRate a second. Every reply also spends from one of two global buckets, each
+	// refilled at replyGlobal/2 a second: one for sources first answered within replyNewFor,
+	// one for the rest. A flood soon counts as established, so it can drain only that half,
+	// and a client that has just started probing still gets an answer. A client's probe
+	// reaches a hub a few times at most (255.255.255.255 plus a directed broadcast per
+	// network).
+	replyPerSource  = 5
+	replySourceRate = 2.0 // replies a second, per source
+	replyGlobal     = 50  // replies a second in all
+	replyNewFor     = 5 * time.Second
+	replyIdle       = 30 * time.Second // a source silent this long is forgotten (new again)
 )
 
 // Reply is the JSON a hub sends back to a probe: {"app","name","port"} as upstream, plus
@@ -111,33 +118,78 @@ func Respond(addr, name string, hubPort int) (*Responder, error) {
 	return r, nil
 }
 
-// replyLimiter counts replies in fixed windows of replyWindow, per source and in all.
+// replyLimiter holds the reply token buckets: one per source, and the two global ones.
+// Only sources that have been answered are tracked, so the map holds at most about
+// replyGlobal*replyIdle entries however many addresses a flood uses.
 type replyLimiter struct {
-	now   func() time.Time
-	mu    sync.Mutex
-	start time.Time
-	total int
-	per   map[netip.Addr]int
+	now    func() time.Time
+	mu     sync.Mutex
+	at     time.Time // when the global buckets were last refilled
+	fresh  float64   // global tokens for sources first answered within replyNewFor
+	old    float64   // global tokens for every other source
+	pruned time.Time
+	per    map[netip.Addr]*replySource
+}
+
+// replySource is one source's bucket.
+type replySource struct {
+	first  time.Time // first reply
+	seen   time.Time // last probe
+	at     time.Time // last refill
+	tokens float64
 }
 
 func newReplyLimiter(now func() time.Time) *replyLimiter {
-	return &replyLimiter{now: now, per: map[netip.Addr]int{}}
+	t := now()
+	return &replyLimiter{now: now, at: t, pruned: t, fresh: replyGlobal / 2, old: replyGlobal / 2, per: map[netip.Addr]*replySource{}}
 }
 
-// allow counts one reply to from and reports whether it is within the limits. The global
-// limit is checked first, so the map never holds more than replyGlobal sources.
+// refill adds the tokens earned since at, up to burst.
+func refill(tokens *float64, at *time.Time, now time.Time, rate, burst float64) {
+	if d := now.Sub(*at).Seconds(); d > 0 {
+		*tokens = min(burst, *tokens+d*rate)
+	}
+	*at = now
+}
+
+// allow reports whether a reply to from is within the limits, and if so spends it.
 func (l *replyLimiter) allow(from netip.Addr) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if now := l.now(); now.Sub(l.start) >= replyWindow {
-		l.start, l.total = now, 0
-		clear(l.per)
+	now := l.now()
+	at := l.at
+	refill(&l.fresh, &at, now, replyGlobal/2, replyGlobal/2)
+	refill(&l.old, &l.at, now, replyGlobal/2, replyGlobal/2)
+	if now.Sub(l.pruned) >= replyIdle {
+		l.pruned = now
+		for a, s := range l.per {
+			if now.Sub(s.seen) >= replyIdle {
+				delete(l.per, a)
+			}
+		}
 	}
-	if l.total >= replyGlobal || l.per[from] >= replyPerSource {
+	s := l.per[from]
+	if s != nil && now.Sub(s.seen) >= replyIdle {
+		s = nil // silent long enough to count as new
+	}
+	if s == nil {
+		s = &replySource{first: now, at: now, tokens: replyPerSource}
+	}
+	s.seen = now
+	refill(&s.tokens, &s.at, now, replySourceRate, replyPerSource)
+	global := &l.old
+	if now.Sub(s.first) < replyNewFor {
+		global = &l.fresh
+	}
+	if s.tokens < 1 || *global < 1 {
+		if _, tracked := l.per[from]; tracked {
+			l.per[from] = s
+		}
 		return false
 	}
-	l.total++
-	l.per[from]++
+	s.tokens--
+	*global--
+	l.per[from] = s
 	return true
 }
 

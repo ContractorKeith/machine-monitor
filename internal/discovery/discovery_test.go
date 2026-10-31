@@ -291,17 +291,66 @@ func TestReplyLimiter(t *testing.T) {
 	if l.allow(src(0)) {
 		t.Fatal("one source over its limit")
 	}
-	for i := 1; l.total < replyGlobal; i++ {
-		if !l.allow(src(i)) {
-			t.Fatalf("source %d refused under the global limit", i)
+	// Many new sources at once share the new-source half of the global budget.
+	n := 0
+	for i := 1; i <= 1000; i++ {
+		if l.allow(src(i)) {
+			n++
 		}
 	}
-	if l.allow(src(9999)) || len(l.per) > replyGlobal {
-		t.Fatalf("over the global limit (tracking %d sources)", len(l.per))
+	if n+replyPerSource != replyGlobal/2 || len(l.per) > replyGlobal {
+		t.Fatalf("%d replies to 1000 new sources (tracking %d); want %d", n, len(l.per), replyGlobal/2-replyPerSource)
 	}
-	now = now.Add(replyWindow)
+	now = now.Add(time.Second)
 	if !l.allow(src(0)) {
-		t.Fatal("not reset after the window")
+		t.Fatal("not refilled after a second")
+	}
+}
+
+// TestReplyFloodLeavesRoom is skeptic report N2: ten sources probing 50 times a second each
+// (500 pps, unprivileged on one machine) used up the global limit, so every legitimate
+// probe went unanswered. The flood must stay within the limits and a new prober must still
+// be answered, as must one that probes again a few seconds later.
+func TestReplyFloodLeavesRoom(t *testing.T) {
+	now := time.Unix(1000, 0)
+	l := newReplyLimiter(func() time.Time { return now })
+	flood := func(i int) netip.Addr { return netip.AddrFrom4([4]byte{127, 0, 0, byte(2 + i)}) }
+	legit := netip.MustParseAddr("127.0.0.1")
+	const step = 2 * time.Millisecond // 500 probes a second, round robin over 10 sources
+	replies, perSecond, legitAnswered, legitProbes := 0, 0, 0, 0
+	start := now
+	for k := 0; now.Sub(start) < 20*time.Second; k++ {
+		now = now.Add(step)
+		if l.allow(flood(k % 10)) {
+			replies++
+			perSecond++
+		}
+		if k%500 == 499 { // a whole second
+			if perSecond > replyGlobal {
+				t.Fatalf("%d replies in second %d; want at most %d", perSecond, k/500, replyGlobal)
+			}
+			perSecond = 0
+		}
+		// The legitimate client: three probes (broadcast and two directed) at 8 s, and
+		// again at 11 s and 14 s, as `connect` run three times in a row.
+		if at := now.Sub(start); at == 8*time.Second || at == 11*time.Second || at == 14*time.Second {
+			for range 3 {
+				legitProbes++
+				if l.allow(legit) {
+					legitAnswered++
+				}
+			}
+		}
+	}
+	if legitAnswered != legitProbes {
+		t.Errorf("the legitimate prober got %d replies to %d probes during the flood; want all", legitAnswered, legitProbes)
+	}
+	// After the first seconds the flood draws only on its own share.
+	if max := 20*replyGlobal/2 + replyGlobal; replies > max {
+		t.Errorf("the flood got %d replies in 20 s; want at most %d", replies, max)
+	}
+	if replies == 0 {
+		t.Error("the flood's sources got no replies at all; each should keep a small share")
 	}
 }
 
