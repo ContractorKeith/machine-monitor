@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"runtime"
 	"strings"
@@ -379,6 +380,18 @@ func TestInfo(t *testing.T) {
 	if locked["proof"] != hubProof(th.Token(), nonce) {
 		t.Errorf("proof = %v", locked["proof"])
 	}
+	// connProof covers the connection's source address and port as the hub saw them.
+	peer := netip.MustParseAddrPort("127.0.0.1:50000")
+	if locked["connProof"] != ConnProof(th.Token(), nonce, peer) {
+		t.Errorf("connProof = %v", locked["connProof"])
+	}
+	other := decode[map[string]any](t, th.req("GET", "/api/info?nonce="+nonce, "", "", "RemoteAddr", "127.0.0.1:50001"))
+	if other["connProof"] == locked["connProof"] || other["proof"] != locked["proof"] {
+		t.Errorf("connProof doesn't depend on the source port: %v", other)
+	}
+	if ConnProof("k", nonce, netip.MustParseAddrPort("[::ffff:127.0.0.1]:9")) != ConnProof("k", nonce, netip.MustParseAddrPort("127.0.0.1:9")) {
+		t.Error("connProof differs for a mapped address")
+	}
 	// Computed with upstream's hubProof in Node: hex(HMAC-SHA256(key, "device-monitor-hub:" + nonce)).
 	if got := hubProof("k", "abc"); got != "edde3dc2cc87ea46276b01ea252bdf3a8b538dcdd0e475e0f1b53e070c0745fe" {
 		t.Errorf("hubProof(k, abc) = %s", got)
@@ -515,19 +528,24 @@ func TestRateLimit(t *testing.T) {
 	if w := th.req("GET", "/api/info", "", "", "X-Forwarded-For", "100.64.0.7"); w.Code != 429 {
 		t.Errorf("X-Forwarded-For from loopback dodged the limit with no trusted proxy: %d", w.Code)
 	}
-	// From a trusted proxy (tailscale serve) the forwarded address is the client.
+	// From a trusted proxy on another machine the forwarded address is the client.
+	const proxy = "192.168.1.2:5000"
 	th.mu.Lock()
-	th.cfg.extra = map[string]json.RawMessage{"trustedProxies": json.RawMessage(`["127.0.0.1"]`)}
+	th.cfg.extra = map[string]json.RawMessage{"trustedProxies": json.RawMessage(`["127.0.0.1", "192.168.1.2"]`)}
 	th.mu.Unlock()
-	if w := th.req("GET", "/api/info", "", "", "X-Forwarded-For", "100.64.0.7"); w.Code != 200 {
+	if w := th.req("GET", "/api/info", "", "", "RemoteAddr", proxy, "X-Forwarded-For", "100.64.0.7"); w.Code != 200 {
 		t.Errorf("client forwarded by a trusted proxy: %d", w.Code)
 	}
 	// The proxy appends the address it saw; earlier entries are the client's to invent.
 	for i := range RateMax {
-		th.req("GET", "/api/info", "", "", "X-Forwarded-For", fmt.Sprintf("10.1.%d.%d, 100.64.0.9", i/250, i%250+1))
+		th.req("GET", "/api/info", "", "", "RemoteAddr", proxy, "X-Forwarded-For", fmt.Sprintf("10.1.%d.%d, 100.64.0.9", i/250, i%250+1))
 	}
-	if w := th.req("GET", "/api/info", "", "", "X-Forwarded-For", "10.9.9.9, 100.64.0.9"); w.Code != 429 {
+	if w := th.req("GET", "/api/info", "", "", "RemoteAddr", proxy, "X-Forwarded-For", "10.9.9.9, 100.64.0.9"); w.Code != 429 {
 		t.Errorf("rotating the leftmost X-Forwarded-For dodged the limit: %d", w.Code)
+	}
+	// A listed loopback proxy is still not believed: any local program connects from there.
+	if w := th.req("GET", "/api/info", "", "", "X-Forwarded-For", "100.64.0.10"); w.Code != 429 {
+		t.Errorf("X-Forwarded-For from a trusted loopback proxy dodged the limit: %d", w.Code)
 	}
 	// The key skips the limit; the limit resets after the window.
 	if w := th.keyed("GET", "/api/info", ""); w.Code != 200 {
@@ -1264,8 +1282,9 @@ func TestFailedReportsDontLockOutAgent(t *testing.T) {
 		if code, _ := th.postFrom(nat, th.agentReport("dev-1", nil)); code != 200 {
 			t.Fatalf("round %d: keyed report: %d", round, code)
 		}
-		// Its success cleared the address, so a stray bad report is a 401 again.
-		if code, _ := th.postFrom(nat, `{"token":"guess"}`); code != 401 {
+		// Its success doesn't clear the address, or the attacker would get another
+		// reportFailMax full reads after each of the agent's reports.
+		if code, _ := th.postFrom(nat, `{"token":"guess"}`); code != 429 {
 			t.Fatalf("round %d: after the agent's report: %d", round, code)
 		}
 	}
@@ -1277,6 +1296,63 @@ func TestFailedReportsDontLockOutAgent(t *testing.T) {
 	late = strings.TrimSuffix(late, "}") + `,"pad":"` + strings.Repeat("x", reportPeek) + `","token":"` + th.Token() + `"}`
 	if code, _ := th.postFrom(nat, late); code != 429 {
 		t.Errorf("token past the peek over budget: %d", code)
+	}
+}
+
+// IPv6 peers are counted per /64 for the rate limit and the failed-report budget, as for
+// pairing tries: a machine can use any address in its /64.
+func TestLimitsPerIPv6Prefix(t *testing.T) {
+	th := newTestHub(t)
+	for i := range RateMax {
+		th.req("GET", "/api/info", "", "", "RemoteAddr", fmt.Sprintf("[fd00::%x]:1", i+1))
+	}
+	if w := th.req("GET", "/api/info", "", "", "RemoteAddr", "[fd00::ffff]:1"); w.Code != 429 {
+		t.Errorf("new address in the same /64: %d", w.Code)
+	}
+	if w := th.req("GET", "/api/info", "", "", "RemoteAddr", "[fd00:0:0:1::1]:1"); w.Code != 200 {
+		t.Errorf("another /64: %d", w.Code)
+	}
+	for i := range reportFailMax {
+		th.postFrom(fmt.Sprintf("[fd00::%x]:4000", i+1), `{"token":"guess"}`)
+	}
+	if code, _ := th.postFrom("[fd00::abcd]:4000", `{"token":"guess"}`); code != 429 {
+		t.Errorf("failed reports from one /64: %d", code)
+	}
+}
+
+// X-Forwarded-For is read from the right, past trusted proxies, and only from a trusted,
+// non-loopback socket.
+func TestClientAddr(t *testing.T) {
+	th := newTestHub(t)
+	th.mu.Lock()
+	th.cfg.extra = map[string]json.RawMessage{"trustedProxies": json.RawMessage(`["127.0.0.1", "::1", "192.168.1.2", "10.0.0.0/24"]`)}
+	th.mu.Unlock()
+	for _, tc := range []struct{ remote, xff, want string }{
+		{"192.168.1.2:1", "100.64.0.5", "100.64.0.5"},
+		{"192.168.1.2:1", "6.6.6.6, 100.64.0.5", "100.64.0.5"},
+		{"192.168.1.2:1", "6.6.6.6, 100.64.0.5, 10.0.0.7", "100.64.0.5"}, // a second trusted hop
+		{"192.168.1.2:1", "100.64.0.5, junk", "192.168.1.2"},
+		{"192.168.1.2:1", "", "192.168.1.2"},
+		{"192.168.1.3:1", "100.64.0.5", "192.168.1.3"}, // not a trusted proxy
+		{"127.0.0.1:1", "100.64.0.5", "127.0.0.1"},     // loopback: any local program
+		{"[::1]:1", "100.64.0.5", "::1"},
+	} {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.RemoteAddr = tc.remote
+		if tc.xff != "" {
+			r.Header.Set("X-Forwarded-For", tc.xff)
+		}
+		if got, _ := th.clientAddr(r); got.String() != tc.want {
+			t.Errorf("%s with %q: %s, want %s", tc.remote, tc.xff, got, tc.want)
+		}
+	}
+	// Several header lines are one list.
+	r := httptest.NewRequest("GET", "/", nil)
+	r.RemoteAddr = "192.168.1.2:1"
+	r.Header.Add("X-Forwarded-For", "100.64.0.5")
+	r.Header.Add("X-Forwarded-For", "100.64.0.6")
+	if got, _ := th.clientAddr(r); got.String() != "100.64.0.6" {
+		t.Errorf("two header lines: %s", got)
 	}
 }
 

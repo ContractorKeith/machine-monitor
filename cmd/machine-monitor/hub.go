@@ -80,7 +80,7 @@ func runHub(args []string, stdout, stderr io.Writer) int {
 	for _, a := range hub.LANAddresses() {
 		fmt.Fprintf(stdout, "  other devices: http://%s:%d   (%s)\n", a.Address, *port, a.Name)
 	}
-	fmt.Fprintf(stdout, "  add a device:  run machine-monitor pair here, then machine-monitor connect on the device\n")
+	fmt.Fprintf(stdout, "  add a device:  run %s here, then machine-monitor connect on the device\n", pairCommand(*port))
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -136,4 +136,12 @@ func maskKey(key string) string {
 		return strings.Repeat("•", len(key))
 	}
 	return key[:4] + strings.Repeat("•", len(key)-4)
+}
+
+// pairCommand is the pair command for a hub on port: --port only when it isn't the default.
+func pairCommand(port int) string {
+	if port == hub.DefaultPort {
+		return "machine-monitor pair"
+	}
+	return fmt.Sprintf("machine-monitor pair --port %d", port)
 }

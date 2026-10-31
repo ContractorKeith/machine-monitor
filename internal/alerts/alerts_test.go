@@ -443,7 +443,7 @@ func TestTestAlertAndHTTPErrors(t *testing.T) {
 	h := newHarness(t, `{"rules":[],`+channels+`}`)
 	h.doer.status = http.StatusFound // a redirect is a failure, never followed
 	d := h.e.Test(context.Background())
-	if d.Ntfy == nil || d.Ntfy.OK || d.Ntfy.Error != "HTTP 302 nope" || d.Webhook == nil || d.Webhook.OK {
+	if d.Ntfy == nil || d.Ntfy.OK || d.Ntfy.Error != "HTTP 302 Found" || d.Webhook == nil || d.Webhook.OK {
 		t.Fatalf("delivery = %+v %+v", d.Ntfy, d.Webhook)
 	}
 	evs := h.events()
@@ -456,7 +456,8 @@ func TestTestAlertAndHTTPErrors(t *testing.T) {
 func TestWebhookToLoopbackRefused(t *testing.T) {
 	for _, u := range []string{"http://127.0.0.1:8080/hook", "http://[::1]/x", "http://localhost/x",
 		"http://foo.localhost/x", "http://0.0.0.0/x", "http://[::ffff:127.0.0.1]/x", "http://169.254.169.254/x",
-		"http://2130706433/x", "http://0x7f.1/x", "http://127.1/x", "ftp://example.com/x"} {
+		"http://2130706433/x", "http://0x7f.1/x", "http://127.1/x", "ftp://example.com/x",
+		"http://100.100.100.100/", "http://[fd7a:115c:a1e0::53]/"} {
 		if _, err := ParseSettings([]byte(`{"rules":[],"channels":{"webhook":{"enabled":true,"url":"` + u + `"}}}`)); err == nil {
 			t.Errorf("%s: accepted", u)
 		}
@@ -503,12 +504,17 @@ func TestPrivateAddresses(t *testing.T) {
 	if !blockedAddr(lan, true) || !blockedAddr(netip.MustParseAddr("fd00::1"), true) {
 		t.Fatal("BlockPrivate didn't block")
 	}
-	for _, a := range []string{"127.0.0.1", "0.1.2.3", "169.254.169.254", "::1", "::", "fe80::1", "::ffff:169.254.169.254", "::127.0.0.1"} {
+	if !blockedAddr(netip.MustParseAddr("100.101.102.103"), true) {
+		t.Fatal("BlockPrivate didn't block a tailnet (CGNAT) address")
+	}
+	// Tailscale's on-host service (quad-100) is always refused: it is this machine.
+	for _, a := range []string{"127.0.0.1", "0.1.2.3", "169.254.169.254", "::1", "::", "fe80::1", "::ffff:169.254.169.254", "::127.0.0.1",
+		"100.100.100.100", "::ffff:100.100.100.100", "fd7a:115c:a1e0::53"} {
 		if !blockedAddr(netip.MustParseAddr(a), false) {
 			t.Errorf("%s not blocked", a)
 		}
 	}
-	for _, a := range []string{"8.8.8.8", "100.64.0.1", "10.0.0.1", "2606:4700::1111"} {
+	for _, a := range []string{"8.8.8.8", "100.64.0.1", "100.100.100.101", "10.0.0.1", "fd7a:115c:a1e0::54", "2606:4700::1111"} {
 		if blockedAddr(netip.MustParseAddr(a), false) {
 			t.Errorf("%s blocked", a)
 		}

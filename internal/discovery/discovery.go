@@ -9,12 +9,16 @@ package discovery
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"math"
 	"net"
 	"net/netip"
 	"regexp"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -29,14 +33,26 @@ const (
 	Impl = "machine-monitor"
 
 	maxReply = 512 // upstream drops larger replies
+
+	// Reply limits, so the responder can't be used to reflect traffic at a spoofed source:
+	// at most replyPerSource replies per source and replyGlobal in all, per replyWindow. A
+	// client's probe reaches a hub a few times at most (255.255.255.255 plus a directed
+	// broadcast per network).
+	replyWindow    = time.Second
+	replyPerSource = 5
+	replyGlobal    = 50
 )
 
-// Reply is the JSON a hub sends back to a probe: {"app","name","port"} as upstream, plus "impl".
+// Reply is the JSON a hub sends back to a probe: {"app","name","port"} as upstream, plus
+// "impl" and "id" (additive; upstream ignores them).
 type Reply struct {
 	App  string `json:"app"`
 	Name string `json:"name"`
 	Port int    `json:"port"`
 	Impl string `json:"impl,omitempty"`
+	// ID is random per responder, so a client can tell one hub answering from several
+	// addresses (LAN and Tailscale) from two machines that share a hostname.
+	ID string `json:"id,omitempty"`
 }
 
 // Hub is one hub that answered a probe.
@@ -45,7 +61,7 @@ type Hub struct {
 	URL  string // http://<sender IP>:<port>
 	Impl string // "machine-monitor", or "" for upstream hubs
 	// Virtual is true for 172.16-31.x senders (WSL/Hyper-V adapters); a real LAN address
-	// for the same name replaces it.
+	// for the same hub replaces it.
 	Virtual bool
 }
 
@@ -56,18 +72,22 @@ type Responder struct {
 }
 
 // Respond listens on addr (":7778" in production) and answers each exact probe from a
-// private or loopback IPv4 sender with a Reply naming this hub and its HTTP port. name is
-// cleaned the way clients clean it, which also keeps the reply under upstream's 512 bytes.
-// The port is bound with address reuse, as upstream, so an upstream hub or a second
-// instance can share it.
+// private or loopback IPv4 sender with a Reply naming this hub and its HTTP port, within the
+// reply limits (replyPerSource, replyGlobal). name is cleaned the way clients clean it, which
+// also keeps the reply under upstream's 512 bytes. The port is bound with address reuse, as
+// upstream, so an upstream hub or a second instance can share it (see reuseAddr for what
+// each one then receives).
 func Respond(addr, name string, hubPort int) (*Responder, error) {
 	pc, err := (&net.ListenConfig{Control: reuseAddr}).ListenPacket(context.Background(), "udp4", addr)
 	if err != nil {
 		return nil, err
 	}
 	conn := pc.(*net.UDPConn)
-	reply, _ := json.Marshal(Reply{App: App, Name: cleanName(name), Port: hubPort, Impl: Impl})
+	id := make([]byte, 8)
+	rand.Read(id)
+	reply, _ := json.Marshal(Reply{App: App, Name: cleanName(name), Port: hubPort, Impl: Impl, ID: hex.EncodeToString(id)})
 	r := &Responder{conn: conn, done: make(chan struct{})}
+	limit := newReplyLimiter(time.Now)
 	go func() {
 		defer close(r.done)
 		buf := make([]byte, 1500)
@@ -82,10 +102,43 @@ func Respond(addr, name string, hubPort int) (*Responder, error) {
 			if string(buf[:n]) != Probe || !isPrivate(from.Addr()) {
 				continue // only answer LAN peers
 			}
+			if !limit.allow(from.Addr()) {
+				continue
+			}
 			conn.WriteToUDPAddrPort(reply, from)
 		}
 	}()
 	return r, nil
+}
+
+// replyLimiter counts replies in fixed windows of replyWindow, per source and in all.
+type replyLimiter struct {
+	now   func() time.Time
+	mu    sync.Mutex
+	start time.Time
+	total int
+	per   map[netip.Addr]int
+}
+
+func newReplyLimiter(now func() time.Time) *replyLimiter {
+	return &replyLimiter{now: now, per: map[netip.Addr]int{}}
+}
+
+// allow counts one reply to from and reports whether it is within the limits. The global
+// limit is checked first, so the map never holds more than replyGlobal sources.
+func (l *replyLimiter) allow(from netip.Addr) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if now := l.now(); now.Sub(l.start) >= replyWindow {
+		l.start, l.total = now, 0
+		clear(l.per)
+	}
+	if l.total >= replyGlobal || l.per[from] >= replyPerSource {
+		return false
+	}
+	l.total++
+	l.per[from]++
+	return true
 }
 
 // Addr is the local address the responder is bound to.
@@ -116,8 +169,7 @@ func probe(timeout time.Duration, to []netip.AddrPort) ([]Hub, error) {
 	}
 	conn.SetReadDeadline(time.Now().Add(timeout))
 
-	found := map[string]Hub{}
-	var order []string
+	var found hubSet
 	buf := make([]byte, 2048)
 	for {
 		n, from, err := conn.ReadFromUDPAddrPort(buf)
@@ -131,23 +183,43 @@ func probe(timeout time.Duration, to []netip.AddrPort) ([]Hub, error) {
 			}
 			continue
 		}
-		h, ok := parseReply(buf[:n], from.Addr().Unmap())
-		if !ok {
-			continue
-		}
-		prev, seen := found[h.Name]
-		if !seen {
-			order = append(order, h.Name)
-		}
-		if !seen || (prev.Virtual && !h.Virtual) {
-			found[h.Name] = h
-		}
+		found.add(buf[:n], from.Addr().Unmap())
 	}
-	hubs := make([]Hub, 0, len(order))
-	for _, name := range order {
-		hubs = append(hubs, found[name])
+	return found.list(), nil
+}
+
+// hubSet merges replies into one entry per hub, in the order hubs first answered, keeping
+// each hub's best address (rank).
+type hubSet struct {
+	order []string
+	byKey map[string]Hub
+}
+
+// add takes one reply from from; invalid replies are ignored.
+func (s *hubSet) add(b []byte, from netip.Addr) {
+	h, ok := parseReply(b, from)
+	if !ok {
+		return
 	}
-	return hubs, nil
+	if s.byKey == nil {
+		s.byKey = map[string]Hub{}
+	}
+	key := hubKey(b, h)
+	prev, seen := s.byKey[key]
+	if !seen {
+		s.order = append(s.order, key)
+	}
+	if !seen || rank(h.URL) > rank(prev.URL) {
+		s.byKey[key] = h
+	}
+}
+
+func (s *hubSet) list() []Hub {
+	hubs := make([]Hub, 0, len(s.order))
+	for _, k := range s.order {
+		hubs = append(hubs, s.byKey[k])
+	}
+	return hubs
 }
 
 // nameJunk matches what upstream strips from names: anything but [A-Za-z0-9_ .()'-].
@@ -194,6 +266,43 @@ func parseReply(b []byte, from netip.Addr) (Hub, bool) {
 		Impl:    impl,
 		Virtual: isVirtual(from),
 	}, true
+}
+
+// hubKey is which hub a valid reply b (parsed as h) is from. Our hubs send a random id. For
+// upstream hubs it is the name and port: one machine answers from each of its addresses, and
+// two hubs on one machine (sharing UDP 7778) differ by port.
+func hubKey(b []byte, h Hub) string {
+	var r struct {
+		ID string `json:"id"`
+	}
+	json.Unmarshal(b, &r)
+	if h.Impl == Impl && r.ID != "" && len(r.ID) <= 32 {
+		return "id:" + r.ID
+	}
+	return "name:" + h.Name + ":" + h.URL[strings.LastIndex(h.URL, ":")+1:]
+}
+
+// rank orders the addresses one hub answered from, best first: a LAN address works for
+// every device at home and keeps working when Tailscale is off; a Tailscale (100.64/10)
+// address works from anywhere on the tailnet; loopback only on the hub's machine; a
+// WSL/Hyper-V adapter (172.16/12) usually not at all.
+func rank(hubURL string) int {
+	ap, err := netip.ParseAddrPort(strings.TrimPrefix(hubURL, "http://"))
+	if err != nil {
+		return 0
+	}
+	a := ap.Addr()
+	b := a.As4()
+	switch {
+	case isVirtual(a):
+		return 0
+	case a.IsLoopback():
+		return 1
+	case b[0] == 100 && b[1] >= 64 && b[1] <= 127:
+		return 2
+	default:
+		return 3
+	}
 }
 
 // isPrivate reports whether a is an IPv4 LAN, loopback, link-local or Tailscale CGNAT address.
