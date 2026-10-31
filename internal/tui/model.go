@@ -320,7 +320,8 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// switchTo changes view and closes help; opening Processes fetches the list at once.
+// switchTo changes view and closes help; opening Processes, History, Energy or Alerts
+// reads its data at once.
 func (m model) switchTo(v view) (tea.Model, tea.Cmd) {
 	m.view, m.showHelp = v, false
 	// Each starter bumps state through m, so call them before returning m.

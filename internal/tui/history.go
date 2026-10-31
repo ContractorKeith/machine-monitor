@@ -49,7 +49,8 @@ const (
 	histAxisW        = 7                // y-axis label column
 	histMaxPoints    = 3000             // the hub's cap on ?points=
 	histMinPoints    = 10               // and its floor
-	histGapFactor    = 2.5              // points further apart than this many buckets aren't joined
+	histGapBuckets   = 3                // points further apart than this many buckets aren't joined,
+	histGapMin       = 10e3             // nor than 10 s, as upstream
 	histUnknownRes   = 60e3             // bucket width assumed when the hub sends none
 	histPanFraction  = 4                // ← and → move the window by a quarter
 	histZoomFactor   = 2                // + and - halve and double the span
@@ -93,7 +94,12 @@ type (
 		err error
 	}
 	histRefreshMsg struct{ seq int }
+	histFetchMsg   struct{ seq int } // a debounced fetch is due
 )
+
+// fetchDebounce is how long range, zoom, pan and device keys wait before reading, so key
+// repeat doesn't send a request per keystroke. A var so tests can shorten it.
+var fetchDebounce = 150 * time.Millisecond
 
 // source is where the History and Energy views read, or nil when there is none.
 func (m model) source() viewSource {
@@ -137,6 +143,7 @@ func (m model) histPlotW() int { return max(4, m.width-histAxisW-1) }
 // fetchHistory reads the selected device's history for the current window.
 func (m *model) fetchHistory() tea.Cmd {
 	m.hv.seq++
+	m.hv.err = nil
 	src, d := m.source(), m.cur()
 	if src == nil || d == nil {
 		return nil
@@ -169,7 +176,14 @@ func (m model) updateViews(msg tea.Msg) (model, tea.Cmd, bool) {
 		if msg.seq != m.hv.seq || m.view != viewHistory || m.hv.zoomed {
 			return m, nil, true
 		}
-		return m, m.fetchHistory(), true
+		cmd := m.fetchHistory()
+		return m, cmd, true
+	case histFetchMsg:
+		if msg.seq != m.hv.seq { // a later key replaced this fetch
+			return m, nil, true
+		}
+		cmd := m.fetchHistory()
+		return m, cmd, true
 	case energyMsg:
 		if msg.seq != m.ev.seq {
 			return m, nil, true
@@ -185,7 +199,14 @@ func (m model) updateViews(msg tea.Msg) (model, tea.Cmd, bool) {
 		if msg.seq != m.ev.seq || m.view != viewEnergy {
 			return m, nil, true
 		}
-		return m, m.fetchEnergy(), true
+		cmd := m.fetchEnergy()
+		return m, cmd, true
+	case energyFetchMsg:
+		if msg.seq != m.ev.seq {
+			return m, nil, true
+		}
+		cmd := m.fetchEnergy()
+		return m, cmd, true
 	}
 	return m, nil, false
 }
@@ -255,7 +276,17 @@ func (m model) historyKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	default:
 		return m, nil
 	}
-	return m, m.fetchHistory()
+	cmd := m.scheduleHistory()
+	return m, cmd
+}
+
+// scheduleHistory reads the history after fetchDebounce, unless another key reschedules it
+// first, so holding a key down sends one request rather than one per repeat.
+func (m *model) scheduleHistory() tea.Cmd {
+	m.hv.seq++
+	m.hv.err = nil
+	seq := m.hv.seq
+	return tea.Tick(fetchDebounce, func(time.Time) tea.Msg { return histFetchMsg{seq} })
 }
 
 // stepDevice moves the selection to the next or previous device; false if it can't move.
@@ -346,7 +377,7 @@ var histCharts = []histChart{
 			{"GPU", func(p *history.Point) *float64 { return p.GPU }, func(p *history.Point) *float64 { return p.GPUMax }},
 			{"Memory", func(p *history.Point) *float64 { return p.Mem }, nil},
 		}},
-	{title: "Temperature", fmt: func(v float64) string { return fmt.Sprintf("%.0f°C", v) },
+	{title: "Temperature", fmt: fmtTempV,
 		axis: func(v float64) string { return fmt.Sprintf("%.0f°", v) },
 		series: []histSeries{
 			{"CPU", func(p *history.Point) *float64 { return p.CPUTemp }, func(p *history.Point) *float64 { return p.CPUTempMax }},
@@ -376,7 +407,7 @@ func fmtWattsV(v float64) string { return fmt.Sprintf("%.0f W", v) }
 func shortRate(v float64) string {
 	units := []string{"B", "K", "M", "G", "T"}
 	i := 0
-	for v >= 1000 && i < len(units)-1 {
+	for v >= 1024 && i < len(units)-1 {
 		v /= 1024
 		i++
 	}
@@ -433,6 +464,7 @@ func (m model) historyView() string {
 	if len(present) == 0 {
 		return strings.Join(append(lines, "", m.theme.dim.Render(histNoDataText)), "\n")
 	}
+	lines = append(lines, m.histTiles(res.Points, from, to, w))
 
 	// Rows: each chart is a title line and at least two plot rows; the time axis takes one.
 	avail := h - len(lines) - 1
@@ -459,6 +491,67 @@ func (m model) historyView() string {
 	}
 	lines = append(lines, m.timeAxis(from, to, pw))
 	return strings.Join(lines, "\n")
+}
+
+// histTile is one window-wide statistic, as upstream's history tiles.
+type histTile struct {
+	label     string
+	get, peak func(*history.Point) *float64
+	fmt       func(float64) string
+}
+
+// histTiles are upstream's tiles: utilisation, temperatures and GPU power.
+var histTiles = []histTile{
+	{"CPU", func(p *history.Point) *float64 { return p.CPU }, func(p *history.Point) *float64 { return p.CPUMax }, fmtPctV},
+	{"GPU", func(p *history.Point) *float64 { return p.GPU }, func(p *history.Point) *float64 { return p.GPUMax }, fmtPctV},
+	{"Memory", func(p *history.Point) *float64 { return p.Mem }, nil, fmtPctV},
+	{"CPU temp", func(p *history.Point) *float64 { return p.CPUTemp }, func(p *history.Point) *float64 { return p.CPUTempMax }, fmtTempV},
+	{"GPU temp", func(p *history.Point) *float64 { return p.GPUTemp }, func(p *history.Point) *float64 { return p.GPUTempMax }, fmtTempV},
+	{"GPU power", func(p *history.Point) *float64 { return p.GPUPower }, nil, fmtWattsV},
+}
+
+func fmtTempV(v float64) string { return fmt.Sprintf("%.0f°C", v) }
+
+// histTiles is the line of window-wide statistics: each metric's peak and average over the
+// visible window (upstream's renderTiles), as many as fit in w.
+func (m model) histTiles(pts []history.Point, from, to float64, w int) string {
+	t := m.theme
+	peakMark := "▲"
+	if t.ascii {
+		peakMark = "^"
+	}
+	i := sort.Search(len(pts), func(i int) bool { return pts[i].T >= from })
+	j := sort.Search(len(pts), func(i int) bool { return pts[i].T > to })
+	pts = pts[i:j]
+	line := ""
+	for _, tl := range histTiles {
+		sum, n, peak := 0.0, 0, math.Inf(-1)
+		for k := range pts {
+			v := tl.get(&pts[k])
+			if v == nil {
+				continue
+			}
+			sum += *v
+			n++
+			pk := v
+			if tl.peak != nil && tl.peak(&pts[k]) != nil {
+				pk = tl.peak(&pts[k])
+			}
+			peak = math.Max(peak, *pk)
+		}
+		if n == 0 {
+			continue
+		}
+		tile := t.label.Render(tl.label) + " " + peakMark + tl.fmt(peak) + t.dim.Render(" avg "+tl.fmt(sum/float64(n)))
+		if line != "" {
+			tile = "   " + tile
+		}
+		if lipgloss.Width(line+tile) > w {
+			break
+		}
+		line += tile
+	}
+	return line
 }
 
 // histPicker is the first line: the devices (selected one highlighted) and the ranges.
@@ -618,7 +711,7 @@ func (m model) chartRows(c histChart, pts []history.Point, from, to, resolution 
 	for i, s := range c.series {
 		ps[i] = plotSeries{get: s.get, style: styles[i%len(styles)]}
 	}
-	body := plot{pts: pts, series: ps, from: from, to: to, yMax: yMax, gap: histGapFactor * resolution,
+	body := plot{pts: pts, series: ps, from: from, to: to, yMax: yMax, gap: math.Max(histGapMin, histGapBuckets*resolution),
 		w: pw, h: rows, cursor: col}.render(m.theme)
 	out := make([]string, rows)
 	for y, line := range body {

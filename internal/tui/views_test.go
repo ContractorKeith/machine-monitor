@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/exp/golden"
 	"github.com/charmbracelet/x/exp/teatest/v2"
 
@@ -17,6 +18,9 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/hub"
 	"github.com/ContractorKeith/machine-monitor/internal/power"
 )
+
+// Tests don't wait out the key debounce; TestFetchDebounce checks it still coalesces.
+func init() { fetchDebounce = time.Millisecond }
 
 // testPrice is the saved price every view test uses, so no golden depends on the time zone.
 var testPrice = power.Settings{Region: "US", Rate: 0.165, Currency: "USD"}
@@ -111,30 +115,48 @@ func viewOptions(f *fakeHub) Options {
 	return o
 }
 
-func histLoaded(m model) bool   { return m.hv.res != nil && m.hv.resID == m.cur().id }
-func energyLoaded(m model) bool { return m.ev.data != nil }
+// histLoaded and energyLoaded hold once the data on screen is for the current window or
+// range, not one a debounced key has since replaced.
+func histLoaded(m model) bool {
+	from, to := m.histWindow()
+	r := m.hv.res
+	return r != nil && m.hv.resID == m.cur().id && r.From == from && r.To == to
+}
+
+func energyLoaded(m model) bool {
+	b := energyBounds(m.now().In(m.loc()), m.ev.rng)
+	d := m.ev.data
+	return d != nil && len(d.Bounds) == len(b) && d.Bounds[0] == b[0]
+}
 
 func TestViewsGolden(t *testing.T) {
 	cases := []struct {
 		name, keys string
 		w, h       int
 		done       func(model) bool
+		then       string // keys typed once done holds, e.g. scrolling the loaded view
 	}{
-		{"history_80x24", "4", 80, 24, histLoaded},
-		{"history_160x48", "4", 160, 48, histLoaded},
-		{"energy_80x24", "5", 80, 24, energyLoaded},
-		{"energy_160x48", "5", 160, 48, energyLoaded},
-		{"history_30d_160x48", "4]]]", 160, 48, histLoaded},
-		{"history_zoom_80x24", "4[++hhhhhhhhhh", 80, 24, histLoaded},
-		{"history_second_80x24", "4j", 80, 24, histLoaded},
-		{"energy_24h_160x48", "5[", 160, 48, energyLoaded},
-		{"energy_30d_80x24", "5]jjjjjjjjjj", 80, 24, energyLoaded},
+		{"history_80x24", "4", 80, 24, histLoaded, ""},
+		{"history_160x48", "4", 160, 48, histLoaded, ""},
+		{"energy_80x24", "5", 80, 24, energyLoaded, ""},
+		{"energy_160x48", "5", 160, 48, energyLoaded, ""},
+		{"history_30d_160x48", "4]]]", 160, 48, histLoaded, ""},
+		{"history_zoom_80x24", "4[++hhhhhhhhhh", 80, 24, histLoaded, ""},
+		{"history_second_80x24", "4j", 80, 24, histLoaded, ""},
+		{"energy_24h_160x48", "5[", 160, 48, energyLoaded, ""},
+		{"energy_30d_80x24", "5]", 80, 24, energyLoaded, "jjjjjjjjjj"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			f := newFakeHub(threeDevices())
-			m := driveHub(t, viewOptions(f), c.w, c.h, c.keys, c.done)
-			golden.RequireEqual(t, plain(m))
+			ch := make(chan model)
+			tm := teatest.NewTestModel(t, probe{New(viewOptions(f)), ch}, teatest.WithInitialTermSize(c.w, c.h))
+			waitUntil(t, tm, ch, synced)
+			typeKeys(tm, c.keys)
+			waitUntil(t, tm, ch, c.done)
+			typeKeys(tm, c.then)
+			waitUntil(t, tm, ch, c.done)
+			golden.RequireEqual(t, plain(finish(t, tm)))
 		})
 	}
 }
@@ -170,13 +192,16 @@ func TestLocalViewsGolden(t *testing.T) {
 	for _, c := range []struct {
 		name, keys string
 		done       func(model) bool
+		w, h       int
 	}{
-		{"history_local_80x24", "4", histLoaded},
-		{"energy_local_80x24", "5[", energyLoaded},
+		{"history_local_80x24", "4", histLoaded, 80, 24},
+		{"energy_local_80x24", "5[", energyLoaded, 80, 24},
+		{"history_local_160x48", "4", histLoaded, 160, 48},
+		{"energy_local_160x48", "5[", energyLoaded, 160, 48},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			ch := make(chan model)
-			tm := teatest.NewTestModel(t, probe{New(localViewOptions(t)), ch}, teatest.WithInitialTermSize(80, 24))
+			tm := teatest.NewTestModel(t, probe{New(localViewOptions(t)), ch}, teatest.WithInitialTermSize(c.w, c.h))
 			waitUntil(t, tm, ch, loaded)
 			typeKeys(tm, c.keys)
 			waitUntil(t, tm, ch, c.done)
@@ -206,6 +231,10 @@ func settleViews(t *testing.T, m model, msgs ...tea.Msg) model {
 			case histMsg, energyMsg:
 				next, _ := m.Update(res)
 				m = next.(model)
+			case histFetchMsg, energyFetchMsg: // a debounced read is due: send it
+				next, cmd := m.Update(res)
+				m = next.(model)
+				exec(cmd)
 			}
 		case <-time.After(100 * time.Millisecond):
 		}
@@ -431,6 +460,9 @@ func TestEnergyFormats(t *testing.T) {
 		{fmtBucket(8640e3), "2.4 h"},
 		{shortRate(12.4 * mib), "12M/s"},
 		{shortRate(2.5 * kib), "2.5K/s"},
+		{shortRate(1000), "1000B/s"},
+		{shortRate(1023), "1023B/s"},
+		{shortRate(1024), "1K/s"},
 	} {
 		if c.got != c.want {
 			t.Errorf("got %q, want %q", c.got, c.want)
@@ -537,5 +569,92 @@ func TestViewsNoColor(t *testing.T) {
 	}
 	if hasColorSGR(m.render()) {
 		t.Error("Energy view has colour codes under NO_COLOR")
+	}
+}
+
+// TestFetchDebounce: holding a range key sends one request, for the last window.
+func TestFetchDebounce(t *testing.T) {
+	f := newFakeHub(threeDevices())
+	m := settleViews(t, hubModel(t, f, 160, 48), keyMsg("4"))
+	n := len(f.Calls())
+	var due []tea.Cmd
+	for _, k := range []string{"]", "]", "]"} { // three repeats before the debounce fires
+		next, cmd := m.Update(keyMsg(k))
+		m = next.(model)
+		due = append(due, cmd)
+	}
+	for _, cmd := range due {
+		next, fetch := m.Update(cmd())
+		m = next.(model)
+		if fetch != nil {
+			next, _ = m.Update(fetch())
+			m = next.(model)
+		}
+	}
+	calls := f.Calls()[n:]
+	from, to := m.histWindow()
+	want := fmt.Sprintf("history %s %.0f %.0f %d", m.cur().id, from, to, m.histPlotW()*2)
+	if len(calls) != 1 || calls[0] != want || m.hv.rng != 4 {
+		t.Fatalf("calls %q, want one %q (rng %d)", calls, want, m.hv.rng)
+	}
+}
+
+// TestHistoryErrorClears: an error from one device doesn't stay on screen for the next.
+func TestHistoryErrorClears(t *testing.T) {
+	f := newFakeHub(threeDevices())
+	m := hubModel(t, f, 80, 24)
+	f.fail = fmt.Errorf("boom")
+	m = settleViews(t, m, keyMsg("4"))
+	if m.hv.err == nil || !strings.Contains(plain(m), "history: boom") {
+		t.Fatalf("err %v", m.hv.err)
+	}
+	f.fail = nil
+	next, _ := m.Update(keyMsg("j"))
+	if m = next.(model); m.hv.err != nil || strings.Contains(plain(m), "boom") {
+		t.Fatalf("after j: err %v", m.hv.err)
+	}
+}
+
+// TestEnergyNarrow: a window narrower than the buckets shows the latest ones whole.
+func TestEnergyNarrow(t *testing.T) {
+	m := hubModel(t, newFakeHub(threeDevices()), 30, 40)
+	m.opts.Location = time.UTC
+	m = settleViews(t, m, keyMsg("5"), keyMsg("]")) // 30 days in 20 plot columns
+	if m.ev.rng != 2 || !energyLoaded(m) {
+		t.Fatal("not loaded")
+	}
+	lines := m.energyChart(m.energyRows(), m.ev.data.Bounds)
+	for _, l := range lines {
+		if w := ansi.StringWidth(l); w > 30 {
+			t.Errorf("chart line %d wide: %q", w, ansi.Strip(l))
+		}
+	}
+	// 30 buckets in 20 columns: the chart starts at bucket 10 (Oct 12) and labels don't touch.
+	axis := strings.Fields(ansi.Strip(lines[len(lines)-1]))
+	if want := m.bucketLabel(m.ev.data.Bounds, 10); len(axis) < 2 || axis[0]+" "+axis[1] != want {
+		t.Errorf("axis %q, want it to start at %q", axis, want)
+	}
+	checkFrame(t, m, 30, 40)
+}
+
+// TestGapThreshold: points join across at most max(10 s, 3 buckets), as upstream.
+func TestGapThreshold(t *testing.T) {
+	line := func(res, dt float64) string {
+		pts := []history.Point{{T: 0, CPU: p(50)}, {T: dt, CPU: p(50)}}
+		pl := plot{pts: pts, series: []plotSeries{{get: func(p *history.Point) *float64 { return p.CPU }}},
+			from: 0, to: dt, yMax: 100, gap: math.Max(histGapMin, histGapBuckets*res), w: 20, h: 1, cursor: -1}
+		return strings.Join(pl.render(newTheme(true, false)), "")
+	}
+	if got := line(2000, 10e3); strings.Contains(got, " ") { // 2 s buckets, 10 s apart: joined
+		t.Errorf("10 s apart at 2 s buckets: %q", got)
+	}
+	if got := line(2000, 11e3); !strings.Contains(got, " ") {
+		t.Errorf("11 s apart at 2 s buckets: %q", got)
+	}
+	if got := line(60e3, 180e3); strings.Contains(got, " ") {
+		t.Errorf("3 buckets apart: %q", got)
+	}
+	if got := line(60e3, 181e3); !strings.Contains(got, " ") {
+		t.Errorf("just over 3 buckets apart: %q", got)
 	}
 }

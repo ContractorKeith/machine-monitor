@@ -1,6 +1,7 @@
 machine-monitor · ws-01   1  2  3  4 History  5  6                           ?/q
  ● ws-01                                                   1h  6h  24h  7d  30d 
 06:00 – 12:00 · 2.5 min buckets · cursor 11:58                                  
+CPU ▲79% avg 50%   GPU ▲91% avg 91%   Memory ▲37% avg 37%                       
 Utilization   ■ CPU 62% ▲73%   ■ GPU 91% ▲91%   ■ Memory 37%                    
    100%                                                ⠐⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠂ ⠐⠒⠒⠒⠒⠒⠒⠒⠒
                                                        ⢀⣦⣲⣰⣤⣢⣣⣦⣲⣰⣤⣢⣣⣦⡂ ⢠⣢⣣⣦⣲⣰⣤⣢⣣
@@ -14,8 +15,7 @@ Power   ■ System 484 W ▲484 W   ■ GPU 268 W
                                                        ⠠⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠄ ⠠⠤⠤⠤⠤⠤⠤⠤⠤
     0 W                                                ⠈⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠁ ⠈⠉⠉⠉⠉⠉⠉⠉⠉
 Network   ■ Download 12.4 MiB/s   ■ Upload 860 KiB/s                            
-  19M/s                                                                        │
-                                                       ⠈⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠁ ⠈⠉⠉⠉⠉⠉⠉⠉⠉
+  19M/s                                                ⠠⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠄ ⠠⠤⠤⠤⠤⠤⠤⠤⠤
    0B/s                                                ⢀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⡀ ⢀⣀⣀⣀⣀⣀⣀⣀⣀
 Disk I/O   ■ Read 54.0 MiB/s   ■ Write 3.2 MiB/s                                
   95M/s                                                ⢀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⡀ ⢀⣀⣀⣀⣀⣀⣀⣀⣀

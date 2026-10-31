@@ -56,6 +56,7 @@ type (
 		err  error
 	}
 	energyRefreshMsg struct{ seq int }
+	energyFetchMsg   struct{ seq int } // a debounced fetch is due
 )
 
 // energyBounds are the bucket edges for range r ending around now, in Unix ms: whole local
@@ -83,6 +84,7 @@ func energyBounds(now time.Time, r int) []float64 {
 // fetchEnergy reads energy totals for the current range.
 func (m *model) fetchEnergy() tea.Cmd {
 	m.ev.seq++
+	m.ev.err = nil
 	src := m.source()
 	if src == nil {
 		return nil
@@ -110,7 +112,10 @@ func (m model) energyKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.ev.rng, m.ev.data, m.ev.scroll = r, nil, 0
-		return m, m.fetchEnergy()
+		m.ev.seq++
+		m.ev.err = nil
+		seq := m.ev.seq
+		return m, tea.Tick(fetchDebounce, func(time.Time) tea.Msg { return energyFetchMsg{seq} })
 	case key.Matches(msg, k.Up):
 		m.ev.scroll--
 	case key.Matches(msg, k.Down):
@@ -354,9 +359,13 @@ func (m model) energyChart(rows []energyRow, bounds []float64) []string {
 	if len(with) == 0 {
 		return append(out, t.dim.Render("No energy recorded in this range yet."))
 	}
+	// At least one cell per bar: a window too narrow for every bucket shows the latest ones.
+	pw := max(1, w-energyAxisW-1)
+	first := max(0, n-pw)
+	shown := n - first
 	totals := make([]float64, n)
 	hi := 0.001
-	for i := range n {
+	for i := first; i < n; i++ {
 		for _, r := range with {
 			totals[i] += r.u.Buckets[i] / 1000
 		}
@@ -364,8 +373,7 @@ func (m model) energyChart(rows []energyRow, bounds []float64) []string {
 	}
 	yMax := niceMax(hi * 1.1)
 	h := max(3, min(12, m.bodyHeight()/4))
-	pw := max(n, w-energyAxisW-1)
-	slot := float64(pw) / float64(n)
+	slot := float64(pw) / float64(shown)
 	bw := max(1, min(4, int(slot*0.7)))
 	var wraps []wrap
 	for _, st := range m.deviceStyles() {
@@ -382,8 +390,8 @@ func (m model) energyChart(rows []energyRow, bounds []float64) []string {
 			grid[y][x] = " "
 		}
 	}
-	for i := range n {
-		x0 := int(slot*float64(i) + (slot-float64(bw))/2)
+	for i := first; i < n; i++ {
+		x0 := int(slot*float64(i-first) + (slot-float64(bw))/2)
 		cells := totals[i] / yMax * float64(h)
 		for y := range h { // y = 0 is the bottom row
 			fill := math.Min(1, cells-float64(y))
@@ -417,17 +425,20 @@ func (m model) energyChart(rows []energyRow, bounds []float64) []string {
 	for y := range h {
 		out = append(out, t.dim.Render(padLeft(axisLabel(y, h, yMax), energyAxisW))+" "+strings.Join(grid[y], ""))
 	}
-	// Bucket labels, spaced so they don't touch.
-	labelW := len([]rune(m.bucketLabel(bounds, 0)))
+	// Bucket labels, spaced so they don't touch; one that would run off the end is left out.
+	labelW := 0
+	for i := first; i < n; i++ {
+		labelW = max(labelW, len([]rune(m.bucketLabel(bounds, i))))
+	}
 	every := max(1, int(math.Ceil(float64(labelW+1)/slot)))
 	axis := []rune(strings.Repeat(" ", pw))
-	for i := 0; i < n; i += every {
-		x := int(slot * float64(i))
-		for j, c := range []rune(m.bucketLabel(bounds, i)) {
-			if x+j < pw {
-				axis[x+j] = c
-			}
+	for i := first; i < n; i += every {
+		x := int(slot * float64(i-first))
+		label := []rune(m.bucketLabel(bounds, i))
+		if x+len(label) > pw {
+			break
 		}
+		copy(axis[x:], label)
 	}
 	return append(out, t.dim.Render(strings.Repeat(" ", energyAxisW+1)+string(axis)))
 }
