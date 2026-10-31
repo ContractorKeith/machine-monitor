@@ -4,7 +4,7 @@ Description=machine-monitor agent
 
 [Service]
 ExecStart="/opt/machine monitor/machine-monitor" "agent" "--hub" "http://192.168.1.10:7777"
-Environment="MACHINE_MONITOR_DIR=/srv/mm 100%%"
+Environment="MACHINE_MONITOR_DIR=/srv/mm $HOME 100%% \"q\""
 Restart=always
 RestartSec=10
 

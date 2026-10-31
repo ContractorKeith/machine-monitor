@@ -23,8 +23,12 @@ const conhost = `%SystemRoot%\System32\conhost.exe`
 // token and least privilege, so creating it needs no elevation. The binary is started
 // through `conhost.exe --headless` so a console window doesn't open at every login.
 func (m *Manager) TaskXML(s Spec) string {
-	args := []string{"--headless", s.Exe}
-	args = append(args, s.Args()...)
+	return m.taskXML("machine-monitor "+string(s.Role), append([]string{s.Exe}, s.Args()...))
+}
+
+// taskXML renders a logon task that runs argv (argv[0] is the binary) under conhost.
+func (m *Manager) taskXML(what string, argv []string) string {
+	args := append([]string{"--headless"}, argv...)
 	quoted := make([]string, len(args))
 	for i, a := range args {
 		quoted[i] = winQuote(a)
@@ -34,7 +38,7 @@ func (m *Manager) TaskXML(s Spec) string {
 	b.WriteString(`<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>machine-monitor ` + string(s.Role) + `. Written by machine-monitor service install; remove with machine-monitor service uninstall.</Description>
+    <Description>` + xmlEscape(what) + `. Written by machine-monitor service install; remove with machine-monitor service uninstall.</Description>
   </RegistrationInfo>
   <Triggers>
     <LogonTrigger>
@@ -58,12 +62,12 @@ func (m *Manager) TaskXML(s Spec) string {
       <StopOnIdleEnd>false</StopOnIdleEnd>
       <RestartOnIdle>false</RestartOnIdle>
     </IdleSettings>
+    <Hidden>true</Hidden>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
     <RestartOnFailure>
       <Interval>PT1M</Interval>
-      <Count>999</Count>
+      <Count>3</Count>
     </RestartOnFailure>
-    <Hidden>true</Hidden>
   </Settings>
   <Actions Context="Author">
     <Exec>
@@ -118,14 +122,7 @@ func (m *Manager) installTask(ctx context.Context, s Spec, out io.Writer) error 
 		return fmt.Errorf("can't tell the current Windows user")
 	}
 	name := taskName(s.Role)
-	// schtasks reads the definition from a file; keep it in the data dir only while it does.
-	xmlPath := filepath.Join(m.DataDir, "service-"+string(s.Role)+".xml")
-	if err := config.WriteFile0600(xmlPath, utf16File(m.TaskXML(s))); err != nil {
-		return err
-	}
-	defer os.Remove(xmlPath)
-	_, err := m.run(ctx, "schtasks", "/Create", "/TN", name, "/XML", xmlPath, "/F")
-	if err != nil {
+	if err := m.createTask(ctx, name, m.TaskXML(s)); err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "ran schtasks /Create /TN %s /F (logon task for %s)\n", name, m.User)
@@ -142,6 +139,18 @@ func (m *Manager) installTask(ctx context.Context, s Spec, out io.Writer) error 
 		fmt.Fprintf(out, "warning: a logon task can't set MACHINE_MONITOR_DIR; the service uses the default data dir\n")
 	}
 	return nil
+}
+
+// createTask creates or replaces the task name from its XML. schtasks reads the definition
+// from a file, so it's kept in the data dir only while schtasks runs.
+func (m *Manager) createTask(ctx context.Context, name, xml string) error {
+	xmlPath := filepath.Join(m.DataDir, "service-"+name+".xml")
+	if err := config.WriteFile0600(xmlPath, utf16File(xml)); err != nil {
+		return err
+	}
+	defer os.Remove(xmlPath)
+	_, err := m.run(ctx, "schtasks", "/Create", "/TN", name, "/XML", xmlPath, "/F")
+	return err
 }
 
 func (m *Manager) uninstallTask(ctx context.Context, r Role, out io.Writer) error {
@@ -162,15 +171,20 @@ func (m *Manager) uninstallTask(ctx context.Context, r Role, out io.Writer) erro
 
 func (m *Manager) statusTask(ctx context.Context, r Role) Status {
 	st := Status{Role: r, Kind: "Task Scheduler logon task", Name: taskName(r)}
-	out, err := m.run(ctx, "schtasks", "/Query", "/TN", st.Name, "/FO", "CSV", "/NH")
-	if err != nil {
-		return st // the task doesn't exist
-	}
-	st.Installed = true
-	st.State = "unknown"
-	// One row: "\machine-monitor-hub","<next run>","<status>". Status words are localized.
-	if rec, err := csv.NewReader(strings.NewReader(out)).Read(); err == nil && len(rec) >= 3 {
-		st.State = strings.TrimSpace(rec[len(rec)-1])
-	}
+	st.Installed, st.State = m.queryTask(ctx, st.Name)
 	return st
+}
+
+// queryTask reports whether the task exists and its status ("Ready", "Running", ...;
+// the words are localized).
+func (m *Manager) queryTask(ctx context.Context, name string) (exists bool, state string) {
+	out, err := m.run(ctx, "schtasks", "/Query", "/TN", name, "/FO", "CSV", "/NH")
+	if err != nil {
+		return false, "" // the task doesn't exist
+	}
+	// One row: "\machine-monitor-hub","<next run>","<status>".
+	if rec, err := csv.NewReader(strings.NewReader(out)).Read(); err == nil && len(rec) >= 3 {
+		return true, strings.TrimSpace(rec[len(rec)-1])
+	}
+	return true, "unknown"
 }

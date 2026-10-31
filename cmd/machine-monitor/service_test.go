@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"io"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -57,6 +58,27 @@ func TestServiceCommand(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "hub: not installed") || !strings.Contains(out.String(), "removed ") {
 		t.Errorf("uninstall:\n%s", out.String())
+	}
+}
+
+func TestServiceWarnsWhenAgentIsStub(t *testing.T) {
+	old := commands["agent"]
+	t.Cleanup(func() { commands["agent"] = old })
+	args := []string{"service", "install", "--hub", "http://10.0.0.2:7777"}
+	const warning = "agent command isn't built yet"
+
+	commands["agent"] = stub("agent")
+	fakeService(t)
+	var out, errOut bytes.Buffer
+	if code := run(args, &out, &errOut); code != 0 || !strings.Contains(errOut.String(), warning) {
+		t.Errorf("stub agent: exit %d, stderr %q; want 0 and a warning", code, errOut.String())
+	}
+
+	commands["agent"] = func(_ []string, _, _ io.Writer) int { return 0 } // a built agent answering -h
+	fakeService(t)
+	errOut.Reset()
+	if code := run(args, &out, &errOut); code != 0 || strings.Contains(errOut.String(), warning) {
+		t.Errorf("built agent: exit %d, stderr %q; want 0 and no warning", code, errOut.String())
 	}
 }
 

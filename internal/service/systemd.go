@@ -29,17 +29,24 @@ func (m *Manager) SystemdUnit(s Spec) string {
 	}
 	b.WriteString("\n")
 	if m.DataDirEnv != "" {
-		b.WriteString("Environment=" + systemdQuote("MACHINE_MONITOR_DIR="+m.DataDirEnv) + "\n")
+		b.WriteString("Environment=" + systemdEnvQuote("MACHINE_MONITOR_DIR="+m.DataDirEnv) + "\n")
 	}
 	b.WriteString("Restart=always\nRestartSec=10\n\n")
 	b.WriteString("[Install]\nWantedBy=default.target\n")
 	return b.String()
 }
 
-// systemdQuote double-quotes one word for ExecStart= or Environment=, escaping what
-// systemd would otherwise expand: backslash, quote, % specifiers and $ variables.
+// systemdQuote double-quotes one ExecStart= word, escaping what systemd would otherwise
+// expand: backslash, quote, % specifiers and $ variables.
 func systemdQuote(s string) string {
 	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "%", "%%", "$", "$$", "\n", `\n`)
+	return `"` + r.Replace(s) + `"`
+}
+
+// systemdEnvQuote double-quotes an Environment= assignment. systemd expands % specifiers
+// there but not $ variables, so $ stays as is.
+func systemdEnvQuote(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "%", "%%", "\n", `\n`)
 	return `"` + r.Replace(s) + `"`
 }
 

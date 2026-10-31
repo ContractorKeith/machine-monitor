@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -25,6 +26,20 @@ var (
 	newServiceManager = service.Default
 	serviceExecutable = service.Executable
 )
+
+// agentBuilt reports whether this binary's agent command is real rather than the stub.
+// It asks the dispatcher with -h, which a real command answers with usage and no side
+// effects. Set in init: the commands table refers to runService, so a package-level
+// initializer would be a cycle.
+var agentBuilt func() bool
+
+func init() {
+	agentBuilt = func() bool {
+		var errOut bytes.Buffer
+		commands["agent"]([]string{"-h"}, io.Discard, &errOut)
+		return !strings.Contains(errOut.String(), "not built yet")
+	}
+}
 
 // runService is `machine-monitor service install|uninstall|status`: a user-level autostart
 // (systemd user unit, LaunchAgent or logon task). No admin rights needed.
@@ -88,6 +103,9 @@ func runService(args []string, stdout, stderr io.Writer) int {
 		if err := spec.Validate(); err != nil {
 			fmt.Fprintf(stderr, "machine-monitor service install: %v\n", err)
 			return 2
+		}
+		if role == service.RoleAgent && !agentBuilt() {
+			fmt.Fprintln(stderr, "warning: this build's agent command isn't built yet, so the service will exit and restart until machine-monitor is updated")
 		}
 		if inTempDir(exe) {
 			fmt.Fprintf(stderr, "warning: %s is in a temp directory (go run?); the service will break when it's cleaned up\n", exe)

@@ -82,7 +82,7 @@ func TestGolden(t *testing.T) {
 
 	lin := goldenManager("linux")
 	checkGolden(t, "hub.service", lin.SystemdUnit(hub))
-	lin.DataDirEnv = "/srv/mm 100%"
+	lin.DataDirEnv = `/srv/mm $HOME 100% "q"`
 	checkGolden(t, "agent.service", lin.SystemdUnit(agent))
 
 	mac := goldenManager("darwin")
@@ -104,6 +104,17 @@ func TestSystemdQuote(t *testing.T) {
 	} {
 		if got := systemdQuote(in); got != want {
 			t.Errorf("systemdQuote(%q) = %s, want %s", in, got, want)
+		}
+	}
+}
+
+func TestSystemdEnvQuote(t *testing.T) {
+	for in, want := range map[string]string{
+		`A=/srv/$HOME`: `"A=/srv/$HOME"`,
+		`A=100% "q"\`:  `"A=100%% \"q\"\\"`,
+	} {
+		if got := systemdEnvQuote(in); got != want {
+			t.Errorf("systemdEnvQuote(%q) = %s, want %s", in, got, want)
 		}
 	}
 }
@@ -258,7 +269,9 @@ func TestSystemdInstallError(t *testing.T) {
 
 func TestLaunchdFlow(t *testing.T) {
 	ctx := context.Background()
+	old := bootstrapRetry
 	bootstrapRetry = 0
+	t.Cleanup(func() { bootstrapRetry = old })
 	m, f := testManager(t, "darwin")
 	plist := filepath.Join(m.Home, "Library", "LaunchAgents", "io.github.contractorkeith.machine-monitor.hub.plist")
 	target := "gui/501/io.github.contractorkeith.machine-monitor.hub"
@@ -334,7 +347,7 @@ func TestTaskFlow(t *testing.T) {
 	ctx := context.Background()
 	m, f := testManager(t, "windows")
 	s := Spec{Role: RoleAgent, Exe: hubSpec(t).Exe, HubURL: "http://h:7777"}
-	xmlPath := filepath.Join(m.DataDir, "service-agent.xml")
+	xmlPath := filepath.Join(m.DataDir, "service-machine-monitor-agent.xml")
 	query := "schtasks /Query /TN machine-monitor-agent /FO CSV /NH"
 	var out bytes.Buffer
 
