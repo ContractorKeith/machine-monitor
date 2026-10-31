@@ -131,6 +131,12 @@ func (r *Release) Remove(name string) {
 // and its signature over the current checksums.txt.
 func (r *Release) Sign(identity string, caKey *ecdsa.PrivateKey, caCert *x509.Certificate) {
 	r.t.Helper()
+	r.SignIssuer(identity, update.GitHubIssuer, caKey, caCert)
+}
+
+// SignIssuer is Sign with the certificate's OIDC issuer set to issuer.
+func (r *Release) SignIssuer(identity, oidcIssuer string, caKey *ecdsa.PrivateKey, caCert *x509.Certificate) {
+	r.t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		r.t.Fatal(err)
@@ -139,7 +145,7 @@ func (r *Release) Sign(identity string, caKey *ecdsa.PrivateKey, caCert *x509.Ce
 	if err != nil {
 		r.t.Fatal(err)
 	}
-	issuer, _ := asn1.MarshalWithParams(update.GitHubIssuer, "utf8")
+	issuer, _ := asn1.MarshalWithParams(oidcIssuer, "utf8")
 	now := time.Now()
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(now.UnixNano()),

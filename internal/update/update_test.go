@@ -3,6 +3,7 @@ package update_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -73,6 +74,10 @@ func TestChecksumsRefusesBadSignature(t *testing.T) {
 			key, cert := r.CA()
 			r.Sign(update.WorkflowIdentity(update.Repo)("v1.3.0"), key, cert)
 		},
+		"signed through another OIDC issuer": func(r *updatetest.Release) {
+			key, cert := r.CA()
+			r.SignIssuer(update.WorkflowIdentity(update.Repo)("v1.4.0"), "https://accounts.example.com", key, cert)
+		},
 		"no bundle":      func(r *updatetest.Release) { r.Set("checksums.txt.sigstore.json", []byte("{}")) },
 		"garbage bundle": func(r *updatetest.Release) { r.Set("checksums.txt.sigstore.json", []byte("not json")) },
 	}
@@ -87,6 +92,28 @@ func TestChecksumsRefusesBadSignature(t *testing.T) {
 				t.Fatal("Binary accepted a bad signature")
 			}
 		})
+	}
+}
+
+// The realistic attack: Fulcio certificates are public, so an attacker replays a genuine
+// certificate and signature, edits checksums.txt and drops the bundle's messageDigest. Only
+// the signature check itself can refuse that.
+func TestChecksumsRefusesEditedChecksumsWithoutDigest(t *testing.T) {
+	rel := updatetest.New(t, "v1.4.0", allPlatforms)
+	var b map[string]any
+	if err := json.Unmarshal(rel.File("checksums.txt.sigstore.json"), &b); err != nil {
+		t.Fatal(err)
+	}
+	delete(b["messageSignature"].(map[string]any), "messageDigest")
+	bundle, _ := json.Marshal(b)
+	rel.Set("checksums.txt.sigstore.json", bundle)
+	if _, err := rel.Source.Checksums(context.Background(), "v1.4.0"); err != nil {
+		t.Fatalf("untouched checksums.txt without digest: %v", err)
+	}
+	rel.Set("checksums.txt", append(rel.File("checksums.txt"), "0000000000000000000000000000000000000000000000000000000000000000  extra\n"...))
+	_, err := rel.Source.Checksums(context.Background(), "v1.4.0")
+	if err == nil || !strings.Contains(err.Error(), "signature does not match") {
+		t.Fatalf("err = %v, want signature does not match", err)
 	}
 }
 
