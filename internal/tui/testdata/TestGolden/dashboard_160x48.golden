@@ -1,4 +1,4 @@
-machine-monitor · ws-01   1 Dashboard  2 Device  3 Processes                                                                                      ? help  q quit
+machine-monitor · ws-01   1 Dashboard  2 Device  3 Processes  6 Alerts                                                                            ? help  q quit
 1 device · 1 online · ~484 W at the wall                                                                                                                        
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮                                                            
 │ ws-01                                                                                      linux │                                                            

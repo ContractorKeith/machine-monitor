@@ -32,9 +32,10 @@ type fakeEnergy struct {
 	watts *float64
 	cost  Cost
 	ok    bool
+	calls int // Watts calls
 }
 
-func (f *fakeEnergy) Watts(string, *report.Report) *float64 { return f.watts }
+func (f *fakeEnergy) Watts(string, *report.Report) *float64 { f.calls++; return f.watts }
 func (f *fakeEnergy) CostToday(string) (Cost, bool)         { return f.cost, f.ok }
 
 type sent struct {
@@ -619,6 +620,83 @@ func TestPersistence(t *testing.T) {
 				t.Fatalf("%s: %v %v", p, fi.Mode(), err)
 			}
 		}
+	}
+}
+
+// A burst of events writes alerts-log.json once, logDelay later; Wait writes it at once.
+func TestLogWriteDebounced(t *testing.T) {
+	paths := config.At(t.TempDir())
+	clock := newClock()
+	devices := func() []Device { return []Device{{ID: "pc1", Name: "Box", Online: true, LastSeen: clock.t}} }
+	e := New(Options{Paths: paths, Devices: devices, Now: clock.now, HTTP: &fakeDoer{}})
+	if _, err := e.Update([]byte(rule(TypeCPU, 50, 0))); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range []float64{99, 1, 99} {
+		e.OnReport("pc1", &report.Report{CPU: report.CPU{Usage: report.Ptr(v)}})
+	}
+	if _, err := os.Stat(paths.AlertsLog); err == nil {
+		t.Fatal("log written synchronously")
+	}
+	e.Wait()
+	var evs []Event
+	b, _ := os.ReadFile(paths.AlertsLog)
+	if json.Unmarshal(b, &evs) != nil || len(evs) != 3 {
+		t.Fatalf("log after Wait = %s", b)
+	}
+
+	// Without Wait, the timer writes it.
+	e.OnReport("pc1", &report.Report{CPU: report.CPU{Usage: report.Ptr(1.0)}})
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		b, _ = os.ReadFile(paths.AlertsLog)
+		if json.Unmarshal(b, &evs) == nil && len(evs) == 4 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("debounced write never happened: %s", b)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// Clearing writes at once.
+	e.ClearLog()
+	if b, _ = os.ReadFile(paths.AlertsLog); string(b) != "[]" {
+		t.Fatalf("log after clear = %s", b)
+	}
+}
+
+// The power estimate is computed only when an enabled power rule covers the device.
+func TestWattsOnlyForPowerRules(t *testing.T) {
+	h := newHarness(t, rule(TypeCPU, 50, 0))
+	h.e.OnReport("pc1", &report.Report{})
+	if h.energy.calls != 0 {
+		t.Fatalf("Watts called %d times without a power rule", h.energy.calls)
+	}
+	if _, err := h.e.Update([]byte(`{"rules":[{"type":"power","device":"other","threshold":100}]}`)); err != nil {
+		t.Fatal(err)
+	}
+	h.e.OnReport("pc1", &report.Report{})
+	if h.energy.calls != 0 {
+		t.Fatal("Watts called for a power rule on another device")
+	}
+	if _, err := h.e.Update([]byte(rule(TypePower, 100, 0))); err != nil {
+		t.Fatal(err)
+	}
+	h.e.OnReport("pc1", &report.Report{})
+	if h.energy.calls != 1 {
+		t.Fatalf("Watts called %d times with a power rule, want 1", h.energy.calls)
+	}
+}
+
+// Without a hub URL, click and link still go out (upstream sends the bare path).
+func TestLinkWithoutHubURL(t *testing.T) {
+	h := newHarness(t, `{"rules":[],`+channels+`}`)
+	h.e.opt.HubURL = nil
+	h.e.Test(context.Background())
+	reqs := h.doer.sent()
+	if len(reqs) != 2 || reqs[0].body["click"] != "/#/alerts" || reqs[1].body["link"] != "/#/alerts" {
+		t.Fatalf("requests = %+v", reqs)
 	}
 }
 

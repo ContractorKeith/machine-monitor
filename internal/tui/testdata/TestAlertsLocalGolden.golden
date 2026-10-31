@@ -1,0 +1,24 @@
+machine-monitor · ws-01   1 Dashboard  2 Device  3 Processes  6 Alerts       ?/q
+Alerts                                                                          
+                                                                                
+Alerts run on a hub. Connect to a hub for alerts:                               
+                                                                                
+  machine-monitor connect URL     pair this machine with a hub                  
+  machine-monitor --hub URL       open the TUI against a hub                    
+                                                                                
+Or start one here with `machine-monitor hub`.                                   
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+tab next view · ? help                                                          

@@ -1,0 +1,24 @@
+machine-monitor · hub hub.lan:7777   1  2  3  6 Alerts                       ?/q
+ ⚠ studio: GPU load 99% · Above 95% for 5 min. (+1 more)  esc dismiss · 6 alerts
+Active (1)                                                                      
+  ⚠ studio: GPU load 99% · Above 95% for 5 min. · since 12:00                   
+                                                                                
+Rules (6)                                                                       
+    On   Type                   Device             Limit     For                
+  ▶ on   Offline                All devices        —         10 min             
+    on   CPU temperature        All devices        90°C      2 min              
+    on   GPU temperature        All devices        85°C      2 min              
+    on   Disk space used        All devices        90%       at once            
+    off  Power draw             ws-01              450 W     5 min              
+    on   Electricity cost today All devices        2.5/day   today (no price)   
+                                                                                
+Channels  banner and bell on · resolved notices on                              
+  ntfy     on  https://ntfy.sh/my-lab                                           
+  webhook  off                                                                  
+                                                                                
+Log (5)                                                                         
+         12:00 ⚠ studio: GPU load 99% · Above 95% for 5 min.                    
+         12:00 ⚠ studio: GPU load 99% · Above 95% for 5 min.                    
+         11:57 ⚠ ws-01: CPU temperature 93°C · Above 90°C for 2 min.            
+         10:00 ✓ nas-02 is back online · It was offline since 9:12 AM.          
+a add · enter edit · space on/off · D delete · c channels · t test · C clear log

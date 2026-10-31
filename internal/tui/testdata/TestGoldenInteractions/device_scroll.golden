@@ -1,4 +1,4 @@
-machine-monitor · ws-01   1 Dashboard  2 Device  3 Processes      ? help  q quit
+machine-monitor · ws-01   1 Dashboard  2 Device  3 Processes  6 Alerts       ?/q
   Usage         50%   threads 16   clock 4.35 GHz                               
   Temp          72°C                                                            
    0 █░░░░░░░░░  11%   6 ███░░░░░░░  31%  12 █████░░░░░  51%                    

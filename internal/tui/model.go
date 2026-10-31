@@ -25,10 +25,14 @@ const (
 	viewDashboard view = iota
 	viewDevice
 	viewProcesses
+	viewAlerts
 	viewCount
 )
 
-var viewNames = [viewCount]string{"Dashboard", "Device", "Processes"}
+var viewNames = [viewCount]string{"Dashboard", "Device", "Processes", "Alerts"}
+
+// viewKeys are the number keys, which follow PLAN §7 even where a view isn't built yet.
+var viewKeys = [viewCount]string{"1", "2", "3", "6"}
 
 // Messages.
 type (
@@ -71,6 +75,8 @@ type model struct {
 	orderGen  int    // counts order and snapshot events, so a late reorder failure can't undo them
 
 	deviceScroll int
+
+	al alertsUI // the Alerts view and the banner (alerts.go)
 
 	procs       []report.Process
 	visible     []report.Process // procs filtered and sorted; refreshProcs keeps it current
@@ -167,6 +173,9 @@ func (m *model) maybeProcs() tea.Cmd {
 
 // Update handles one message.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if next, cmd, ok := m.updateAlerts(msg); ok {
+		return next, cmd
+	}
 	if next, cmd, ok := m.updateHub(msg); ok {
 		return next, cmd
 	}
@@ -238,6 +247,9 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.refreshProcs()
 		return m, nil
 	}
+	if next, cmd, ok := m.alertsPreKey(msg); ok {
+		return next, cmd
+	}
 
 	k := m.keys
 	switch {
@@ -255,6 +267,8 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.switchTo(viewDevice)
 	case key.Matches(msg, k.Processes):
 		return m.switchTo(viewProcesses)
+	case key.Matches(msg, k.Alerts):
+		return m.switchTo(viewAlerts)
 	case key.Matches(msg, k.Next):
 		return m.switchTo((m.view + 1) % viewCount)
 	}
@@ -271,6 +285,8 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.scrollDevice(msg)
 	case viewProcesses:
 		return m.procKey(msg)
+	case viewAlerts:
+		return m.alertsKey(msg)
 	}
 	return m, nil
 }
@@ -278,11 +294,11 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // switchTo changes view and closes help; opening Processes fetches the list at once.
 func (m model) switchTo(v view) (tea.Model, tea.Cmd) {
 	m.view, m.showHelp = v, false
-	return m, m.maybeProcs()
+	return m, tea.Batch(m.maybeProcs(), m.maybeLoadAlerts())
 }
 
-// bodyHeight is the rows between the header and the footer.
-func (m model) bodyHeight() int { return max(1, m.height-2) }
+// bodyHeight is the rows between the header (and the alert banner) and the footer.
+func (m model) bodyHeight() int { return max(1, m.height-2-m.bannerRows()) }
 
 // scrollDevice moves the Device view.
 func (m *model) scrollDevice(msg tea.KeyPressMsg) {
@@ -349,11 +365,17 @@ func (m model) render() string {
 		body, foot = strings.Join(lines[min(m.deviceScroll, end):end], "\n"), m.deviceFooter(len(lines))
 	case m.view == viewProcesses:
 		body, foot = m.processes(), m.procFooter()
+	case m.view == viewAlerts:
+		body, foot = m.alertsView(), m.alertsFooter()
 	}
 	if h < 3 { // no room for the header and footer: the body alone
 		return fit(body, w, h)
 	}
-	return fit(m.header(), w, 1) + "\n" + fit(body, w, h-2) + "\n" + fit(m.theme.dim.Render(foot), w, 1)
+	top := fit(m.header(), w, 1)
+	if m.bannerRows() > 0 {
+		top += "\n" + fit(m.bannerLine(), w, 1)
+	}
+	return top + "\n" + fit(body, w, m.bodyHeight()) + "\n" + fit(m.theme.dim.Render(foot), w, 1)
 }
 
 // header shows the app, the machine, the view tabs and the help hint.
@@ -361,31 +383,41 @@ func (m model) header() string {
 	t := m.theme
 	left := t.title.Render("machine-monitor")
 	switch {
-	case m.multi() && (m.view == viewDashboard || m.cur() == nil):
+	case m.multi() && (m.view == viewDashboard || m.view == viewAlerts || m.cur() == nil):
 		left += " " + t.dim.Render("·") + " hub " + m.hubHost()
 	case m.multi():
 		left += " " + t.dim.Render("·") + " " + m.cur().name
 	case m.report() != nil && m.report().Hostname != nil:
 		left += " " + t.dim.Render("·") + " " + *m.report().Hostname
 	}
-	tabs := make([]string, viewCount)
-	for i := range viewCount {
-		label := " " + string(rune('1'+i)) + " " + viewNames[i] + " "
-		if i == m.view && !m.showHelp {
-			tabs[i] = t.tabOn.Render(label)
-		} else {
-			tabs[i] = t.tabOff.Render(label)
+	// Tabs are named; when they don't fit, only the open one keeps its name.
+	tabs := func(compact bool) string {
+		out := make([]string, viewCount)
+		for i := range viewCount {
+			label := " " + viewKeys[i] + " " + viewNames[i] + " "
+			if i == m.view && !m.showHelp {
+				out[i] = t.tabOn.Render(label)
+				continue
+			}
+			if compact {
+				label = " " + viewKeys[i] + " "
+			}
+			out[i] = t.tabOff.Render(label)
+		}
+		return "  " + strings.Join(out, "")
+	}
+	// A long hub address or many tabs: shorten the hint first, then the tabs, then drop the
+	// hint.
+	for _, try := range []struct {
+		compact bool
+		hint    string
+	}{{false, "? help  q quit"}, {false, "?/q"}, {true, "?/q"}} {
+		l, r := left+tabs(try.compact), t.dim.Render(try.hint)
+		if lipgloss.Width(l)+1+lipgloss.Width(r) <= m.width {
+			return spread(l, r, m.width)
 		}
 	}
-	left += "  " + strings.Join(tabs, "")
-	right := t.dim.Render("? help  q quit")
-	if m.multi() && lipgloss.Width(left)+1+lipgloss.Width(right) > m.width { // a long hub address
-		right = t.dim.Render("?/q")
-		if lipgloss.Width(left)+1+lipgloss.Width(right) > m.width {
-			right = ""
-		}
-	}
-	return spread(left, right, m.width)
+	return spread(left+tabs(true), "", m.width)
 }
 
 // statusLine is the footer for views without their own: collection state.

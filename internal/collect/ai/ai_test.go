@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -26,11 +28,18 @@ const (
 		"3":{"class_type":"KSampler","inputs":{"sampler_name":"euler"}}},{},[]]}}`
 )
 
+// sentinelEnv is set in the test process; a fake that sees it was run without the
+// stripped environment and fails.
+const sentinelEnv = "MACHINE_MONITOR_AI_TEST_SENTINEL"
+
 // TestMain doubles as the fake nvidia-smi and lms: the detector runs this test binary with
 // "fake-nvidia-smi" or "fake-lms" first. Arguments, not env vars, select the fake because
 // the probe strips the environment.
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 {
+		if os.Getenv(sentinelEnv) != "" {
+			os.Exit(3) // the environment leaked through
+		}
 		args := strings.Join(os.Args[2:], " ")
 		switch os.Args[1] {
 		case "fake-nvidia-smi":
@@ -47,6 +56,7 @@ func TestMain(m *testing.M) {
 			os.Exit(0)
 		}
 	}
+	os.Setenv(sentinelEnv, "leaked")
 	os.Exit(m.Run())
 }
 
@@ -77,7 +87,7 @@ func testDetector(ollamaPort, comfyPort string) *detector {
 		host:       "127.0.0.1",
 		ollamaPort: ollamaPort,
 		comfyPort:  comfyPort,
-		lmsRunning: func(context.Context) bool { return false },
+		lmsPIDs:    func(context.Context) []int { return nil },
 		proc:       func(int) ([]string, string) { return nil, "" },
 	}
 }
@@ -116,7 +126,7 @@ func TestDetectAll(t *testing.T) {
 	d := testDetector(ollamaPort, comfyPort)
 	d.nvidiaSMI = []string{self(t), "fake-nvidia-smi"}
 	d.lms = []string{self(t), "fake-lms"}
-	d.lmsRunning = func(context.Context) bool { return true }
+	d.lmsPIDs = func(context.Context) []int { return []int{105} }
 	d.proc = func(pid int) ([]string, string) {
 		if pid == 101 {
 			return procs[pid], comfyHome
@@ -255,6 +265,114 @@ func TestModelSizeStaysInRoot(t *testing.T) {
 		if s := modelSize([]string{root}, name); s != nil {
 			t.Errorf("modelSize(%q) = %v, want nil", name, *s)
 		}
+	}
+}
+
+// The exec fakes fail when they see the test process's environment, so a missing
+// cmd.Env = strippedEnv() turns every exec test red.
+func TestExecEnvStripped(t *testing.T) {
+	if out := runCmd(context.Background(), self(t), "fake-lms", "ps", "--json"); out != fakeLMS {
+		t.Fatalf("fake-lms under runCmd = %q", out)
+	}
+	cmd := exec.Command(self(t), "fake-lms", "ps", "--json") // inherits the environment
+	if err := cmd.Run(); err == nil {
+		t.Fatal("the fake did not notice the sentinel")
+	}
+}
+
+// Windows, as agent.ps1: LM Studio and ComfyUI memory come from GPU process memory by pid,
+// and ComfyUI is checked when its port has a listener, without /system_stats.
+func TestWindowsGPUProcessMemory(t *testing.T) {
+	_, comfyPort := fakeApps(t, "", "", fakeHistory)
+	d := testDetector("1", comfyPort)
+	d.lms = []string{self(t), "fake-lms"}
+	d.lmsPIDs = func(context.Context) []int { return []int{40, 41} }
+	queries := 0
+	d.gpuMem = func(context.Context) map[int]float64 {
+		queries++
+		return map[int]float64{40: 1e9, 41: 5e8, 77: 3e9, 99: 1}
+	}
+	comfyHomeDir := filepath.Join(t.TempDir(), "ComfyUI")
+	os.MkdirAll(filepath.Join(comfyHomeDir, "models", "loras"), 0o755)
+	os.WriteFile(filepath.Join(comfyHomeDir, "models", "loras", "style.safetensors"), make([]byte, 42), 0o644)
+	d.listener = func(_ context.Context, port string) (bool, int) {
+		if port != comfyPort {
+			t.Errorf("listener asked for port %s", port)
+		}
+		return true, 77
+	}
+	d.cmdline = func(_ context.Context, pid int) string {
+		if pid != 77 {
+			t.Errorf("command line asked for pid %d", pid)
+		}
+		return `"C:\Python\python.exe" "` + comfyHomeDir + string(filepath.Separator) + `main.py" --listen`
+	}
+	got := d.detect(context.Background())
+	if len(got) != 2 || *got[0].App != "LM Studio" || got[0].Mem == nil || *got[0].Mem != 1.5e9 ||
+		*got[1].App != "ComfyUI" || got[1].Mem == nil || *got[1].Mem != 3e9 || len(got[1].Models) != 2 {
+		t.Fatalf("got %s", jsonOf(t, got))
+	}
+	if s := got[1].Models[1].Size; s == nil || *s != 42 { // found under the main.py directory
+		t.Errorf("lora size = %v, want 42 from %s", s, comfyHomeDir)
+	}
+	if queries != 1 {
+		t.Errorf("GPU memory queried %d times, want 1", queries)
+	}
+
+	// A listener Windows won't name the owner of: ComfyUI is still found, with no memory.
+	d.listener = func(context.Context, string) (bool, int) { return true, 0 }
+	d.cmdline = func(context.Context, int) string { t.Error("command line asked without an owner"); return "" }
+	got = d.detect(context.Background())
+	if len(got) != 2 || *got[1].App != "ComfyUI" || got[1].Mem != nil {
+		t.Fatalf("unnamed owner: got %s", jsonOf(t, got))
+	}
+
+	// No listener: ComfyUI isn't asked. No GPU memory for the pid: mem is null.
+	d.listener = func(context.Context, string) (bool, int) { return false, 0 }
+	d.gpuMem = func(context.Context) map[int]float64 { return nil }
+	got = d.detect(context.Background())
+	if len(got) != 1 || *got[0].App != "LM Studio" || got[0].Mem != nil {
+		t.Fatalf("got %s", jsonOf(t, got))
+	}
+}
+
+func TestComfyHome(t *testing.T) {
+	for in, want := range map[string]string{
+		`"C:\Python\python.exe" "C:\My Apps\ComfyUI\main.py" --port 8188`: `C:\My Apps\ComfyUI\`,
+		`python.exe C:\ComfyUI\main.py --listen`:                          `C:\ComfyUI\`,
+		`"C:\py\python.exe" D:\Comfy\MAIN.PY`:                             `D:\Comfy\`,
+		`python main.py`:                                                  ``,
+		`C:\ComfyUI\python_embeded\python.exe -s server.py`:               ``,
+	} {
+		if got := comfyHome(in); got != want {
+			t.Errorf("comfyHome(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestParseGPUProcMem(t *testing.T) {
+	got := parseGPUProcMem([]gpuProcMemRow{
+		{"pid_12_luid_0x00000000_0x0000D1A4_phys_0", 100},
+		{"pid_12_luid_0x00000000_0x0000E000_phys_0", 50},
+		{"pid_0_luid_0x0_phys_0", 7},
+		{"_Total", 999},
+		{"pid_13_luid_0x0_phys_0", 0},
+	})
+	if len(got) != 2 || got[12] != 150 || got[13] != 0 {
+		t.Errorf("got %v", got)
+	}
+	if m := memOf(got, 13); m != nil {
+		t.Errorf("memOf zero = %v, want nil", *m)
+	}
+}
+
+func TestParseTasklist(t *testing.T) {
+	out := "\"LM Studio.exe\",\"4012\",\"Console\",\"1\",\"312,004 K\"\r\n" +
+		"\"llmster.exe\",\"4100\",\"Console\",\"1\",\"10,000 K\"\r\n" +
+		"\"chrome.exe\",\"5000\",\"Console\",\"1\",\"1 K\"\r\n" +
+		"INFO: garbage \"line\r\n"
+	if got := parseTasklist(out, "lm studio.exe", "llmster.exe"); !slices.Equal(got, []int{4012, 4100}) {
+		t.Errorf("got %v", got)
 	}
 }
 

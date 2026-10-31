@@ -1,0 +1,24 @@
+machine-monitor · hub hub.lan:7777   1  2  3  6 Alerts                       ?/q
+Channels                                                                        
+                                                                                
+  Banner and bell    [x] on                                                     
+  Resolved notices   [x] on                                                     
+▶ ntfy               [ ] off                                                    
+  ntfy server        https://ntfy.sh                                            
+  ntfy topic         my-lab                                                     
+  Webhook            [ ] off                                                    
+  Webhook URL        (empty)                                                    
+                                                                                
+Save first, then t sends a test alert to every channel that is on.              
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+↑↓ field · ←→ change · space toggle · enter save · esc cancel                   

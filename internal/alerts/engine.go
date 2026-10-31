@@ -26,6 +26,9 @@ const (
 	CostInterval = 5 * time.Minute
 )
 
+// logDelay coalesces event-log writes, as upstream's 1 s debounce.
+const logDelay = time.Second
+
 // Device is what the engine needs to know about a registered device.
 type Device struct {
 	ID       string
@@ -113,7 +116,8 @@ type Options struct {
 	// Broadcast receives every alert and settings change. It is called without the engine's
 	// lock held, so it may call back into the engine.
 	Broadcast func(Message)
-	// HubURL is the link put in notifications; "" leaves it out.
+	// HubURL prefixes the "/#/alerts" link put in notifications; nil or "" sends the bare path,
+	// as upstream does.
 	HubURL func() string
 	// Now is the clock; time.Now when nil.
 	Now func() time.Time
@@ -151,6 +155,9 @@ type Engine struct {
 	events []Event
 	state  map[string]*state // "<ruleId>|<deviceId>"
 	wg     sync.WaitGroup    // deliveries in flight
+
+	logDirty bool        // events changed since alerts-log.json was written
+	logTimer *time.Timer // pending debounced log write
 }
 
 // savedFile is alerts.json.
@@ -315,14 +322,37 @@ func (e *Engine) save() {
 	}
 }
 
-// saveLog writes the event log. Called with mu held.
+// saveLog writes the event log now. Called with mu held.
 func (e *Engine) saveLog() {
+	e.logDirty = false
+	if e.logTimer != nil {
+		e.logTimer.Stop()
+		e.logTimer = nil
+	}
 	if e.opt.Paths.AlertsLog == "" {
 		return
 	}
 	b, _ := json.Marshal(e.events)
 	if err := config.WriteFile0600(e.opt.Paths.AlertsLog, b); err != nil {
 		e.logf("alerts: save log: %v", err)
+	}
+}
+
+// queueLog marks the log dirty and writes it logDelay later, so a burst of events costs
+// one write. Called with mu held.
+func (e *Engine) queueLog() {
+	e.logDirty = true
+	if e.logTimer == nil {
+		e.logTimer = time.AfterFunc(logDelay, e.flushLog)
+	}
+}
+
+// flushLog writes the log if it changed since the last write.
+func (e *Engine) flushLog() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.logDirty {
+		e.saveLog()
 	}
 }
 
@@ -345,7 +375,7 @@ func (e *Engine) targets(r Rule) []Device {
 // resolves the device's offline alerts.
 func (e *Engine) OnReport(deviceID string, r *report.Report) {
 	var watts *float64
-	if e.opt.Energy != nil && r != nil {
+	if e.opt.Energy != nil && r != nil && e.wantsPower(deviceID) {
 		watts = e.opt.Energy.Watts(deviceID, r) // outside the lock: it's the hub's code
 	}
 	e.mu.Lock()
@@ -367,6 +397,19 @@ func (e *Engine) OnReport(deviceID string, r *report.Report) {
 	}
 	e.mu.Unlock()
 	e.send(out)
+}
+
+// wantsPower reports whether an enabled power rule covers the device, so the power
+// estimate is only computed when something will read it.
+func (e *Engine) wantsPower(deviceID string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, r := range e.cfg.Rules {
+		if r.Enabled && r.Type == TypePower && (r.Device == AllDevices || r.Device == deviceID) {
+			return true
+		}
+	}
+	return false
 }
 
 // evaluate runs one rule's duration and hysteresis state machine. Called with mu held.
@@ -596,7 +639,7 @@ func (e *Engine) emit(out []Message, r Rule, id, st string, value *float64, deta
 	if len(e.events) > maxLog {
 		e.events = append([]Event(nil), e.events[len(e.events)-maxLog:]...)
 	}
-	e.saveLog()
+	e.queueLog()
 	e.save()
 	notify := st == Firing || e.cfg.NotifyResolved
 	if notify {
@@ -621,18 +664,21 @@ func (e *Engine) send(msgs []Message) {
 	}
 }
 
+// link is the alerts page put in notifications. Upstream always sends it, even when it has
+// no hub URL to prefix.
 func (e *Engine) link() string {
-	if e.opt.HubURL == nil {
-		return ""
+	u := ""
+	if e.opt.HubURL != nil {
+		u = strings.TrimSuffix(e.opt.HubURL(), "/")
 	}
-	if u := strings.TrimSuffix(e.opt.HubURL(), "/"); u != "" {
-		return u + "/#/alerts"
-	}
-	return ""
+	return u + "/#/alerts"
 }
 
-// Wait blocks until deliveries in flight have finished.
-func (e *Engine) Wait() { e.wg.Wait() }
+// Wait blocks until deliveries in flight have finished, then writes a pending event log.
+func (e *Engine) Wait() {
+	e.wg.Wait()
+	e.flushLog()
+}
 
 // Test broadcasts a test alert and delivers it to every enabled channel now
 // (POST /api/alerts/test).
@@ -655,10 +701,7 @@ func (e *Engine) deliver(ctx context.Context, ch Channels, link string, ev Event
 			priority, tag = 4, "warning"
 		}
 		body := map[string]any{"topic": ch.Ntfy.Topic, "title": ev.Title, "message": ev.Message,
-			"priority": priority, "tags": []string{tag}}
-		if link != "" {
-			body["click"] = link
-		}
+			"priority": priority, "tags": []string{tag}, "click": link}
 		if ch.Ntfy.Email != "" {
 			body["email"] = ch.Ntfy.Email
 		}
@@ -673,10 +716,7 @@ func (e *Engine) deliver(ctx context.Context, ch Channels, link string, ev Event
 		// content is what Discord reads, text is what Slack (and most others) read.
 		body := map[string]any{"content": line, "text": line, "title": ev.Title, "message": ev.Message,
 			"device": ev.DeviceName, "state": ev.State,
-			"time": time.UnixMilli(ev.T).UTC().Format("2006-01-02T15:04:05.000Z")}
-		if link != "" {
-			body["link"] = link
-		}
+			"time": time.UnixMilli(ev.T).UTC().Format("2006-01-02T15:04:05.000Z"), "link": link}
 		d.Webhook = ptr(e.post(ctx, ch.Webhook.URL, body))
 	}
 	if (d.Ntfy != nil && !d.Ntfy.OK) || (d.Webhook != nil && !d.Webhook.OK) {
