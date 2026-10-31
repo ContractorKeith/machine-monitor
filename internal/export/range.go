@@ -17,11 +17,13 @@ var Ranges = map[string]time.Duration{
 // rangeNames is Ranges' keys in order, for error messages.
 const rangeNames = "1h, 6h, 24h, 7d or 30d"
 
-// ParseRange turns --range, --from and --to into a time span, the way the hub reads
-// ?range=&from=&to=: to defaults to now, and from defaults to to minus the range (24h when
-// --range is empty). --from and --to take RFC 3339 times or YYYY-MM-DD dates (midnight in
-// loc).
+// ParseRange turns --range or --from/--to into a time span. --range ends now; --to defaults
+// to now and --from to 24h before --to. --range can't be combined with --from or --to.
+// --from and --to take RFC 3339 times or YYYY-MM-DD dates (midnight in loc).
 func ParseRange(rng, from, to string, now time.Time, loc *time.Location) (time.Time, time.Time, error) {
+	if rng != "" && (from != "" || to != "") {
+		return time.Time{}, time.Time{}, sentence("Use either --range or --from/--to, not both.")
+	}
 	span := Ranges["24h"]
 	if rng != "" {
 		d, ok := Ranges[strings.ToLower(rng)]

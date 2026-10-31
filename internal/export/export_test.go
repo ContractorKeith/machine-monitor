@@ -100,8 +100,8 @@ func TestParseRange(t *testing.T) {
 		{"24h", "", "", time.UTC, now.Add(-24 * time.Hour), now},
 		{"7d", "", "", time.UTC, now.AddDate(0, 0, -7), now},
 		{"30D", "", "", time.UTC, now.AddDate(0, 0, -30), now},
-		{"1h", "", "2026-10-30T10:00:00Z", time.UTC, time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC), time.Date(2026, 10, 30, 10, 0, 0, 0, time.UTC)},
-		{"7d", "2026-10-01T00:00:00+02:00", "", time.UTC, time.Date(2026, 9, 30, 22, 0, 0, 0, time.UTC), now},
+		{"", "", "2026-10-30T10:00:00Z", time.UTC, time.Date(2026, 10, 29, 10, 0, 0, 0, time.UTC), time.Date(2026, 10, 30, 10, 0, 0, 0, time.UTC)},
+		{"", "2026-10-01T00:00:00+02:00", "", time.UTC, time.Date(2026, 9, 30, 22, 0, 0, 0, time.UTC), now},
 		{"", "2026-10-01", "2026-10-02", ny, time.Date(2026, 10, 1, 0, 0, 0, 0, ny), time.Date(2026, 10, 2, 0, 0, 0, 0, ny)},
 	}
 	for _, tt := range tests {
@@ -115,6 +115,8 @@ func TestParseRange(t *testing.T) {
 		{"2w", "", "", `"2w" is not a range; use 1h, 6h, 24h, 7d or 30d.`},
 		{"", "yesterday", "", `--from "yesterday" is not a time; use RFC 3339`},
 		{"", "", "10/31/2026", `--to "10/31/2026" is not a time`},
+		{"7d", "2026-10-01", "", "Use either --range or --from/--to, not both."},
+		{"1h", "", "2026-10-30T10:00:00Z", "Use either --range or --from/--to, not both."},
 		{"", "2026-10-31T13:00:00Z", "", "The start of the range (2026-10-31T13:00:00Z) must be before its end (2026-10-31T12:00:00Z)."},
 	}
 	for _, tt := range bad {
@@ -252,6 +254,20 @@ func TestHubErrors(t *testing.T) {
 		if err == nil || !strings.HasPrefix(err.Error(), tt.want) {
 			t.Errorf("%s %s: err %v; want %q", tt.hub.URL, tt.id, err, tt.want)
 		}
+	}
+}
+
+// TestHubTooLarge checks a reply cut at maxBody is reported as too large, not as bad JSON.
+func TestHubTooLarge(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"points":[`))
+		w.Write(bytes.Repeat([]byte(" "), maxBody))
+	}))
+	defer srv.Close()
+	_, err := export(t, Hub{URL: srv.URL}, "box-1", "1h", "csv")
+	want := "The hub at " + srv.URL + " sent a reply larger than 32 MB"
+	if err == nil || !strings.HasPrefix(err.Error(), want) {
+		t.Errorf("err %v; want %q", err, want)
 	}
 }
 

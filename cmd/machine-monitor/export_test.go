@@ -45,6 +45,7 @@ func TestExport(t *testing.T) {
 		{[]string{"export", "box-1", "--range", "1h"}, 1, "", `has no history between 2026-10-31T11:00:00Z and 2026-10-31T12:00:00Z.`},
 		{[]string{"export", "box-1", "--range", "2w"}, 1, "", `"2w" is not a range; use 1h, 6h, 24h, 7d or 30d.`},
 		{[]string{"export", "box-1", "--hub", "ftp://x"}, 1, "", `is not a hub address`},
+		{[]string{"export", "box-1", "--range", "7d", "--from", "2026-10-30"}, 1, "", "Use either --range or --from/--to, not both."},
 	}
 	for _, tt := range tests {
 		var out, errOut bytes.Buffer

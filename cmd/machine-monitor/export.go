@@ -14,13 +14,14 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/export"
 )
 
-const exportUsage = `usage: machine-monitor export ID [--range 1h|6h|24h|7d|30d] [--from TIME] [--to TIME]
+const exportUsage = `usage: machine-monitor export ID [--range 1h|6h|24h|7d|30d | --from TIME [--to TIME]]
                              [--format csv|json] [--hub URL]
 
 Writes a device's 1-minute history to stdout. Without --hub it reads this machine's history
 (kept by machine-monitor hub); with --hub it asks that hub, using the key in client.json.
-TIME is RFC 3339 (2026-10-31T14:00:00Z) or a date (2026-10-31). The range defaults to 24h
-ending now.
+--range ends now. --from and --to take RFC 3339 (2026-10-31T14:00:00Z) or a date
+(2026-10-31); --to defaults to now and --from to 24h before --to. Without either, the range
+is the last 24h.
 `
 
 // exportNow is the clock for export; tests replace it.

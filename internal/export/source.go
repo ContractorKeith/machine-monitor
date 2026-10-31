@@ -25,26 +25,23 @@ const (
 
 func unixMS(t time.Time) float64 { return float64(t.UnixMilli()) }
 
-// Local reads the history directory a hub on this machine keeps (config.Paths.History).
+// Local reads the history directory a hub on this machine keeps (config.Paths.History). It
+// only reads, so it is safe beside a running hub.
 type Local struct {
 	Dir string
-	Now func() time.Time // clock for the 30-day prune; nil means time.Now
+	Now func() time.Time // clock for the 30-day cutoff; nil means time.Now
 }
 
-// Points loads the store and returns id's stored minutes in [from, to].
+// Points reads the directory and returns id's stored minutes in [from, to].
 func (l Local) Points(_ context.Context, id string, from, to time.Time) ([]history.Point, error) {
-	unknown := &UnknownDeviceError{ID: id, Where: "in this machine's history"}
-	if _, err := os.Stat(l.Dir); errors.Is(err, fs.ErrNotExist) {
-		return nil, unknown // don't let Open create the directory
-	}
-	st, err := history.Open(l.Dir, l.Now)
+	snap, err := history.ReadDir(l.Dir, l.Now)
 	if err != nil {
 		return nil, sentence("Could not read the history in %s: %v.", l.Dir, err)
 	}
-	if len(st.MinutePoints(id, 0, math.MaxFloat64)) == 0 {
-		return nil, unknown
+	if !snap.Has(id) {
+		return nil, &UnknownDeviceError{ID: id, Where: "in this machine's history"}
 	}
-	return st.MinutePoints(id, unixMS(from), unixMS(to)), nil
+	return snap.MinutePoints(id, unixMS(from), unixMS(to)), nil
 }
 
 // Hub reads history from a hub's GET /api/history/:id.
@@ -108,9 +105,12 @@ func (h Hub) get(ctx context.Context, client *http.Client, base, id string, from
 		return nil, sentence("Could not reach the hub at %s: %v.", h.URL, err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 	if err != nil {
 		return nil, sentence("Could not read the reply from the hub at %s: %v.", h.URL, err)
+	}
+	if len(body) > maxBody {
+		return nil, sentence("The hub at %s sent a reply larger than %d MB, which is more than a history request can need.", h.URL, maxBody>>20)
 	}
 	switch resp.StatusCode {
 	case http.StatusOK:
