@@ -1,0 +1,36 @@
+{
+ "estimate": [
+  {"name": "desktop 16 threads half load, no gpu", "report": {"formFactor": "desktop", "cpu": {"threads": 16, "usage": 50}, "gpus": []}},
+  {"name": "laptop 8 threads, apple integrated gpu", "report": {"formFactor": "laptop", "cpu": {"threads": 8, "usage": 20}, "gpus": [{"vendor": "apple", "usage": 40, "memTotal": null}]}},
+  {"name": "desktop measured cpu and nvidia", "report": {"formFactor": "desktop", "power": {"cpu": 65.4}, "cpu": {"threads": 24, "usage": 33}, "gpus": [{"vendor": "nvidia", "usage": 97, "memTotal": 25769803776, "power": 312.7}]}},
+  {"name": "no usage and no measured cpu", "report": {"formFactor": "desktop", "power": {"cpu": null}, "cpu": {"threads": 8, "usage": null}, "gpus": [{"power": 100}]}},
+  {"name": "empty report", "report": {}},
+  {"name": "threads unknown defaults to 8", "report": {"formFactor": "desktop", "cpu": {"threads": null, "usage": 0}}},
+  {"name": "threads zero defaults to 8", "report": {"cpu": {"threads": 0, "usage": 10}}},
+  {"name": "threads above 512 clamp", "report": {"formFactor": "desktop", "cpu": {"threads": 1000, "usage": 100}}},
+  {"name": "desktop 128 threads cpuMax cap", "report": {"formFactor": "desktop", "cpu": {"threads": 128, "usage": 75}}},
+  {"name": "desktop 2 threads", "report": {"formFactor": "desktop", "cpu": {"threads": 2, "usage": 75}}},
+  {"name": "laptop 32 threads cpuMax cap", "report": {"formFactor": "laptop", "cpu": {"threads": 32, "usage": 60}}},
+  {"name": "laptop 4 threads", "report": {"formFactor": "laptop", "cpu": {"threads": 4, "usage": 60}}},
+  {"name": "usage above 100 clamps", "report": {"formFactor": "desktop", "cpu": {"threads": 12, "usage": 150}}},
+  {"name": "usage below 0 clamps", "report": {"formFactor": "desktop", "cpu": {"threads": 12, "usage": -5}}},
+  {"name": "form factor unknown is desktop", "report": {"formFactor": null, "cpu": {"threads": 6, "usage": 12.5}}},
+  {"name": "amd discrete gpu estimated", "report": {"formFactor": "desktop", "cpu": {"threads": 16, "usage": 25}, "gpus": [{"vendor": "amd", "usage": 75, "memTotal": 17179869184, "power": null}]}},
+  {"name": "gpu exactly 2 GiB, usage unknown", "report": {"formFactor": "desktop", "cpu": {"threads": 8, "usage": 5}, "gpus": [{"vendor": "generic", "usage": null, "memTotal": 2147483648}]}},
+  {"name": "gpu just under 2 GiB is integrated", "report": {"formFactor": "desktop", "cpu": {"threads": 8, "usage": 5}, "gpus": [{"vendor": "generic", "usage": 90, "memTotal": 2147483647}]}},
+  {"name": "measured and estimated gpus mixed", "report": {"formFactor": "desktop", "cpu": {"threads": 32, "usage": 41.3}, "gpus": [{"vendor": "nvidia", "usage": 50, "memTotal": 12884901888, "power": 145.25}, {"vendor": "amd", "usage": 12, "memTotal": 8589934592}, {"vendor": "generic", "usage": 3, "memTotal": 536870912}]}},
+  {"name": "measured gpu zero watts", "report": {"formFactor": "laptop", "cpu": {"threads": 10, "usage": 7}, "gpus": [{"vendor": "nvidia", "usage": 0, "power": 0}]}},
+  {"name": "measured cpu zero, usage ignored", "report": {"formFactor": "desktop", "power": {"cpu": 0}, "cpu": {"threads": 8, "usage": 99}}},
+  {"name": "rounding half up on positive", "report": {"formFactor": "desktop", "power": {"cpu": 12.25}, "cpu": {"threads": 8}}},
+  {"name": "rounding half toward +inf on negative", "report": {"formFactor": "laptop", "power": {"cpu": -0.25}, "cpu": {"threads": 8}}},
+  {"name": "fractional usage and threads", "report": {"formFactor": "desktop", "cpu": {"threads": 7.5, "usage": 33.333}}}
+ ],
+ "fromSample": [
+  {"name": "desktop half load", "sample": {"cpu": 50}, "hw": {"formFactor": "desktop", "threads": 16}},
+  {"name": "laptop with gpu power", "sample": {"cpu": 20, "gpuPower": 35.5}, "hw": {"formFactor": "laptop", "threads": 8}},
+  {"name": "cpu unknown", "sample": {"cpu": null, "gpuPower": 100}, "hw": {"formFactor": "desktop", "threads": 8}},
+  {"name": "hw unknown", "sample": {"cpu": 10}, "hw": {}},
+  {"name": "gpu power unknown", "sample": {"cpu": 100, "gpuPower": null}, "hw": {"formFactor": "desktop", "threads": 64}},
+  {"name": "fractional load", "sample": {"cpu": 12.7, "gpuPower": 220.1}, "hw": {"formFactor": "desktop", "threads": 24}}
+ ]
+}
