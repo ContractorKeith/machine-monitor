@@ -135,7 +135,8 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 		return fail(1, "save %s: %v", paths.Client, err)
 	}
 	fmt.Fprintf(stdout, "Paired with %s (saved in %s).\n", hubURL, paths.Client)
-	if *noTUI || !stdoutIsTerminal(stdout) {
+	// The TUI needs a keyboard: not when stdin was the piped key (--key-stdin) and isn't a TTY.
+	if *noTUI || !stdoutIsTerminal(stdout) || (*keyStdin && !stdinIsTerminal()) {
 		fmt.Fprintln(stdout, "Next: run `machine-monitor agent` to report this machine to the hub, or `machine-monitor service install --role agent` to start it at login.")
 		return 0
 	}

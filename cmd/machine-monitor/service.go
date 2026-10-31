@@ -181,10 +181,10 @@ func runService(args []string, stdout, stderr io.Writer) int {
 		}
 		// A role that wasn't installed before and fails halfway is removed again; one that was
 		// installed is left as it is, since its old definition can't be put back.
-		before, _ := m.Status(ctx, role)
+		before, statusErr := m.Status(ctx, role)
 		if err := m.Install(ctx, spec, stdout); err != nil {
 			fmt.Fprintf(stderr, "machine-monitor service install: %v\n", err)
-			if !before.Installed {
+			if statusErr == nil && !before.Installed { // unknown prior state: don't remove anything
 				if m.Uninstall(ctx, role, io.Discard) == nil {
 					fmt.Fprintf(stderr, "Rolled back: the %s service is not installed.\n", role)
 				} else {
