@@ -6,6 +6,7 @@
 # Local data
 /data/
 *.ndjson
+!internal/history/testdata/**/*.ndjson
 
 # Go
 /vendor/
