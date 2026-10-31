@@ -87,8 +87,15 @@ func TestStaleStream(t *testing.T) {
 	if !m.conn.stale || len(m.online()) != 0 || len(m.offline()) != 3 {
 		t.Fatalf("not stale after 11 s: stale=%v online=%d", m.conn.stale, len(m.online()))
 	}
+	// The client's reconnect attempts are not word from the hub.
+	m = feed(t, m, hubMsg{client.Event{Type: client.EventDisconnected, Err: context.DeadlineExceeded, Retry: time.Second}},
+		hubMsg{client.Event{Type: client.EventConnected}})
+	if !m.conn.stale {
+		t.Fatal("a reconnect attempt cleared the stale mark")
+	}
+	m = feed(t, m, hubMsg{client.Event{Type: client.EventDisconnected, Err: context.DeadlineExceeded, Retry: time.Second}})
 	f := frameText(m)
-	for _, want := range []string{"0 online · 3 offline", "no word from the hub for 11s", "Offline (3)", "the stream has gone quiet"} {
+	for _, want := range []string{"0 online · 3 offline", "no word from the hub for 11s", "Offline (3)"} {
 		if !strings.Contains(f, want) {
 			t.Errorf("frame lacks %q:\n%s", want, f)
 		}
@@ -429,7 +436,8 @@ func TestHeaderCostAndAlerts(t *testing.T) {
 func TestCosmetics(t *testing.T) {
 	m, _ := clockModel(t, newFakeHub(nil), 200, 50)
 	// At 200 columns three cards share the width; the disk-write rate must still show.
-	if f := frameText(m); !strings.Contains(f, "w 3.2 MiB/s") {
+	m3on := feed(t, m, hubMsg{client.Event{Type: client.EventStatus, Online: map[string]bool{"nas-0002": true}}})
+	if f := frameText(m3on); strings.Count(f, "w 3.2 MiB/s") != 2 || !strings.Contains(f, "w 600 KiB/s") {
 		t.Errorf("NET/DISK cut at 200 columns:\n%s", f)
 	}
 	// At 40×10 the open view keeps its name in the tab bar.

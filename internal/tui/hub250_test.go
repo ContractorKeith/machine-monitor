@@ -57,9 +57,10 @@ func (c *countingHub) Stream(ctx context.Context) <-chan client.Event {
 // program drives a model the way Bubble Tea does: commands run on goroutines, their
 // messages go through Update one at a time, and every update is followed by a full frame.
 type program struct {
-	mu   sync.Mutex
-	m    model
-	msgs chan tea.Msg
+	mu     sync.Mutex
+	m      model
+	msgs   chan tea.Msg
+	frames int
 }
 
 func (p *program) exec(ctx context.Context, cmd tea.Cmd) {
@@ -95,6 +96,7 @@ func (p *program) run(ctx context.Context) {
 			next, cmd := p.m.Update(msg)
 			p.m = next.(model)
 			_ = p.m.render()
+			p.frames++
 			p.mu.Unlock()
 			p.exec(ctx, cmd)
 		}
@@ -252,13 +254,17 @@ func TestHub250(t *testing.T) {
 	time.Sleep(interval) // let the last reports arrive
 
 	p.mu.Lock()
-	got := p.m
+	got, frames := p.m, p.frames
 	p.mu.Unlock()
 	stopTUI()
 
-	t.Logf("%d reports sent; %d connections, %d drops; peak heap %d MB", sent.Load(), ch.connects.Load(), ch.drops.Load(), peak>>20)
+	t.Logf("%d reports sent; %d connections, %d drops; %d frames; peak heap %d MB", sent.Load(), ch.connects.Load(), ch.drops.Load(), frames, peak>>20)
 	if n := ch.connects.Load(); n != 1 || ch.drops.Load() != 0 {
 		t.Errorf("the stream connected %d times and dropped %d times (last: %v); want one connection", n, ch.drops.Load(), ch.lastDrop.Load())
+	}
+	// Batching: a few frames a second, not one per report (125 a second here).
+	if fps := float64(frames) / (duration + interval).Seconds(); fps > 20 {
+		t.Errorf("%.0f frames a second; stream events are not batched", fps)
 	}
 	if peak > heapMax {
 		t.Errorf("peak heap %d MB, want under %d MB", peak>>20, heapMax>>20)

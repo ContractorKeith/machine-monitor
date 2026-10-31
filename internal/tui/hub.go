@@ -127,6 +127,11 @@ func (m model) applyBatch(evs []client.Event, done bool) (model, tea.Cmd) {
 	m.batching = true
 	cmds := make([]tea.Cmd, 0, 2)
 	for _, ev := range evs {
+		// Only the hub's own events show it is alive; the client's reconnect attempts
+		// keep arriving while it is gone.
+		if ev.Type != client.EventConnected && ev.Type != client.EventDisconnected {
+			m.conn.lastEvent, m.conn.stale = m.now(), false
+		}
 		var cmd tea.Cmd
 		m, cmd = m.handleEvent(ev)
 		if cmd != nil {
@@ -141,7 +146,6 @@ func (m model) applyBatch(evs []client.Event, done bool) (model, tea.Cmd) {
 		m.fixSelection()
 	}
 	m.batching, m.owned, m.dirty = false, false, false
-	m.conn.lastEvent, m.conn.stale = m.now(), false
 	m.clampScroll()
 	switch {
 	case done:

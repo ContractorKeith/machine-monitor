@@ -416,7 +416,10 @@ func TestCoalesce(t *testing.T) {
 			}
 		}
 		f.Flush()
-		finished <- struct{}{}
+		select { // reconnects after a failure call this again: never block on it
+		case finished <- struct{}{}:
+		default:
+		}
 		<-ctx.Done()
 	})
 	cfg := fastConfig()
