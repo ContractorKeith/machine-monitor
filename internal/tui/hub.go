@@ -165,6 +165,11 @@ func (m model) handleEvent(ev client.Event) (model, tea.Cmd) {
 	case client.EventEnergySettings:
 		m.applyEnergySettings(ev)
 		return m, nil
+	case client.EventPaired:
+		m.pairedEvent()
+		return m, nil
+	case client.EventDisconnected:
+		m.lostHub()
 	}
 	m.apply(ev)
 	if ev.Type == client.EventSnapshot && m.al.loaded { // a (re)connection: what we have may be stale

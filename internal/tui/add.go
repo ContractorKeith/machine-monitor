@@ -2,7 +2,8 @@ package tui
 
 // Add device (PLAN §7 "Add device", §3 rows 26 and 33): a pairing code from the hub with its
 // countdown, and the one-line agent installs for Linux/macOS and Windows built from the
-// hub's address. Hub mode only; opened with `a` from the dashboard or Settings.
+// hub's address. Hub mode only; opened with `a` from the dashboard or Settings. The code
+// part says what `machine-monitor pair` prints on the hub's own machine, in the same words.
 
 import (
 	"context"
@@ -13,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/ContractorKeith/machine-monitor/internal/client"
+	"github.com/ContractorKeith/machine-monitor/internal/hub"
 )
 
 // PairHub is what Add device needs from a hub. *client.Client implements it.
@@ -32,6 +34,8 @@ type addState struct {
 	url    string // the hub address other machines use
 	sh, ps string // the one-line installs
 	notice string
+	paired bool // a device used the code
+	lost   bool // the stream dropped: the code lived only in that hub's memory
 }
 
 // pairMsg is a new pairing code and the hub's addresses.
@@ -65,6 +69,7 @@ func (m *model) newCode() tea.Cmd {
 		return nil
 	}
 	m.add.busy, m.add.err, m.add.notice = true, nil, ""
+	m.add.paired, m.add.lost = false, false
 	return m.hubCall(func(ctx context.Context, _ Hub) tea.Msg {
 		code, err := ph.NewPairCode(ctx)
 		if err != nil {
@@ -89,6 +94,19 @@ func (m model) updateAdd(msg tea.Msg) (model, tea.Cmd, bool) {
 		m.add.sh, m.add.ps = ph.InstallCommands(m.add.url)
 	}
 	return m, nil, true
+}
+
+// pairedEvent and lostHub follow the code while Add device shows it, as `pair` does.
+func (m *model) pairedEvent() {
+	if m.add.code != nil && !m.add.lost {
+		m.add.paired = true
+	}
+}
+
+func (m *model) lostHub() {
+	if m.add.code != nil && !m.add.paired && m.codeLeft() > 0 {
+		m.add.lost = true
+	}
 }
 
 // addKey handles Add device's keys: a new code, copying an install line, back.
@@ -137,15 +155,22 @@ func (m model) addView() string {
 		if len(code) == 6 {
 			code = code[:3] + " " + code[3:]
 		}
-		left := m.codeLeft()
-		countdown := fmt.Sprintf("expires in %d:%02d", int(left.Minutes()), int(left.Seconds())%60)
+		left := m.codeLeft().Round(time.Second)
+		status := t.dim.Render(fmt.Sprintf("Expires in %d:%02d", int(left/time.Minute), int(left/time.Second)%60))
 		style := t.title
-		if left <= 0 {
-			countdown, style = "expired · n for a new code", t.dim
+		switch {
+		case m.add.paired:
+			status = t.normal.Render("Paired: a device used the code.") + t.dim.Render(" n for another")
+		case m.add.lost:
+			status, style = t.err.Render("Lost the hub, and the code with it.")+t.dim.Render(" n for a new one once it is back"), t.dim
+		case left <= 0:
+			status, style = t.dim.Render("The code expired. Press n for a new one."), t.dim
 		}
 		lines = append(lines,
-			t.label.Render(pad("Pairing code", 14))+" "+style.Render(code)+"   "+t.dim.Render(countdown),
-			"", "On the new machine run", "  machine-monitor connect "+m.add.url, "and type the code. It works once, for 10 minutes and 5 tries.")
+			t.label.Render("Pairing code:")+" "+style.Render(code)+"   "+status,
+			"On the new device, run: machine-monitor connect "+m.add.url,
+			t.dim.Render(fmt.Sprintf("and type the code. It works once, for %.0f minutes, with %d tries per device.",
+				hub.PairTTL.Minutes(), hub.PairTries)))
 	}
 	if m.add.sh != "" {
 		lines = append(lines, "", t.label.Render("Or install the agent with one line")+t.dim.Render(" (it carries this hub's key: use it only on your own machines)"),

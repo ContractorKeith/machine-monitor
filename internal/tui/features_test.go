@@ -163,6 +163,7 @@ type settingsFake struct {
 	put    []power.Settings
 	remote error
 	codes  int
+	now    func() time.Time // the test's clock, for code expiry; nil is hubNow
 }
 
 func (f *settingsFake) EnergySettings(context.Context) (*power.Settings, error) {
@@ -191,7 +192,11 @@ func (f *settingsFake) NewPairCode(context.Context) (*client.PairCode, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.codes++
-	return &client.PairCode{Code: "042917", Expires: hubNow.Add(10 * time.Minute).UnixMilli()}, nil
+	now := hubNow
+	if f.now != nil {
+		now = f.now()
+	}
+	return &client.PairCode{Code: "042917", Expires: now.Add(10 * time.Minute).UnixMilli()}, nil
 }
 
 func (f *settingsFake) Info(context.Context) (*client.Info, error) { return &client.Info{}, nil }
@@ -321,12 +326,13 @@ func TestParseTOU(t *testing.T) {
 func TestAddDevice(t *testing.T) {
 	f := &settingsFake{fakeHub: newFakeHub(nil)}
 	m, now := clockModel(t, f, 160, 40)
+	f.now = func() time.Time { return *now }
 	m = feed(t, m, keyMsg("a"))
 	if m.view != viewAddDevice || f.codes != 1 {
 		t.Fatalf("view %v, %d codes", m.view, f.codes)
 	}
 	frame := frameText(m)
-	for _, want := range []string{"042 917", "expires in 10:00", "machine-monitor connect http://192.168.1.5:7777",
+	for _, want := range []string{"Pairing code: 042 917", "Expires in 10:00", "On the new device, run: machine-monitor connect http://192.168.1.5:7777", "5 tries per device",
 		`curl -sSL --fail-with-body -H "Authorization: Bearer KEY" http://192.168.1.5:7777/install.sh | sh`,
 		`irm -Headers @{Authorization='Bearer KEY'} http://192.168.1.5:7777/install.ps1 | iex`} {
 		if !strings.Contains(frame, want) {
@@ -335,17 +341,28 @@ func TestAddDevice(t *testing.T) {
 	}
 	*now = now.Add(4*time.Minute + 30*time.Second)
 	m = feed(t, m, hubTickMsg{})
-	if !strings.Contains(frameText(m), "expires in 5:30") {
+	if !strings.Contains(frameText(m), "Expires in 5:30") {
 		t.Errorf("countdown:\n%s", frameText(m))
 	}
 	*now = now.Add(6 * time.Minute)
 	m = feed(t, m, hubTickMsg{})
-	if !strings.Contains(frameText(m), "expired · n for a new code") {
+	if !strings.Contains(frameText(m), "The code expired. Press n for a new one.") {
 		t.Errorf("expiry:\n%s", frameText(m))
 	}
 	m = feed(t, m, keyMsg("n"))
 	if f.codes != 2 {
 		t.Errorf("n asked for %d codes", f.codes)
+	}
+	// A device uses the code; a later drop doesn't undo that.
+	m = feed(t, m, hubMsg{client.Event{Type: client.EventPaired}},
+		hubMsg{client.Event{Type: client.EventDisconnected, Err: context.Canceled, Retry: time.Second}})
+	if !strings.Contains(frameText(m), "Paired: a device used the code.") {
+		t.Errorf("paired:\n%s", frameText(m))
+	}
+	// A fresh code, then the hub goes away: the code went with it.
+	m = feed(t, m, keyMsg("n"), hubMsg{client.Event{Type: client.EventDisconnected, Err: context.Canceled, Retry: time.Second}})
+	if !strings.Contains(frameText(m), "Lost the hub, and the code with it.") {
+		t.Errorf("lost hub:\n%s", frameText(m))
 	}
 	_, cmd := m.Update(keyMsg("c"))
 	if cmd == nil {

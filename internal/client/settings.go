@@ -9,12 +9,16 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/ContractorKeith/machine-monitor/internal/hub"
 	"github.com/ContractorKeith/machine-monitor/internal/power"
 	"github.com/ContractorKeith/machine-monitor/internal/tailscale"
 )
+
+// EventPaired is the stream event the hub sends when a device uses the pairing code.
+const EventPaired = "paired"
 
 // EventEnergySettings is the stream event the hub sends when the price changes; its Raw is
 // {"settings": power.Settings}.
@@ -57,13 +61,17 @@ func (c *Client) NewPairCode(ctx context.Context) (*PairCode, error) {
 	return &out, nil
 }
 
-// Remote is GET /api/remote, upstream's Tailscale status of the hub's machine.
+// Remote is GET /api/remote: the Tailscale status of the hub's machine, as the hub's
+// remoteReply sends it (upstream's shape).
 type Remote struct {
 	tailscale.Status
-	Port int `json:"port"`
+	Port         int    `json:"port"`
+	CanConfigure bool   `json:"canConfigure"` // the hub can turn on `tailscale serve` (never on ours)
+	Platform     string `json:"platform"`     // the hub's OS, in Node's names ("linux", "darwin", "win32")
 }
 
-// Remote is GET /api/remote. It returns ErrNotAvailable when the hub has no such endpoint.
+// Remote is GET /api/remote. It returns ErrNotAvailable when the hub has no such endpoint
+// (machine-monitor hubs before it, or a server without it).
 func (c *Client) Remote(ctx context.Context) (*Remote, error) {
 	var out Remote
 	if err := c.do(ctx, "GET", "/api/remote", nil, &out); err != nil {
@@ -92,9 +100,13 @@ func (c *Client) Info(ctx context.Context) (*Info, error) {
 	return &out, nil
 }
 
+// virtualIface matches adapters other devices can't reach the hub through; the same list
+// `machine-monitor pair` skips (cmd/machine-monitor/pair.go).
+var virtualIface = regexp.MustCompile(`(?i)vEthernet|WSL|VirtualBox|VMware|docker|^br-|^veth|^virbr`)
+
 // InstallURL is the hub address other machines should use: the URL this client uses,
 // unless that is a loopback address, which only works on the hub's own machine; then the
-// first LAN address info lists, with the same port.
+// first real LAN address info lists (as `machine-monitor pair` picks it), with the same port.
 func (c *Client) InstallURL(info *Info) string {
 	host := c.base.Hostname()
 	ip := net.ParseIP(host)
@@ -104,8 +116,15 @@ func (c *Client) InstallURL(info *Info) string {
 	if info == nil || len(info.Addresses) == 0 {
 		return c.URL()
 	}
+	addr := info.Addresses[0].Address
+	for _, a := range info.Addresses {
+		if !virtualIface.MatchString(a.Name) {
+			addr = a.Address
+			break
+		}
+	}
 	u := *c.base
-	u.Host = net.JoinHostPort(info.Addresses[0].Address, c.base.Port())
+	u.Host = net.JoinHostPort(addr, c.base.Port())
 	return u.String()
 }
 

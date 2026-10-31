@@ -71,7 +71,7 @@ func TestInstallCommands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	info := &Info{Addresses: []hub.Address{{Name: "eth0", Address: "192.168.1.5"}}}
+	info := &Info{Addresses: []hub.Address{{Name: "docker0", Address: "172.17.0.1"}, {Name: "eth0", Address: "192.168.1.5"}}}
 	u := c.InstallURL(info)
 	if u != "http://192.168.1.5:7777" {
 		t.Errorf("InstallURL = %q", u)
