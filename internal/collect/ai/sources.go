@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -115,7 +116,7 @@ func parseComputeApps(out string) map[int]float64 {
 		}
 		pid, err1 := strconv.Atoi(strings.TrimSpace(f[0]))
 		mib, err2 := strconv.ParseFloat(strings.TrimSpace(f[1]), 64)
-		if err1 != nil || err2 != nil || pid <= 0 || mib < 0 {
+		if err1 != nil || err2 != nil || pid <= 0 || !(mib >= 0) || math.IsInf(mib, 0) {
 			continue // "[N/A]", "[Insufficient Permissions]", ...
 		}
 		gpu[pid] += mib * 1048576
@@ -221,7 +222,8 @@ func (d *detector) comfy(ctx context.Context, port, home string, mem *float64) r
 		roots = append([]string{filepath.Join(home, "models")}, roots...)
 	}
 	seen := map[string]bool{}
-	for _, item := range hist {
+	for _, k := range sortedKeys(hist) {
+		item := hist[k]
 		if len(item.Prompt) < 3 {
 			continue
 		}
