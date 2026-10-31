@@ -380,16 +380,40 @@ func TestInfo(t *testing.T) {
 	if locked["proof"] != hubProof(th.Token(), nonce) {
 		t.Errorf("proof = %v", locked["proof"])
 	}
-	// connProof covers the connection's source address and port as the hub saw them.
-	peer := netip.MustParseAddrPort("127.0.0.1:50000")
-	if locked["connProof"] != ConnProof(th.Token(), nonce, peer) {
-		t.Errorf("connProof = %v", locked["connProof"])
+	// connProof covers both ends of the connection as the hub saw them: the client's address
+	// and port, and the hub's own.
+	info := func(remote, local string) map[string]any {
+		r := httptest.NewRequest("GET", "/api/info?nonce="+nonce, nil)
+		r.RemoteAddr, r.Host = remote, "127.0.0.1:7777"
+		if local != "" {
+			r = r.WithContext(context.WithValue(r.Context(), http.LocalAddrContextKey, net.TCPAddrFromAddrPort(netip.MustParseAddrPort(local))))
+		}
+		w := httptest.NewRecorder()
+		th.h.ServeHTTP(w, r)
+		return decode[map[string]any](t, w)
 	}
-	other := decode[map[string]any](t, th.req("GET", "/api/info?nonce="+nonce, "", "", "RemoteAddr", "127.0.0.1:50001"))
-	if other["connProof"] == locked["connProof"] || other["proof"] != locked["proof"] {
-		t.Errorf("connProof doesn't depend on the source port: %v", other)
+	client, hubEnd := netip.MustParseAddrPort("127.0.0.1:50000"), netip.MustParseAddrPort("127.0.0.1:7777")
+	base := info(client.String(), hubEnd.String())
+	if base["connProof"] != ConnProof(th.Token(), nonce, client, hubEnd) || base["proof"] != locked["proof"] {
+		t.Errorf("connProof = %v", base)
 	}
-	if ConnProof("k", nonce, netip.MustParseAddrPort("[::ffff:127.0.0.1]:9")) != ConnProof("k", nonce, netip.MustParseAddrPort("127.0.0.1:9")) {
+	if v := info("127.0.0.1:50001", hubEnd.String()); v["connProof"] == base["connProof"] {
+		t.Errorf("connProof doesn't depend on the client's port: %v", v)
+	}
+	// A socket that shares the client's port but reached another listener (Windows
+	// SO_REUSEADDR) gets a different proof.
+	if v := info(client.String(), "127.0.0.1:7778"); v["connProof"] == base["connProof"] {
+		t.Errorf("connProof doesn't depend on the hub's port: %v", v)
+	}
+	if v := info(client.String(), "127.0.0.2:7777"); v["connProof"] == base["connProof"] {
+		t.Errorf("connProof doesn't depend on the hub's address: %v", v)
+	}
+	if v := info(client.String(), ""); v["connProof"] != nil || v["proof"] == nil {
+		t.Errorf("no local address, still a connProof: %v", v)
+	}
+	mapped := netip.MustParseAddrPort("[::ffff:127.0.0.1]:9")
+	plain := netip.MustParseAddrPort("127.0.0.1:9")
+	if ConnProof("k", nonce, mapped, mapped) != ConnProof("k", nonce, plain, plain) {
 		t.Error("connProof differs for a mapped address")
 	}
 	// Computed with upstream's hubProof in Node: hex(HMAC-SHA256(key, "device-monitor-hub:" + nonce)).
@@ -1346,8 +1370,22 @@ func TestClientAddr(t *testing.T) {
 			t.Errorf("%s with %q: %s, want %s", tc.remote, tc.xff, got, tc.want)
 		}
 	}
-	// Several header lines are one list.
+	// Only the last maxForwardHops entries are read: past them the socket is used, however
+	// long the list.
+	long := strings.TrimSuffix(strings.Repeat("10.0.0.7, ", 5000), ", ")
 	r := httptest.NewRequest("GET", "/", nil)
+	r.RemoteAddr = "192.168.1.2:1"
+	r.Header.Set("X-Forwarded-For", "100.64.0.5, "+long)
+	if got, _ := th.clientAddr(r); got.String() != "192.168.1.2" {
+		t.Errorf("client past %d trusted hops: %s", maxForwardHops, got)
+	}
+	within := strings.TrimSuffix(strings.Repeat("10.0.0.7, ", maxForwardHops-1), ", ")
+	r.Header.Set("X-Forwarded-For", "100.64.0.5, "+within)
+	if got, _ := th.clientAddr(r); got.String() != "100.64.0.5" {
+		t.Errorf("client behind %d trusted hops: %s", maxForwardHops-1, got)
+	}
+	// Several header lines are one list.
+	r = httptest.NewRequest("GET", "/", nil)
 	r.RemoteAddr = "192.168.1.2:1"
 	r.Header.Add("X-Forwarded-For", "100.64.0.5")
 	r.Header.Add("X-Forwarded-For", "100.64.0.6")

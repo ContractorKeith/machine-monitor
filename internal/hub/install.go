@@ -173,22 +173,39 @@ func (h *Hub) hubURLFor(r *http.Request) string {
 // trustedProxy reports whether remoteAddr matches an address or CIDR prefix in config.json
 // "trustedProxies" (e.g. ["127.0.0.1", "::1"] for tailscale serve). None by default.
 func (h *Hub) trustedProxy(remoteAddr string) bool {
+	ip, ok := remoteIP(remoteAddr)
+	return ok && h.trustedProxies().contains(ip)
+}
+
+// proxyList is config.json "trustedProxies", parsed: addresses become one-address prefixes.
+type proxyList []netip.Prefix
+
+// trustedProxies reads and parses "trustedProxies". Entries that don't parse are skipped.
+func (h *Hub) trustedProxies() proxyList {
 	h.mu.Lock()
 	raw := h.cfg.extra["trustedProxies"]
 	h.mu.Unlock()
 	var list []string
 	if raw == nil || json.Unmarshal(raw, &list) != nil {
-		return false
+		return nil
 	}
-	ip, ok := remoteIP(remoteAddr)
-	if !ok {
-		return false
-	}
+	var out proxyList
 	for _, s := range list {
-		if p, err := netip.ParsePrefix(s); err == nil && p.Contains(ip) {
-			return true
+		if p, err := netip.ParsePrefix(s); err == nil {
+			out = append(out, p.Masked())
+		} else if a, err := netip.ParseAddr(s); err == nil {
+			a = a.Unmap().WithZone("")
+			out = append(out, netip.PrefixFrom(a, a.BitLen()))
 		}
-		if a, err := netip.ParseAddr(s); err == nil && a.Unmap() == ip {
+	}
+	return out
+}
+
+// contains reports whether ip is in the list.
+func (l proxyList) contains(ip netip.Addr) bool {
+	ip = ip.Unmap().WithZone("")
+	for _, p := range l {
+		if p.Contains(ip) {
 			return true
 		}
 	}

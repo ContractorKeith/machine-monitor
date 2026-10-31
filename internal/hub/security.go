@@ -135,22 +135,30 @@ func remoteIP(remoteAddr string) (netip.Addr, bool) {
 func (h *Hub) clientAddr(r *http.Request) (client, socket netip.Addr) {
 	socket, _ = remoteIP(r.RemoteAddr)
 	client = socket
-	if socket.IsLoopback() || !h.trustedProxy(r.RemoteAddr) {
+	if socket.IsLoopback() {
+		return client, socket
+	}
+	trusted := h.trustedProxies() // read once: not h.mu per hop
+	if !trusted.contains(socket) {
 		return client, socket
 	}
 	hops := strings.Split(strings.Join(r.Header.Values("X-Forwarded-For"), ","), ",")
-	for i := len(hops) - 1; i >= 0; i-- {
+	for i := len(hops) - 1; i >= 0 && i >= len(hops)-maxForwardHops; i-- {
 		a, err := netip.ParseAddr(strings.TrimSpace(hops[i]))
 		if err != nil {
 			return client, socket
 		}
 		a = a.Unmap().WithZone("")
-		if !h.trustedProxy(a.String()) {
+		if !trusted.contains(a) {
 			return a, socket
 		}
 	}
-	return client, socket
+	return client, socket // nothing but trusted proxies within maxForwardHops
 }
+
+// maxForwardHops is how many X-Forwarded-For entries clientAddr reads from the right. Real
+// proxy chains are a hop or two; a client can send thousands.
+const maxForwardHops = 16
 
 // sameOrigin refuses cross-site requests: browsers send Origin on cross-site POST, PUT,
 // PATCH and DELETE (including pages that target 127.0.0.1). Agents and the TUI send none.
@@ -199,16 +207,21 @@ func hubProof(token, nonce string) string {
 	return hex.EncodeToString(m.Sum(nil))
 }
 
-// ConnProof is hubProof bound to one TCP connection: it also covers the client's own
-// address and port as the hub sees them. A program squatting on the hub's port can relay
-// hubProof from the real hub, but the real hub then sees the squatter's connection, not the
-// client's, so this proof comes out wrong. `machine-monitor pair` checks it on each
+// ConnProof is hubProof bound to one TCP connection: it also covers both ends of it as the
+// hub sees them, the client's address and port and the hub's own. A program squatting on
+// the hub's port can relay hubProof from the real hub, but the real hub then sees the
+// squatter's connection, not the client's, so this proof comes out wrong. Covering the
+// hub's end too means a socket that managed to share the client's port (Windows lets
+// SO_REUSEADDR bind a port an established socket holds) still connects to a different
+// listener than the one the client dialled. `machine-monitor pair` checks it on each
 // connection before sending the key on that connection. It only works where nothing
-// rewrites the source address (loopback), so other clients use hubProof.
-func ConnProof(token, nonce string, peer netip.AddrPort) string {
-	peer = netip.AddrPortFrom(peer.Addr().Unmap().WithZone(""), peer.Port())
+// rewrites addresses (loopback), so other clients use hubProof.
+func ConnProof(token, nonce string, client, hub netip.AddrPort) string {
+	norm := func(ap netip.AddrPort) string {
+		return netip.AddrPortFrom(ap.Addr().Unmap().WithZone(""), ap.Port()).String()
+	}
 	m := hmac.New(sha256.New, []byte(token))
-	m.Write([]byte("machine-monitor-conn:" + nonce + ":" + peer.String()))
+	m.Write([]byte("machine-monitor-conn:" + nonce + ":" + norm(client) + ">" + norm(hub)))
 	return hex.EncodeToString(m.Sum(nil))
 }
 

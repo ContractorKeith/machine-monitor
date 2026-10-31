@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -80,6 +81,9 @@ func runPair(args []string, stdout, stderr io.Writer) int {
 	sctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	events, err := pairStream(sctx, hc, hubURL, key)
+	if errors.Is(err, errOldHub) {
+		return fail("%v", errOldHub)
+	}
 	if err != nil {
 		hint := "is machine-monitor hub running here?"
 		if *port == hub.DefaultPort {
@@ -169,6 +173,11 @@ func runPair(args []string, stdout, stderr io.Writer) int {
 // the hub holding this machine's key.
 var errNotHub = errors.New("the program on this port can't prove it is the hub with this machine's key, so the key was not sent")
 
+// errOldHub is the hub with this machine's key, but a version from before pair checked the
+// connection (no connProof), e.g. still running after `update`. Its plain proof can be
+// relayed, so it doesn't get the key either.
+var errOldHub = errors.New("the hub running here predates this pair command, so the key was not sent: stop the running hub, start it again (machine-monitor hub, or re-run machine-monitor service install --role hub), then run pair again")
+
 // localHubClient talks to the hub on this machine. Each new connection first proves it
 // reaches the hub itself (proveHub), and only then carries the key. A program squatting on
 // the port (say another user's, when the hub runs on another port) can relay the plain hub
@@ -194,11 +203,13 @@ func localHubClient(key string) *http.Client {
 }
 
 // proveHub sends GET /api/info?nonce= on conn itself and checks the hub's connProof: an HMAC
-// of the nonce and conn's own local address under the key (hub.ConnProof). A relay's
-// connection to the real hub has another address, so its answer can't match.
+// under the key of the nonce and both ends of conn, this end and the address it dialled
+// (hub.ConnProof). A relay's connection to the real hub has other ends, so its answer can't
+// match.
 func proveHub(conn net.Conn, addr, key string) error {
 	local, ok := conn.LocalAddr().(*net.TCPAddr)
-	if !ok {
+	remote, ok2 := conn.RemoteAddr().(*net.TCPAddr)
+	if !ok || !ok2 {
 		return errNotHub
 	}
 	n := make([]byte, 16)
@@ -229,15 +240,28 @@ func proveHub(conn net.Conn, addr, key string) error {
 		return fmt.Errorf("HTTP %d from /api/info", resp.StatusCode)
 	}
 	var info struct {
+		Proof     string `json:"proof"`
 		ConnProof string `json:"connProof"`
 	}
-	want := hub.ConnProof(key, nonce, local.AddrPort())
 	// Nothing may follow the reply: the connection is handed on for the next request.
-	if json.Unmarshal(b, &info) != nil || resp.Close || br.Buffered() > 0 ||
-		!hmac.Equal([]byte(info.ConnProof), []byte(want)) {
+	if json.Unmarshal(b, &info) != nil || resp.Close || br.Buffered() > 0 {
+		return errNotHub
+	}
+	if info.ConnProof == "" && hmac.Equal([]byte(info.Proof), []byte(plainProof(key, nonce))) {
+		return errOldHub
+	}
+	if !hmac.Equal([]byte(info.ConnProof), []byte(hub.ConnProof(key, nonce, local.AddrPort(), remote.AddrPort()))) {
 		return errNotHub
 	}
 	return nil
+}
+
+// plainProof is the hub proof every hub sends, upstream's too:
+// hex(HMAC-SHA256(key, "device-monitor-hub:" + nonce)).
+func plainProof(key, nonce string) string {
+	m := hmac.New(sha256.New, []byte(key))
+	m.Write([]byte("device-monitor-hub:" + nonce))
+	return hex.EncodeToString(m.Sum(nil))
 }
 
 // pairEvent is the part of a stream event pair follows.

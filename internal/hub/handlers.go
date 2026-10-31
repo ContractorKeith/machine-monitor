@@ -234,6 +234,21 @@ type readCloser struct {
 	io.Closer
 }
 
+// connEnds is the request's TCP connection as the hub sees it: the client's address and
+// port, and the hub's own local address and port.
+func connEnds(r *http.Request) (client, hub netip.AddrPort, ok bool) {
+	client, err := netip.ParseAddrPort(r.RemoteAddr)
+	if err != nil {
+		return client, hub, false
+	}
+	local, _ := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
+	if local == nil {
+		return client, hub, false
+	}
+	hub, err = netip.ParseAddrPort(local.String())
+	return client, hub, err == nil
+}
+
 // handleInfo is the hub's identity. Without the key it only proves it knows the key: a
 // client sends a random nonce and checks the HMAC before trusting this hub with the key.
 func (h *Hub) handleInfo(w http.ResponseWriter, r *http.Request) {
@@ -242,8 +257,8 @@ func (h *Hub) handleInfo(w http.ResponseWriter, r *http.Request) {
 			"port": h.opt.Port, "locked": true}
 		if n := r.URL.Query().Get("nonce"); nonceRE.MatchString(n) {
 			body["proof"] = hubProof(h.Token(), n)
-			if peer, err := netip.ParseAddrPort(r.RemoteAddr); err == nil {
-				body["connProof"] = ConnProof(h.Token(), n, peer) // additive; see ConnProof
+			if client, hub, ok := connEnds(r); ok {
+				body["connProof"] = ConnProof(h.Token(), n, client, hub) // additive; see ConnProof
 			}
 		}
 		sendJSON(w, http.StatusOK, body)

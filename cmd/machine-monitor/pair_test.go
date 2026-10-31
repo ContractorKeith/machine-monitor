@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -305,5 +306,50 @@ func TestPairCommandHint(t *testing.T) {
 	}
 	if got := pairCommand(17800); got != "machine-monitor pair --port 17800" {
 		t.Errorf("other port: %q", got)
+	}
+}
+
+// A hub from before connProof (still running after `update`) proves the key the old way.
+// pair still doesn't send the key, and says the hub must be restarted.
+func TestPairRefusesOlderHub(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(config.DirEnv, dir)
+	h, err := hub.New(hub.Options{Paths: config.At(dir), Hostname: "testhub", Logf: t.Logf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+	var mu sync.Mutex
+	keyed := 0
+	inner := h.Handler()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			mu.Lock()
+			keyed++
+			mu.Unlock()
+		}
+		rec := httptest.NewRecorder()
+		inner.ServeHTTP(rec, r)
+		var body map[string]any
+		if r.URL.Path == "/api/info" && json.Unmarshal(rec.Body.Bytes(), &body) == nil {
+			delete(body, "connProof")
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(body)
+			return
+		}
+		w.WriteHeader(rec.Code)
+		w.Write(rec.Body.Bytes())
+	}))
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	var out, errOut bytes.Buffer
+	if c := run([]string{"pair", "--port", u.Port()}, &out, &errOut); c != 1 || !strings.Contains(errOut.String(), "predates this pair command") ||
+		!strings.Contains(errOut.String(), "start it again") || strings.Contains(errOut.String(), "can't prove") {
+		t.Fatalf("exit %d, stderr %q", c, errOut.String())
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if keyed != 0 {
+		t.Fatalf("%d keyed requests reached the older hub", keyed)
 	}
 }
