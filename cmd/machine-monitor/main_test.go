@@ -10,7 +10,7 @@ import (
 )
 
 // built lists the commands that are no longer stubs; each has its own test.
-var built = map[string]bool{"status": true, "hub": true}
+var built = map[string]bool{"status": true, "hub": true, "agent": true, "connect": true}
 
 type runCase struct {
 	args        []string

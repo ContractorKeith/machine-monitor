@@ -71,6 +71,7 @@ type Hub struct {
 	history *history.Store
 	alerts  *alerts.Engine
 	rate    *rateLimiter
+	pair    pairState // the active pairing code (pair.go)
 
 	mu       sync.Mutex
 	cfg      hubConfig
