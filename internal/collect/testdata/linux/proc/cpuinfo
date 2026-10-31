@@ -1,0 +1,16 @@
+processor	: 0
+vendor_id	: GenuineIntel
+cpu family	: 6
+model		: 186
+model name	: 13th Gen Intel(R) Core(TM) i7-1365U
+cpu MHz		: 1800.000
+cache size	: 12288 KB
+
+processor	: 1
+vendor_id	: GenuineIntel
+cpu family	: 6
+model		: 186
+model name	: 13th Gen Intel(R) Core(TM) i7-1365U
+cpu MHz		: 2400.500
+cache size	: 12288 KB
+
