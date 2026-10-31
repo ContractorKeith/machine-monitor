@@ -8,11 +8,10 @@ and Linux. It is a clean-room Go reimplementation of the ideas in
 feature-parity matrix in `docs/PLAN.md` shipped on all three OSes.
 
 ## Status
-M0–M8 built: collectors, local and connected TUI (dashboard, device, processes, history,
-energy, alerts), hub, agent and pairing, history, power, alerts, discovery and Wake-on-LAN,
-signed power actions, tailscale, export, `service`, installers, `update`, signed releases.
-Not yet: a first tagged release, the PLAN §8 manual and VM checks, and the open issues.
-Last touched 2026-10-31.
+Packages for M0–M8 are merged, but the 2026-10-31 skeptic review found gaps in the assembled
+product: discovery and Tailscale aren't wired in, there's no way to issue a pairing code
+without curl, the Settings and Add device views are missing, and a TUI on a 250-device hub
+fails. Fixes are tracked in #45–#49. No release is tagged yet. Last touched 2026-10-31.
 
 ## Pointers
 - `docs/PLAN.md` — the build plan: architecture, feature matrix, milestones, acceptance.

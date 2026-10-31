@@ -1,6 +1,6 @@
 # machine-monitor — Build Plan
 
-Status: M0–M8 built (2026-10-31); open items are tracked as GitHub issues. Written 2026-10-31 from a full read of
+Status: M0–M8 packages merged (2026-10-31); product gaps from the skeptic review are tracked in #45–#49. Written 2026-10-31 from a full read of
 [Forward-Future/device-monitor](https://github.com/Forward-Future/device-monitor) at commit
 `c3a4c41` (v1.2.29).
 
