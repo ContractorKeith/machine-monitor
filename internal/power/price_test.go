@@ -30,6 +30,7 @@ func TestParseSettings(t *testing.T) {
 		"lower region":   `{"region":"us","rate":0.1,"currency":"USD"}`,
 		"long region":    `{"region":"USA","rate":0.1,"currency":"USD"}`,
 		"zero rate":      `{"region":"US","rate":0,"currency":"USD"}`,
+		"rounds to zero": `{"region":"US","rate":0.00004,"currency":"USD"}`,
 		"huge rate":      `{"region":"US","rate":1001,"currency":"USD"}`,
 		"string rate":    `{"region":"US","rate":"0.1","currency":"USD"}`,
 		"no currency":    `{"region":"US","rate":0.1}`,

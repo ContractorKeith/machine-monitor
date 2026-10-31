@@ -68,12 +68,14 @@ func ParseSettings(data []byte) (Settings, error) {
 	return s, nil
 }
 
-// validRate accepts a price in (0, 1000], rounded to 4 decimals.
+// validRate accepts a price in (0, 1000], rounded to 4 decimals. Like upstream, a price
+// that rounds to 0 is refused.
 func validRate(v *float64) (float64, bool) {
 	if v == nil || !(*v > 0 && *v <= 1000) {
 		return 0, false
 	}
-	return jsRound(*v*1e4) / 1e4, true
+	r := jsRound(*v*1e4) / 1e4
+	return r, r != 0
 }
 
 // validHour accepts an hour in [0, 24], rounded to the quarter hour.

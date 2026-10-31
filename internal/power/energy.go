@@ -1,7 +1,6 @@
 package power
 
 import (
-	"strconv"
 	"time"
 )
 
@@ -85,8 +84,8 @@ func Accumulate(points []Minute, bounds []time.Time, hw HW, price *Settings, loc
 	return u
 }
 
-// fixed4 is upstream's +v.toFixed(4).
+// fixed4 is upstream's +v.toFixed(4). toFixed rounds an exact tie up, where Go's formatter
+// rounds it to even, so ties are rounded up here first.
 func fixed4(v float64) float64 {
-	f, _ := strconv.ParseFloat(strconv.FormatFloat(v, 'f', 4, 64), 64)
-	return f
+	return jsRound(v*1e4) / 1e4
 }
