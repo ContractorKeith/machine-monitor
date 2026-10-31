@@ -119,6 +119,8 @@ type Options struct {
 	Now func() time.Time
 	// HTTP sends ntfy and webhook requests; a client that refuses redirects and dials only
 	// allowed addresses when nil.
+	// Leave it nil in production: a replacement skips the dial-time SSRF check, so only the
+	// pre-resolve check would remain. Tests inject a fake.
 	HTTP Doer
 	// LookupIP resolves a host name; net.DefaultResolver when nil.
 	LookupIP func(ctx context.Context, host string) ([]netip.Addr, error)
@@ -554,7 +556,7 @@ func (e *Engine) Events(n int) []Event {
 func (e *Engine) ClearLog() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.events = nil
+	e.events = []Event{}
 	e.saveLog()
 }
 
