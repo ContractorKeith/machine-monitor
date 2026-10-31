@@ -107,7 +107,9 @@ func (m *Manager) installLaunchd(ctx context.Context, s Spec, out io.Writer) err
 		}
 		if !booted || try == 4 {
 			if existed && changed {
-				restoreFile(path, old)
+				if rerr := restoreFile(path, old); rerr != nil {
+					return fmt.Errorf("%w (and the old plist could not be put back: %v)", err, rerr)
+				}
 			}
 			return err
 		}

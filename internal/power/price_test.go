@@ -106,3 +106,15 @@ func TestParseSettingsRefusesOverlap(t *testing.T) {
 		t.Fatalf("touching periods refused: %v", err)
 	}
 }
+
+// LoadSettings keeps the flat rate and currency of a price whose periods overlap.
+func TestLoadSettingsDropsOverlappingPeriods(t *testing.T) {
+	s, err := LoadSettings([]byte(`{"region":"US","rate":0.2,"currency":"USD","tou":[` +
+		`{"from":16,"to":21,"rate":0.4},{"from":18,"to":23,"rate":0.5}]}`))
+	if !errors.Is(err, ErrOverlappingPeriods) || s.Rate != 0.2 || s.Currency != "USD" || len(s.TOU) != 0 {
+		t.Fatalf("got %+v, %v", s, err)
+	}
+	if _, err := LoadSettings([]byte(`{"region":"US","rate":-1,"currency":"USD"}`)); !errors.Is(err, ErrInvalidSettings) {
+		t.Fatalf("invalid rate: %v", err)
+	}
+}

@@ -71,7 +71,9 @@ func (m *Manager) installSystemd(ctx context.Context, s Spec, out io.Writer) err
 	for _, args := range steps {
 		if _, err := m.run(ctx, "systemctl", args...); err != nil {
 			if existed && changed { // keep the old unit, and tell systemd it is current again
-				restoreFile(path, old)
+				if rerr := restoreFile(path, old); rerr != nil {
+					return fmt.Errorf("%w (and the old unit could not be put back: %v)", err, rerr)
+				}
 				_, _ = m.run(ctx, "systemctl", "--user", "daemon-reload")
 			}
 			return err

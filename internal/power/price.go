@@ -42,6 +42,18 @@ var ErrOverlappingPeriods = fmt.Errorf("%w: time-of-use periods must not overlap
 // to 4 decimals and hours to quarter hours and sorting periods by start, as upstream's
 // validEnergySettings does. At most 12 periods; each needs From < To.
 func ParseSettings(data []byte) (Settings, error) {
+	s, err := LoadSettings(data)
+	if err != nil {
+		return Settings{}, err
+	}
+	return s, nil
+}
+
+// LoadSettings is ParseSettings for a config file already on disk, where an older version may
+// have saved overlapping periods. For that one problem it returns the flat rate and currency
+// with the periods dropped, together with ErrOverlappingPeriods; any other error returns no
+// settings.
+func LoadSettings(data []byte) (Settings, error) {
 	type rawPeriod struct{ From, To, Rate *float64 }
 	var raw struct {
 		Region   *string
@@ -73,7 +85,8 @@ func ParseSettings(data []byte) (Settings, error) {
 	sort.SliceStable(s.TOU, func(i, j int) bool { return s.TOU[i].From < s.TOU[j].From })
 	for i := 1; i < len(s.TOU); i++ {
 		if s.TOU[i].From < s.TOU[i-1].To { // sorted by start, so neighbours are enough
-			return Settings{}, ErrOverlappingPeriods
+			s.TOU = nil
+			return s, ErrOverlappingPeriods
 		}
 	}
 	return s, nil

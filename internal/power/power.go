@@ -17,7 +17,6 @@ package power
 
 import (
 	"math"
-	"strings"
 
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
@@ -64,9 +63,10 @@ func cpuEstimate(usage float64, p Profile) float64 {
 
 // gpuEstimate is watts for a discrete GPU without a power reading (AMD/Intel on Windows).
 // Adapters under 2 GiB are assumed integrated, whose power is already in the CPU package;
-// so are GPUs the agent named integrated (an APU whose carve-out can exceed 2 GiB).
+// so are GPUs the agent flagged integrated (an APU whose carve-out can exceed 2 GiB). A name
+// says nothing: only the agent's own sensors can tell.
 func gpuEstimate(g report.GPU) float64 {
-	if val(g.MemTotal) < 2*(1<<30) || (g.Name != nil && strings.Contains(strings.ToLower(*g.Name), "integrated")) {
+	if val(g.MemTotal) < 2*(1<<30) || g.Integrated {
 		return 0
 	}
 	return 10 + 1.5*val(g.Usage)

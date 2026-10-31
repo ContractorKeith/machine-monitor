@@ -1404,3 +1404,52 @@ func TestLocalKey(t *testing.T) {
 		t.Errorf("LocalKey = %q, %v; want %q", k, err, th.Token())
 	}
 }
+
+// An overlapping time-of-use price already in config.json keeps its flat rate, logs once and
+// does not wipe the price (skeptic pass 3, N9).
+func TestOverlappingTOUInConfigKeepsFlatRate(t *testing.T) {
+	paths := config.At(t.TempDir())
+	cfg := `{"token":"abc","energy":{"region":"US","rate":0.2,"currency":"USD","tou":[` +
+		`{"from":16,"to":21,"rate":0.4},{"from":18,"to":23,"rate":0.5}]}}`
+	if err := config.WriteFile0600(paths.Config, []byte(cfg)); err != nil {
+		t.Fatal(err)
+	}
+	var l logs
+	th := openTestHub(t, paths, &clock{t: time.Unix(1e9, 0)}, func(o *Options) { o.Logf = l.Logf })
+	got := decode[map[string]any](t, th.keyed("GET", "/api/energy/settings", ""))
+	if got["rate"] != 0.2 || got["currency"] != "USD" || got["tou"] != nil {
+		t.Fatalf("settings = %v", got)
+	}
+	if l.count("overlap") != 1 {
+		t.Errorf("logs = %q, want one overlap line", l.lines)
+	}
+}
+
+// A refused overlap is explained in a sentence by the API (N12).
+func TestPutEnergySettingsExplainsOverlap(t *testing.T) {
+	th := newTestHub(t)
+	w := th.keyed("PUT", "/api/energy/settings", `{"region":"US","rate":0.2,"currency":"USD","tou":[`+
+		`{"from":16,"to":21,"rate":0.4},{"from":18,"to":23,"rate":0.5}]}`)
+	if w.Code != 400 || !strings.Contains(w.Body.String(), "periods overlap") {
+		t.Fatalf("PUT overlap: %d %s", w.Code, w.Body)
+	}
+}
+
+// A second hub on a data directory in use is refused with a sentence, and may start once the
+// first has closed (skeptic pass 3, N14).
+func TestSecondHubOnSameDirRefused(t *testing.T) {
+	paths := config.At(t.TempDir())
+	th := openTestHub(t, paths, &clock{t: time.Unix(1e9, 0)})
+	_, err := New(Options{Paths: paths, Hostname: "testbox"})
+	if err == nil || !strings.Contains(err.Error(), "already using this data directory") {
+		t.Fatalf("second hub: %v", err)
+	}
+	if err := th.Close(); err != nil {
+		t.Fatal(err)
+	}
+	h, err := New(Options{Paths: paths, Hostname: "testbox"})
+	if err != nil {
+		t.Fatalf("after close: %v", err)
+	}
+	h.Close()
+}

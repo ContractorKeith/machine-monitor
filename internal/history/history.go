@@ -88,6 +88,19 @@ type Result struct {
 	Points     []Point `json:"points"`
 }
 
+// Failed appends are retried on the device's next commit, oldest first so rows stay in order.
+// A minute is given up on after maxTries failed attempts, and at most maxUnwritten are kept,
+// so a disk that never comes back can't grow memory.
+const (
+	maxTries     = 5
+	maxUnwritten = 60
+)
+
+type retry struct {
+	pts   []Point
+	tries int // failed attempts at pts[0]
+}
+
 type pending struct {
 	minute  float64
 	samples []Point
@@ -103,8 +116,9 @@ type Store struct {
 	minutes map[string][]Point // id -> 1-minute points (last 30 days)
 	pending map[string]*pending
 
-	write    func(f *os.File, b []byte) (int, error) // f.Write; replaced in tests to inject short writes
-	failKind string                                  // write failure last returned by Add; "" when writes work
+	unwritten map[string]*retry                       // id -> minutes whose append failed, oldest first
+	write     func(f *os.File, b []byte) (int, error) // f.Write; replaced in tests to inject short writes
+	failKind  string                                  // write failure last returned by Add; "" when writes work
 }
 
 // Open loads every <id>.ndjson in dir (config.Paths.History), creating dir if needed. It
@@ -117,7 +131,7 @@ func Open(dir string, now func() time.Time) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	s := &Store{dir: dir, now: now, raw: map[string][]Point{}, minutes: map[string][]Point{}, pending: map[string]*pending{},
+	s := &Store{dir: dir, now: now, raw: map[string][]Point{}, minutes: map[string][]Point{}, pending: map[string]*pending{}, unwritten: map[string]*retry{},
 		write: func(f *os.File, b []byte) (int, error) { return f.Write(b) }}
 	return s, s.load()
 }
@@ -317,25 +331,27 @@ func (s *Store) rewrite(id string) error {
 	for _, p := range s.minutes[id] {
 		buf.Write(encodeLine(id, p))
 	}
-	return config.WriteFile0600(s.file(id), buf.Bytes())
+	err := config.WriteFile0600(s.file(id), buf.Bytes())
+	if err == nil {
+		delete(s.unwritten, id) // the file now holds every minute in memory
+	}
+	return err
 }
 
 // appendLine adds one row to id's file, all of it or nothing. Appends can't go through
 // WriteFile0600 (it replaces the whole file, which at 30 days is ~40k rows per minute), so
-// the file is opened 0600. A failed or short write is truncated back to the size before it;
-// if that fails too, the next append starts on a fresh line, and load re-syncs there.
+// the file is opened 0600 with O_APPEND: every write lands at the end, even if another
+// process has appended since. A failed or short write is truncated back to the size before
+// it; if that fails too, the next append starts on a fresh line, and load re-syncs there.
 func (s *Store) appendLine(id string, p Point) error {
-	f, err := os.OpenFile(s.file(id), os.O_RDWR|os.O_CREATE, 0o600)
+	path := s.file(id)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0o600)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 	fi, err := f.Stat()
 	if err != nil {
-		return err
-	}
-	// No O_APPEND: on Windows it forbids the truncate below. mu makes this the only writer.
-	if _, err := f.Seek(0, io.SeekEnd); err != nil {
 		return err
 	}
 	b := encodeLine(id, p)
@@ -350,10 +366,19 @@ func (s *Store) appendLine(id string, p Point) error {
 		err = io.ErrShortWrite
 	}
 	if err != nil {
-		_ = f.Truncate(fi.Size())
+		truncate(path, fi.Size())
 		return err
 	}
 	return nil
+}
+
+// truncate cuts path back to size through a second handle: an O_APPEND handle can't truncate
+// on Windows. Best effort; the write error is the one worth reporting.
+func truncate(path string, size int64) {
+	if f, err := os.OpenFile(path, os.O_WRONLY, 0); err == nil {
+		_ = f.Truncate(size)
+		f.Close()
+	}
 }
 
 // reportErr passes a write error through only the first time a kind of failure shows up
@@ -428,7 +453,37 @@ func (s *Store) commit(id string, pend *pending) error {
 		s.minutes[id] = append([]Point(nil), mins[i:]...)
 		return s.rewrite(id)
 	}
-	return s.appendLine(id, p)
+	return s.appendRetrying(id, p)
+}
+
+// appendRetrying appends p to id's file after any earlier minutes whose append failed. The
+// first failure stops the run, so nothing is written out of order, and the rest wait for the
+// next commit.
+func (s *Store) appendRetrying(id string, p Point) error {
+	q := s.unwritten[id]
+	if q == nil {
+		q = &retry{}
+	}
+	q.pts = append(q.pts, p)
+	for len(q.pts) > 0 {
+		if err := s.appendLine(id, q.pts[0]); err != nil {
+			if q.tries++; q.tries >= maxTries {
+				q.pts, q.tries = q.pts[1:], 0
+			}
+			if len(q.pts) > maxUnwritten {
+				q.pts = q.pts[len(q.pts)-maxUnwritten:]
+			}
+			if len(q.pts) > 0 {
+				s.unwritten[id] = q
+			} else {
+				delete(s.unwritten, id)
+			}
+			return err
+		}
+		q.pts, q.tries = q.pts[1:], 0
+	}
+	delete(s.unwritten, id)
+	return nil
 }
 
 // Recent returns id's raw samples from the last d, oldest first (the live dashboard view).

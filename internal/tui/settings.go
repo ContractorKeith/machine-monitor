@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -500,6 +501,15 @@ func priceProblem(s power.Settings) string {
 		}
 		if !okRate(p.Rate) {
 			return fmt.Sprintf("The rate for %s-%s must be more than 0 and at most %d per kWh.", trimFloat(p.From), trimFloat(p.To), maxRate)
+		}
+	}
+	// Sorted by start, a period that starts before the one before it ends overlaps it.
+	sorted := append([]power.Period(nil), s.TOU...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].From < sorted[j].From })
+	for i := 1; i < len(sorted); i++ {
+		if a, b := sorted[i-1], sorted[i]; math.Round(b.From*4) < math.Round(a.To*4) {
+			return fmt.Sprintf("The periods %s-%s and %s-%s overlap. Give each hour of the day to one period.",
+				trimFloat(a.From), trimFloat(a.To), trimFloat(b.From), trimFloat(b.To))
 		}
 	}
 	return ""

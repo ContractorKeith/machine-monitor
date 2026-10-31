@@ -7,9 +7,11 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf16"
 
 	"github.com/ContractorKeith/machine-monitor/internal/config"
@@ -451,5 +453,70 @@ func TestSystemdFailedUpdateKeepsOldUnit(t *testing.T) {
 	}
 	if after, _ := os.ReadFile(unit); !bytes.Equal(before, after) {
 		t.Errorf("unit changed by a failed update:\n%s\nwas:\n%s", after, before)
+	}
+}
+
+// A failed update puts the unit back with its mode and mtime, then reloads systemd, so
+// the loaded unit never reads as changed (skeptic pass 3, N13).
+func TestSystemdRestoreKeepsModeAndReloads(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs Unix modes and inodes")
+	}
+	ctx := context.Background()
+	m, f := testManager(t, "linux")
+	unit := filepath.Join(m.ConfigHome, "systemd", "user", "machine-monitor-hub.service")
+	s := hubSpec(t)
+	if err := m.Install(ctx, s, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-48 * time.Hour).Truncate(time.Second)
+	if err := os.Chmod(unit, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(unit, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	s.Port = 8080
+	f.replies["systemctl --user enable --now machine-monitor-hub.service"] = reply{out: "boom", err: true}
+	f.calls = nil
+	if err := m.Install(ctx, s, &bytes.Buffer{}); err == nil {
+		t.Fatal("install should fail")
+	}
+	now, _ := os.Stat(unit)
+	if now.Mode().Perm() != 0o644 || !now.ModTime().Equal(old) {
+		t.Errorf("unit after restore: mode %v mtime %v; want 0644, %v", now.Mode().Perm(), now.ModTime(), old)
+	}
+	if last := f.calls[len(f.calls)-1]; last != "systemctl --user daemon-reload" {
+		t.Errorf("last call = %q, want a daemon-reload after the restore", last)
+	}
+}
+
+// A symlinked unit comes back as the link, not as a regular file.
+func TestSystemdRestoreKeepsSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs symlinks")
+	}
+	ctx := context.Background()
+	m, f := testManager(t, "linux")
+	unit := filepath.Join(m.ConfigHome, "systemd", "user", "machine-monitor-hub.service")
+	s := hubSpec(t)
+	if err := m.Install(ctx, s, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "real.service")
+	if err := os.Rename(unit, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, unit); err != nil {
+		t.Fatal(err)
+	}
+	s.Port = 8080
+	f.replies["systemctl --user enable --now machine-monitor-hub.service"] = reply{out: "boom", err: true}
+	if err := m.Install(ctx, s, &bytes.Buffer{}); err == nil {
+		t.Fatal("install should fail")
+	}
+	if got, err := os.Readlink(unit); err != nil || got != target {
+		t.Errorf("unit = link %q, %v; want a link to %q", got, err, target)
 	}
 }

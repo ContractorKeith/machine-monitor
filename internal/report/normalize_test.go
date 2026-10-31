@@ -706,3 +706,14 @@ func TestCleanTextStripsInvisibles(t *testing.T) {
 		t.Errorf("CleanText = %v, want omarchy41m!", got)
 	}
 }
+
+// The integrated flag survives Normalize only as a real boolean true.
+func TestNormalizeKeepsIntegratedFlag(t *testing.T) {
+	r, err := Normalize([]byte(`{"id":"dev-1","gpus":[{"name":"a","integrated":true},{"name":"b","integrated":"yes"},{"name":"c"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.GPUs) != 3 || !r.GPUs[0].Integrated || r.GPUs[1].Integrated || r.GPUs[2].Integrated {
+		t.Fatalf("GPUs = %+v", r.GPUs)
+	}
+}

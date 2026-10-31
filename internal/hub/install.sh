@@ -36,19 +36,32 @@ sha256() {
 	printf '%s\n' "$sum" >"$2"
 }
 
+# present is true for a file or a symlink, including a dangling one.
+present() { [ -f "$1" ] || [ -L "$1" ]; }
+
+# restore puts the backup $1 back at $2. A symlink is recreated as a link (cp -P), never
+# followed, so a linked binary or client.json comes back as the link.
+restore() {
+	if [ -L "$1" ]; then
+		rm -f "$2" && cp -P "$1" "$2"
+	else
+		cp -p "$1" "$2.restore" && mv -f "$2.restore" "$2"
+	fi
+}
+
 # cleanup runs on every exit. After a failed install it undoes what this run did: restores the
 # binary and client.json it replaced, and removes the ones it added.
 cleanup() {
 	status=$?
 	if [ "$rollback" = yes ]; then
 		echo "Rolling back the install." >&2
-		if [ -f "$tmp/previous" ]; then
-			cp -p "$tmp/previous" "$bin.restore" && mv -f "$bin.restore" "$bin"
+		if present "$tmp/previous"; then
+			restore "$tmp/previous" "$bin"
 		else
 			rm -f "$bin"
 		fi
-		if [ -f "$tmp/previous-client" ]; then
-			cp -p "$tmp/previous-client" "$client"
+		if present "$tmp/previous-client"; then
+			restore "$tmp/previous-client" "$client"
 		else
 			rm -f "$client"
 		fi
@@ -113,8 +126,8 @@ EOF_SUMS
 	else
 		client="${XDG_CONFIG_HOME:-$HOME/.config}/machine-monitor/client.json"
 	fi
-	if [ -f "$client" ]; then cp -p "$client" "$tmp/previous-client" || fail "can't back up $client"; fi
-	if [ -f "$bin" ]; then cp -p "$bin" "$tmp/previous" || fail "can't back up $bin"; fi
+	if present "$client"; then cp -Pp "$client" "$tmp/previous-client" || fail "can't back up $client"; fi
+	if present "$bin"; then cp -Pp "$bin" "$tmp/previous" || fail "can't back up $bin"; fi
 	# Copy next to the target, then rename: a running agent's binary is swapped atomically.
 	cp "$tmp/machine-monitor" "$dir/.machine-monitor.new" || fail "can't write $dir"
 	chmod 755 "$dir/.machine-monitor.new" || fail "can't make $dir/.machine-monitor.new executable"

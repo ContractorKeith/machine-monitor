@@ -119,6 +119,18 @@ func (e *Engine) checkHost(ctx context.Context, host string) error {
 	return nil
 }
 
+// redactErr words a delivery error without the URL's userinfo, path, query or fragment: webhook
+// URLs carry their secret there, and the error reaches the log and POST /api/alerts/test. It is
+// rebuilt from the *url.Error's op and inner error, never by replacing text in the message.
+func redactErr(err error, u *url.URL) string {
+	short := url.URL{Scheme: u.Scheme, Host: u.Host}
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return fmt.Sprintf("%s %q: %v", ue.Op, short.Redacted(), ue.Err)
+	}
+	return fmt.Sprintf("Post %q: %v", short.Redacted(), err)
+}
+
 // post sends body as JSON to rawURL after the SSRF check. It never returns an error, only a
 // Result, since delivery is best effort.
 func (e *Engine) post(ctx context.Context, rawURL string, body any) Result {
@@ -139,7 +151,7 @@ func (e *Engine) post(ctx context.Context, rawURL string, body any) Result {
 	req.Header.Set("Content-Type", "application/json")
 	res, err := e.client.Do(req)
 	if err != nil {
-		return Result{Error: err.Error()}
+		return Result{Error: redactErr(err, u)}
 	}
 	defer res.Body.Close()
 	if res.StatusCode >= 200 && res.StatusCode < 300 {

@@ -399,7 +399,7 @@ func (h *Hub) handlePutEnergySettings(w http.ResponseWriter, r *http.Request) {
 	}
 	s, err := power.ParseSettings(raw)
 	if err != nil {
-		sendJSON(w, http.StatusBadRequest, errorBody("invalid settings"))
+		sendJSON(w, http.StatusBadRequest, errorBody(settingsRefusal(err)))
 		return
 	}
 	h.mu.Lock()
