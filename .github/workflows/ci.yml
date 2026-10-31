@@ -31,6 +31,9 @@ jobs:
       - name: staticcheck
         run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
       - run: go test ./...
+      - name: fuzz Normalize
+        if: runner.os == 'Linux'
+        run: go test -run='^$' -fuzz=FuzzNormalize -fuzztime=30s ./internal/report
 
   build:
     name: build (${{ matrix.goos }}/${{ matrix.goarch }})
