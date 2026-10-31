@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"math"
 	"os"
@@ -101,6 +102,9 @@ type Store struct {
 	raw     map[string][]Point // id -> samples (last hour)
 	minutes map[string][]Point // id -> 1-minute points (last 30 days)
 	pending map[string]*pending
+
+	write    func(f *os.File, b []byte) (int, error) // f.Write; replaced in tests to inject short writes
+	failKind string                                  // write failure last returned by Add; "" when writes work
 }
 
 // Open loads every <id>.ndjson in dir (config.Paths.History), creating dir if needed. It
@@ -113,7 +117,8 @@ func Open(dir string, now func() time.Time) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	s := &Store{dir: dir, now: now, raw: map[string][]Point{}, minutes: map[string][]Point{}, pending: map[string]*pending{}}
+	s := &Store{dir: dir, now: now, raw: map[string][]Point{}, minutes: map[string][]Point{}, pending: map[string]*pending{},
+		write: func(f *os.File, b []byte) (int, error) { return f.Write(b) }}
 	return s, s.load()
 }
 
@@ -207,8 +212,8 @@ func parseFile(data []byte, cutoff float64) file {
 		if len(b) == 0 {
 			continue
 		}
-		var l line
-		if json.Unmarshal(b, &l) != nil || !(l.T >= cutoff) {
+		l, ok := parseLine(b)
+		if !ok || !(l.T >= cutoff) {
 			continue
 		}
 		if n := len(pts); n > 0 && pts[n-1].T == l.T {
@@ -230,6 +235,28 @@ func parseFile(data []byte, cutoff float64) file {
 	partial := len(data) > 0 && data[len(data)-1] != '\n'
 	f.dirty = merged || partial || len(pts) < len(lines)-1
 	return f
+}
+
+// rowStart begins every row encodeLine writes.
+var rowStart = []byte(`{"id":"`)
+
+// parseLine decodes one row. A row cut short by a crash or a full disk may have the next
+// row glued onto it; then it re-syncs at the next row start, so the following minute survives.
+func parseLine(b []byte) (l line, ok bool) {
+	for {
+		l = line{}
+		if json.Unmarshal(b, &l) == nil {
+			return l, true
+		}
+		if len(b) == 0 {
+			return line{}, false
+		}
+		i := bytes.Index(b[1:], rowStart)
+		if i < 0 {
+			return line{}, false
+		}
+		b = b[1+i:]
+	}
 }
 
 // Snapshot is a read-only copy of a history directory's stored minutes, for tools such as
@@ -293,17 +320,55 @@ func (s *Store) rewrite(id string) error {
 	return config.WriteFile0600(s.file(id), buf.Bytes())
 }
 
-// appendLine adds one row to id's file. Appends can't go through WriteFile0600 (it replaces
-// the whole file, which at 30 days is ~40k rows per minute), so the file is opened 0600.
+// appendLine adds one row to id's file, all of it or nothing. Appends can't go through
+// WriteFile0600 (it replaces the whole file, which at 30 days is ~40k rows per minute), so
+// the file is opened 0600. A failed or short write is truncated back to the size before it;
+// if that fails too, the next append starts on a fresh line, and load re-syncs there.
 func (s *Store) appendLine(id string, p Point) error {
-	f, err := os.OpenFile(s.file(id), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	f, err := os.OpenFile(s.file(id), os.O_RDWR|os.O_APPEND|os.O_CREATE, 0o600)
 	if err != nil {
 		return err
 	}
-	_, err = f.Write(encodeLine(id, p))
-	if cerr := f.Close(); err == nil {
-		err = cerr
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return err
 	}
+	b := encodeLine(id, p)
+	if size := fi.Size(); size > 0 {
+		var last [1]byte
+		if _, err := f.ReadAt(last[:], size-1); err == nil && last[0] != '\n' {
+			b = append([]byte{'\n'}, b...) // an earlier write was cut short
+		}
+	}
+	n, err := s.write(f, b)
+	if err == nil && n < len(b) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		_ = f.Truncate(fi.Size())
+		return err
+	}
+	return nil
+}
+
+// reportErr passes a write error through only the first time a kind of failure shows up
+// (disk full, read-only, ...), so a full disk logs one line, not one per device per minute.
+// A successful write re-arms it.
+func (s *Store) reportErr(err error) error {
+	if err == nil {
+		s.failKind = ""
+		return nil
+	}
+	kind := err.Error()
+	var pe *os.PathError
+	if errors.As(err, &pe) {
+		kind = pe.Err.Error()
+	}
+	if kind == s.failKind {
+		return nil
+	}
+	s.failKind = kind
 	return err
 }
 
@@ -324,7 +389,7 @@ func (s *Store) Add(id string, p Point) error {
 	var err error
 	pend := s.pending[id]
 	if pend != nil && pend.minute != minute {
-		err = s.commit(id, pend)
+		err = s.reportErr(s.commit(id, pend))
 		pend = nil
 	}
 	if pend == nil {

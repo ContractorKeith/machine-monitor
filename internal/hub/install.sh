@@ -7,6 +7,9 @@
 # the hub pinned (from the release's signed checksums.txt), installs the binary in
 # ~/.local/bin, pairs with the hub and starts the agent at login.
 #
+# If a step after the binary is installed fails, the install is rolled back: what this run
+# added is removed, and a binary or client.json it replaced is put back.
+#
 # Everything is inside main, called on the last line: an empty or cut-off download runs
 # nothing instead of half an install.
 set -eu
@@ -33,7 +36,31 @@ sha256() {
 	printf '%s\n' "$sum" >"$2"
 }
 
+# cleanup runs on every exit. After a failed install it undoes what this run did: restores the
+# binary and client.json it replaced, and removes the ones it added.
+cleanup() {
+	status=$?
+	if [ "$rollback" = yes ]; then
+		echo "Rolling back the install." >&2
+		if [ -f "$tmp/previous" ]; then
+			cp -p "$tmp/previous" "$bin.restore" && mv -f "$bin.restore" "$bin"
+		else
+			rm -f "$bin"
+		fi
+		if [ -f "$tmp/previous-client" ]; then
+			cp -p "$tmp/previous-client" "$client"
+		else
+			rm -f "$client"
+		fi
+	fi
+	if [ -n "${dir:-}" ]; then rm -f "$dir/.machine-monitor.new"; fi
+	rm -rf "$tmp"
+	exit "$status"
+}
+
 main() {
+	rollback=no
+	tmp=""
 	HUB='__HUB__'
 	KEY='__KEY__'
 	VERSION='__VERSION__'
@@ -65,7 +92,8 @@ EOF_SUMS
 	[ -n "$want" ] || fail "release $VERSION has no build for $os/$arch"
 
 	tmp=$(mktemp -d "${TMPDIR:-/tmp}/machine-monitor.XXXXXX") || fail "can't create a temp directory"
-	trap 'rm -rf "$tmp"' EXIT
+	trap cleanup EXIT
+	trap 'exit 1' HUP INT TERM
 
 	echo "Downloading machine-monitor $VERSION for $os/$arch..."
 	curl -sSL --fail --max-time 300 --retry 3 -o "$tmp/$name" "$BASE/$name" || fail "download failed: $BASE/$name"
@@ -77,9 +105,20 @@ EOF_SUMS
 	dir="$HOME/.local/bin"
 	bin="$dir/machine-monitor"
 	mkdir -p "$dir" || fail "can't create $dir"
+	# Where connect saves the hub and key (internal/config): noted now to undo it on failure.
+	if [ -n "${MACHINE_MONITOR_DIR:-}" ]; then
+		client="$MACHINE_MONITOR_DIR/client.json"
+	elif [ "$os" = darwin ]; then
+		client="$HOME/Library/Application Support/machine-monitor/client.json"
+	else
+		client="${XDG_CONFIG_HOME:-$HOME/.config}/machine-monitor/client.json"
+	fi
+	if [ -f "$client" ]; then cp -p "$client" "$tmp/previous-client" || fail "can't back up $client"; fi
+	if [ -f "$bin" ]; then cp -p "$bin" "$tmp/previous" || fail "can't back up $bin"; fi
 	# Copy next to the target, then rename: a running agent's binary is swapped atomically.
 	cp "$tmp/machine-monitor" "$dir/.machine-monitor.new" || fail "can't write $dir"
 	chmod 755 "$dir/.machine-monitor.new" || fail "can't make $dir/.machine-monitor.new executable"
+	rollback=yes
 	mv -f "$dir/.machine-monitor.new" "$bin" || fail "can't replace $bin"
 	echo "Installed $bin"
 
@@ -89,6 +128,7 @@ EOF_SUMS
 	printf '%s\n' "$KEY" | "$bin" connect --no-agent --key-stdin "$HUB" || fail "pairing with $HUB failed"
 	"$bin" service install --role agent --hub "$HUB" </dev/null || fail "service install failed"
 
+	rollback=no
 	case ":$PATH:" in
 	*":$dir:"*) ;;
 	*) echo "Add $dir to your PATH to run machine-monitor from a terminal." ;;

@@ -231,14 +231,20 @@ func (m *Manager) run(ctx context.Context, name string, args ...string) (string,
 
 // writeIfChanged writes data to path with config.WriteFile0600 unless it already holds
 // exactly data. It reports whether the file existed before and whether it changed.
-func writeIfChanged(path string, data []byte) (existed, changed bool, err error) {
-	old, err := os.ReadFile(path)
+// old is the previous content, for restoreFile when a later install step fails.
+func writeIfChanged(path string, data []byte) (old []byte, existed, changed bool, err error) {
+	old, err = os.ReadFile(path)
 	if err == nil && string(old) == string(data) {
-		return true, false, nil
+		return old, true, false, nil
 	}
 	existed = err == nil
-	return existed, true, config.WriteFile0600(path, data)
+	return old, existed, true, config.WriteFile0600(path, data)
 }
+
+// restoreFile puts an overwritten service file back after a failed install, so a failed
+// update leaves the old install byte-identical. Best effort: the install error is the one
+// worth reporting.
+func restoreFile(path string, old []byte) { _ = config.WriteFile0600(path, old) }
 
 // fileExists reports whether path is a regular file.
 func fileExists(path string) bool {

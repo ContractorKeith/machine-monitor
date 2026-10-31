@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"net/url"
 	"os"
 	"runtime"
 	"strings"
@@ -772,4 +773,48 @@ func TestMoney(t *testing.T) {
 			t.Errorf("got %q, want %q", got, want)
 		}
 	}
+}
+
+// After a hub restart every device looks offline; none of them coming back is news, since the
+// hub never saw them go (skeptic pass 2, restart flood).
+func TestNoBackOnlineForDevicesNeverSeenOffline(t *testing.T) {
+	clock := newClock()
+	dev := []Device{{ID: "pc1", Name: "Box", LastSeen: clock.t.Add(-time.Minute)}}
+	var msgs []Message
+	e := New(Options{
+		Devices:   func() []Device { return dev },
+		Now:       clock.now,
+		Broadcast: func(m Message) { msgs = append(msgs, m) },
+		HTTP:      &fakeDoer{},
+	})
+	e.mu.Lock()
+	e.cfg.Rules = []Rule{{ID: "aaaaaaaaaaaa", Type: TypeOffline, Device: AllDevices, Enabled: true, Minutes: 10}}
+	e.state[key("aaaaaaaaaaaa", "pc1")] = &state{since: clock.t, firing: true, firedAt: clock.t, carried: true}
+	e.mu.Unlock()
+	dev[0].Online = true
+	e.OnReport("pc1", &report.Report{})
+	e.Wait()
+	if len(msgs) != 0 {
+		t.Fatalf("broadcast on return: %+v", msgs)
+	}
+	if a := e.Active(); len(a) != 0 {
+		t.Fatalf("still active: %+v", a)
+	}
+}
+
+// A failed delivery logs and reports the host, never the path or query that holds the secret.
+func TestDeliveryErrorsHideWebhookSecret(t *testing.T) {
+	h := newHarness(t, "")
+	const full = "https://hooks.example/api/webhooks/123456/SECRET-TOKEN?k=SECRET2"
+	h.e.client = errDoer{}
+	r := h.e.postRedacted(context.Background(), full, map[string]any{})
+	if r.OK || strings.Contains(r.Error, "SECRET") || !strings.Contains(r.Error, "https://hooks.example") {
+		t.Fatalf("error = %q", r.Error)
+	}
+}
+
+type errDoer struct{}
+
+func (errDoer) Do(r *http.Request) (*http.Response, error) {
+	return nil, &url.Error{Op: "Post", URL: r.URL.String(), Err: errors.New("connection refused")}
 }

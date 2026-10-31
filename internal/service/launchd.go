@@ -81,7 +81,7 @@ func (m *Manager) installLaunchd(ctx context.Context, s Spec, out io.Writer) err
 	if err := os.MkdirAll(filepath.Dir(m.logPath(s.Role)), 0o700); err != nil {
 		return err
 	}
-	existed, changed, err := writeIfChanged(path, []byte(m.LaunchdPlist(s)))
+	old, existed, changed, err := writeIfChanged(path, []byte(m.LaunchdPlist(s)))
 	if err != nil {
 		return err
 	}
@@ -106,6 +106,9 @@ func (m *Manager) installLaunchd(ctx context.Context, s Spec, out io.Writer) err
 			break
 		}
 		if !booted || try == 4 {
+			if existed && changed {
+				restoreFile(path, old)
+			}
 			return err
 		}
 		select {

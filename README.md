@@ -149,7 +149,8 @@ Open 7777/TCP (and 7778/UDP for discovery) on the hub's firewall for your local 
   trust everything on it. Traffic between tailnet devices is encrypted and the hub accepts
   tailnet addresses.
 - Everything except the hub's identity and pairing needs the hub key. Pairing codes are
-  six digits, live ten minutes and allow five tries.
+  six digits and live ten minutes. Each source address gets five wrong tries, and a code
+  dies after 100 wrong tries in total.
 - Every report from another machine is validated and clamped before it is stored or shown.
 - Releases are signed: `update` and the hub's installers refuse any archive whose checksum,
   or whose `checksums.txt` signature from this repo's release workflow, doesn't verify.

@@ -1,6 +1,6 @@
 # machine-monitor — Build Plan
 
-Status: M0–M8 packages merged (2026-10-31); product gaps from the skeptic review are tracked in #45–#49. Written 2026-10-31 from a full read of
+Status: M0–M8 packages merged (2026-10-31); the skeptic pass-1 gaps (#45–#49) are fixed, and pass-2 fixes are tracked in #56–#59. Written 2026-10-31 from a full read of
 [Forward-Future/device-monitor](https://github.com/Forward-Future/device-monitor) at commit
 `c3a4c41` (v1.2.29).
 
@@ -83,8 +83,8 @@ API contract rather than ported.
 | 14 | Live charts 10 m / 60 m / 6 h | Adapt | Braille sparklines on cards |
 | 15 | History 1 h – 30 d, zoom | Adapt | Full-screen braille line charts; `[`/`]` range, `+`/`-` zoom, `←`/`→` pan, cursor readout |
 | 16 | History storage (raw 1 h + 1-min 30 d) | Keep | Same NDJSON format and merge rules |
-| 17 | Power estimate (watts at wall) | Keep | Port `power.js` exactly, with tests against its numbers |
-| 18 | Electricity cost, regions, TOU | Keep | Port the region price table; default region from time zone |
+| 17 | Power estimate (watts at wall) | Keep | Port `power.js` exactly, with tests against its numbers. One deviation: an AMD APU's GPU is marked integrated by the agent, so no discrete-GPU estimate is added on top of package power |
+| 18 | Electricity cost, regions, TOU | Keep | Port the region price table; default region from time zone. Deviation: overlapping TOU periods are refused, so the daily and monthly figures cannot count an hour twice |
 | 19 | Usage totals (online time, avg/peak, bytes) | Keep | Advanced view |
 | 20 | Alerts: rules, hysteresis, log | Keep | Port `alerts.js` |
 | 21 | Alert delivery: ntfy, webhook | Keep | Same SSRF guard |

@@ -1,7 +1,9 @@
 package power
 
 import (
+	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -92,3 +94,15 @@ func TestDayRateAndRange(t *testing.T) {
 }
 
 func near(a, b float64) bool { return a-b < 1e-12 && b-a < 1e-12 }
+
+// Overlapping time-of-use periods are refused with a sentence; touching ones are fine (B9).
+func TestParseSettingsRefusesOverlap(t *testing.T) {
+	const head = `{"region":"US","rate":0.1,"currency":"USD","tou":`
+	_, err := ParseSettings([]byte(head + `[{"from":16,"to":21,"rate":0.35},{"from":18,"to":23,"rate":0.5}]}`))
+	if !errors.Is(err, ErrOverlappingPeriods) || !strings.Contains(err.Error(), "must not overlap") {
+		t.Fatalf("overlap: %v", err)
+	}
+	if _, err := ParseSettings([]byte(head + `[{"from":16,"to":21,"rate":0.35},{"from":0,"to":16,"rate":0.08}]}`)); err != nil {
+		t.Fatalf("touching periods refused: %v", err)
+	}
+}

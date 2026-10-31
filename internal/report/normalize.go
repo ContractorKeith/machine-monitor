@@ -273,12 +273,15 @@ func str(v any, limit int) *string {
 	return Ptr(cutUTF16(s, limit))
 }
 
-// isBidiFormat reports the invisible direction controls: LRM/RLM (U+200E, U+200F), the
-// embeddings and overrides (U+202A–U+202E) and the isolates (U+2066–U+2069). Unlike the
-// rest of cleanText this goes beyond upstream, which keeps them: a U+202E in a hostname
-// or process name reverses the text after it on screen and can disguise one name as another.
+// isBidiFormat reports the invisible format and control characters CleanText strips beyond
+// upstream: LRM/RLM (U+200E, U+200F), the Arabic letter mark (U+061C), the embeddings and
+// overrides (U+202A–U+202E), the isolates (U+2066–U+2069), the zero-width characters
+// (U+200B–U+200D, U+2060, U+FEFF) and the C1 controls (U+0080–U+009F, where U+009B is CSI to
+// some terminals). A U+202E in a hostname or process name reverses the text after it on
+// screen; zero-width characters make lookalike names.
 func isBidiFormat(r rune) bool {
-	return r == 0x200e || r == 0x200f || (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069)
+	return r == 0x061c || (r >= 0x200b && r <= 0x200f) || (r >= 0x202a && r <= 0x202e) ||
+		r == 0x2060 || (r >= 0x2066 && r <= 0x2069) || r == 0xfeff || (r >= 0x80 && r <= 0x9f)
 }
 
 // cutUTF16 keeps the first limit UTF-16 code units of s, never splitting a surrogate pair.

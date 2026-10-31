@@ -8,10 +8,9 @@ and Linux. It is a clean-room Go reimplementation of the ideas in
 feature-parity matrix in `docs/PLAN.md` shipped on all three OSes.
 
 ## Status
-Packages for M0–M8 are merged, but the 2026-10-31 skeptic review found gaps in the assembled
-product: discovery and Tailscale aren't wired in, there's no way to issue a pairing code
-without curl, the Settings and Add device views are missing, and a TUI on a 250-device hub
-fails. Fixes are tracked in #45–#49. No release is tagged yet. Last touched 2026-10-31.
+Packages for M0–M8 are merged. The pass-1 skeptic gaps (#45–#49) are fixed: discovery,
+Tailscale, `pair`, the Settings and Add device views, and a 250-device hub TUI on loopback. Pass-2
+fixes are tracked in #56–#59. No release is tagged yet. Last touched 2026-10-31.
 
 ## Pointers
 - `docs/PLAN.md` — the build plan: architecture, feature matrix, milestones, acceptance.

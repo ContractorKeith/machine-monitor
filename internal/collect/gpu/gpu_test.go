@@ -211,6 +211,9 @@ func TestReadAMDAPUPowerIsNotGPUPower(t *testing.T) {
 	if gpus[0].Power != nil {
 		t.Errorf("APU GPU power = %v, want nil (PPT is package power)", *gpus[0].Power)
 	}
+	if gpus[0].Name == nil || !strings.Contains(*gpus[0].Name, "Integrated") {
+		t.Errorf("APU GPU name = %v, want it marked integrated", gpus[0].Name)
+	}
 	if gpus[0].Temp == nil || *gpus[0].Temp != 41 {
 		t.Errorf("APU GPU temp = %v, want 41", gpus[0].Temp)
 	}
