@@ -24,6 +24,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -137,68 +138,144 @@ type line struct {
 }
 
 func (s *Store) load() error {
-	entries, err := os.ReadDir(s.dir)
-	if err != nil {
-		return err
+	files, err := readFiles(s.dir, s.nowMS()-keepMS)
+	for _, f := range files {
+		if len(f.pts) == 0 {
+			if rerr := os.Remove(f.path); rerr != nil {
+				err = errors.Join(err, rerr)
+			}
+			continue
+		}
+		s.minutes[f.id] = f.pts
+		if f.dirty {
+			if werr := s.rewrite(f.id); werr != nil {
+				err = errors.Join(err, werr)
+			}
+		}
 	}
-	cutoff := s.nowMS() - keepMS
+	return err
+}
+
+// file is one parsed <id>.ndjson: the minutes still within 30 days, merged, and whether the
+// file on disk differs from them (expired lines, duplicate minutes or a partial last line).
+type file struct {
+	path  string
+	id    string
+	pts   []Point
+	dirty bool
+}
+
+// readFiles parses every <id>.ndjson in dir, dropping rows before cutoff, without changing
+// anything on disk. Unreadable files are skipped and their errors joined.
+func readFiles(dir string, cutoff float64) ([]file, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var files []file
 	var errs []error
 	for _, e := range entries {
 		name := e.Name()
 		if !strings.HasSuffix(name, ".ndjson") || e.IsDir() {
 			continue
 		}
-		path := filepath.Join(s.dir, name)
+		path := filepath.Join(dir, name)
 		data, err := os.ReadFile(path)
 		if err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		lines := bytes.Split(data, []byte("\n"))
-		var pts []Point
-		var lastID *string // id of the last kept point, as upstream tracks it
-		merged := false
-		for _, b := range lines {
-			if len(b) == 0 {
-				continue
-			}
-			var l line
-			if json.Unmarshal(b, &l) != nil || !(l.T >= cutoff) {
-				continue
-			}
-			if n := len(pts); n > 0 && pts[n-1].T == l.T {
-				pts[n-1] = merge(pts[n-1], l.Point)
-				merged = true
-				if l.ID != nil {
-					lastID = l.ID
-				}
-			} else {
-				pts = append(pts, l.Point)
-				lastID = l.ID
-			}
+		f := parseFile(data, cutoff)
+		f.path = path
+		if f.id == "" {
+			f.id = strings.TrimSuffix(name, ".ndjson") // no id in the rows: use the file name
 		}
-		if len(pts) == 0 {
-			if err := os.Remove(path); err != nil {
-				errs = append(errs, err)
-			}
+		files = append(files, f)
+	}
+	return files, errors.Join(errs...)
+}
+
+// parseFile reads one file's rows, as upstream's loader does: rows before cutoff and bad
+// JSON are skipped, and a row with the same minute as the one before is merged into it. id is
+// the id of the last point's row, or "" when it has none.
+func parseFile(data []byte, cutoff float64) file {
+	lines := bytes.Split(data, []byte("\n"))
+	var pts []Point
+	var lastID *string // id of the last kept point, as upstream tracks it
+	merged := false
+	for _, b := range lines {
+		if len(b) == 0 {
 			continue
 		}
-		// The id comes from the last point's row, else from the file name.
-		id := strings.TrimSuffix(name, ".ndjson")
-		if lastID != nil && *lastID != "" {
-			id = *lastID
+		var l line
+		if json.Unmarshal(b, &l) != nil || !(l.T >= cutoff) {
+			continue
 		}
-		s.minutes[id] = pts
-		// Rewrite to drop expired lines and duplicate minutes, and to cut a partial last line
-		// left by a crash mid-append, which the next append would otherwise run into.
-		partial := len(data) > 0 && data[len(data)-1] != '\n'
-		if merged || partial || len(pts) < len(lines)-1 {
-			if err := s.rewrite(id); err != nil {
-				errs = append(errs, err)
+		if n := len(pts); n > 0 && pts[n-1].T == l.T {
+			pts[n-1] = merge(pts[n-1], l.Point)
+			merged = true
+			if l.ID != nil {
+				lastID = l.ID
 			}
+		} else {
+			pts = append(pts, l.Point)
+			lastID = l.ID
 		}
 	}
-	return errors.Join(errs...)
+	f := file{pts: pts}
+	if lastID != nil {
+		f.id = *lastID
+	}
+	// A partial last line is left by a crash mid-append; the next append would run into it.
+	partial := len(data) > 0 && data[len(data)-1] != '\n'
+	f.dirty = merged || partial || len(pts) < len(lines)-1
+	return f
+}
+
+// Snapshot is a read-only copy of a history directory's stored minutes, for tools such as
+// export that run beside a live hub. Create one with ReadDir.
+type Snapshot struct {
+	minutes map[string][]Point
+}
+
+// ReadDir loads every <id>.ndjson in dir with the same parsing, merging and 30-day cutoff as
+// Open, but never writes, renames, removes or creates anything, so it is safe while a hub
+// appends to the same files. A missing dir is an empty snapshot. Unreadable files are skipped
+// and their errors returned with the snapshot. now is the clock for the cutoff; nil means
+// time.Now.
+func ReadDir(dir string, now func() time.Time) (*Snapshot, error) {
+	if now == nil {
+		now = time.Now
+	}
+	snap := &Snapshot{minutes: map[string][]Point{}}
+	files, err := readFiles(dir, float64(now().UnixMilli())-keepMS)
+	if errors.Is(err, fs.ErrNotExist) && files == nil {
+		return snap, nil
+	}
+	for _, f := range files {
+		if len(f.pts) > 0 {
+			snap.minutes[f.id] = f.pts
+		}
+	}
+	return snap, err
+}
+
+// IDs returns the ids of every device with stored minutes, sorted.
+func (s *Snapshot) IDs() []string {
+	ids := make([]string, 0, len(s.minutes))
+	for id := range s.minutes {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	return ids
+}
+
+// Has reports whether id has any stored minutes.
+func (s *Snapshot) Has(id string) bool { return len(s.minutes[id]) > 0 }
+
+// MinutePoints returns id's stored minutes with from <= T <= to, oldest first.
+func (s *Snapshot) MinutePoints(id string, from, to float64) []Point {
+	return filter(s.minutes[id], func(p Point) bool { return p.T >= from && p.T <= to })
 }
 
 // encodeLine renders one row exactly as upstream's JSON.stringify({ id, ...p }) does.
