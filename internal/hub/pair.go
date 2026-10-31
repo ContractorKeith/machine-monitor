@@ -8,10 +8,11 @@ package hub
 // device issue codes. Each code has an id, carried by the "paired" and "pairEnded" events,
 // so whoever shows a code knows when that code, not some other one, was used or replaced.
 //
-// `machine-monitor pair` names itself with a random owner on both its stream
-// (/api/stream?pair=OWNER) and its code request. When the last stream with that owner ends,
-// its code ends too, so a pair killed without a chance to cancel (SIGKILL, a crash) doesn't
-// leave a code nobody shows (skeptic report N3).
+// `machine-monitor pair` and the TUI name themselves with a random owner on both their
+// stream (/api/stream?pair=OWNER) and their code request. PairGrace after the last stream
+// with that owner ends, its code ends too, so a pair or TUI killed without a chance to
+// cancel (SIGKILL, a crash, a closed terminal) doesn't leave a code nobody shows (skeptic
+// report N3).
 //
 // Ported from Forward-Future/device-monitor server.js @ c3a4c41
 // (MIT, © 2026 Matt): https://github.com/Forward-Future/device-monitor
@@ -60,8 +61,12 @@ func pairOwner(r *http.Request) string {
 	return ""
 }
 
+// PairGrace is how long a code outlives the last stream of its owner. A TUI that reconnects
+// within it keeps its code (it would also miss the "pairEnded" sent while it was away).
+const PairGrace = 15 * time.Second
+
 // watchPair counts a stream that names owner; the returned func, called when the stream
-// ends, ends owner's code if that was its last stream.
+// ends, ends owner's code PairGrace later unless a stream with that owner is open again.
 func (h *Hub) watchPair(owner string) (done func()) {
 	p := &h.pair
 	p.mu.Lock()
@@ -73,17 +78,30 @@ func (h *Hub) watchPair(owner string) (done func()) {
 	return func() {
 		p.mu.Lock()
 		p.streams[owner]--
-		var id int64
-		if p.streams[owner] <= 0 {
+		last := p.streams[owner] <= 0
+		if last {
 			delete(p.streams, owner)
-			if p.activeLocked(h.now()) && p.owner == owner {
-				p.code, id = "", p.id
-			}
 		}
+		id := p.id
 		p.mu.Unlock()
-		if id != 0 {
-			h.broadcast(map[string]any{"type": "pairEnded", "id": id, "reason": "abandoned"})
+		if !last {
+			return
 		}
+		grace := h.pairGrace
+		if grace == 0 {
+			grace = PairGrace
+		}
+		time.AfterFunc(grace, func() {
+			p.mu.Lock()
+			end := p.activeLocked(h.now()) && p.owner == owner && p.id == id && p.streams[owner] == 0
+			if end {
+				p.code = ""
+			}
+			p.mu.Unlock()
+			if end {
+				h.broadcast(map[string]any{"type": "pairEnded", "id": id, "reason": "abandoned"})
+			}
+		})
 	}
 }
 

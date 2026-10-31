@@ -52,10 +52,12 @@ type PairCode struct {
 	Expires int64  `json:"expires"`
 }
 
-// NewPairCode is POST /api/pair/code: a fresh 6-digit code, replacing any earlier one.
+// NewPairCode is POST /api/pair/code: a fresh 6-digit code, replacing any earlier one. It
+// is tied to this client's stream: the hub ends it hub.PairGrace after the stream is gone,
+// and refuses it (409) while no stream is open.
 func (c *Client) NewPairCode(ctx context.Context) (*PairCode, error) {
 	var out PairCode
-	if err := c.do(ctx, "POST", "/api/pair/code", nil, &out); err != nil {
+	if err := c.do(ctx, "POST", "/api/pair/code", map[string]string{"owner": c.owner}, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

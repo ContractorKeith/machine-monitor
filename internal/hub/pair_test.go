@@ -304,10 +304,12 @@ func TestPairRefusedWhenFull(t *testing.T) {
 
 // TestPairCodeEndsWithItsStream is skeptic report N3: a pair killed before it could cancel
 // its code (SIGHUP, SIGKILL, a crash) left the code live for up to PairTTL, so the next pair
-// refused. A code issued with an owner ends when that owner's last stream closes, with a
-// "pairEnded" event; a code for an owner with no open stream isn't issued at all.
+// refused. A code issued with an owner ends PairGrace after that owner's last stream
+// closes, with a "pairEnded" event, unless the owner reconnects first (a TUI on a flaky
+// link); a code for an owner with no open stream isn't issued at all.
 func TestPairCodeEndsWithItsStream(t *testing.T) {
 	th := newTestHub(t)
+	th.pairGrace = 300 * time.Millisecond
 	srv := httptest.NewServer(th.h)
 	t.Cleanup(srv.Close)
 	watcher := openStream(t, srv, th.Token())
@@ -319,12 +321,18 @@ func TestPairCodeEndsWithItsStream(t *testing.T) {
 		t.Fatalf("malformed owner: %d %s", w.Code, w.Body)
 	}
 
-	req, _ := http.NewRequest("GET", srv.URL+"/api/stream?pair="+owner, nil)
-	req.Header.Set("Authorization", "Bearer "+th.Token())
-	resp, err := srv.Client().Do(req)
-	if err != nil || resp.StatusCode != 200 {
-		t.Fatalf("pair stream: %v %v", resp, err)
+	open := func() *http.Response {
+		t.Helper()
+		req, _ := http.NewRequest("GET", srv.URL+"/api/stream?pair="+owner, nil)
+		req.Header.Set("Authorization", "Bearer "+th.Token())
+		resp, err := srv.Client().Do(req)
+		if err != nil || resp.StatusCode != 200 {
+			t.Fatalf("pair stream: %v %v", resp, err)
+		}
+		t.Cleanup(func() { resp.Body.Close() })
+		return resp
 	}
+	resp := open()
 	w := th.keyed("POST", "/api/pair/code", fmt.Sprintf(`{"replace":false,"owner":%q}`, owner))
 	if w.Code != 200 {
 		t.Fatalf("code: %d %s", w.Code, w.Body)
@@ -333,6 +341,14 @@ func TestPairCodeEndsWithItsStream(t *testing.T) {
 	// While its stream is open the code holds.
 	if w := th.keyed("POST", "/api/pair/code", `{"replace":false}`); w.Code != 409 {
 		t.Fatalf("second code while the first's stream is open: %d %s", w.Code, w.Body)
+	}
+
+	// A reconnect within the grace keeps the code.
+	resp.Body.Close()
+	resp = open()
+	time.Sleep(2 * th.pairGrace)
+	if w := th.keyed("POST", "/api/pair/code", `{"replace":false}`); w.Code != 409 {
+		t.Fatalf("the code ended though its owner reconnected: %d %s", w.Code, w.Body)
 	}
 
 	resp.Body.Close() // the pair process dies: its connection closes

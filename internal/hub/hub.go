@@ -111,6 +111,7 @@ type Hub struct {
 	closed        bool
 
 	streamWriteTimeout time.Duration // tests shorten StreamWriteTimeout
+	pairGrace          time.Duration // tests shorten PairGrace
 	statusInterval     time.Duration // tests lengthen StatusInterval
 
 	sentOnline map[string]bool // online flags in the last "status" event; Run's goroutine only

@@ -73,6 +73,9 @@ type Client struct {
 	// stream is for the SSE stream: no overall timeout, since it stays open; a stalled
 	// stream is caught by the idle watchdog instead.
 	stream *http.Client
+	// owner names this client on its stream and its pairing codes, so the hub ends a code
+	// from the Add device view once this client's stream is gone (a killed TUI).
+	owner string
 }
 
 // New returns a client for the hub at hubURL ("http://host:7777", "host:7777" or "host").
@@ -91,7 +94,9 @@ func New(hubURL, key string) (*Client, error) {
 		MaxIdleConnsPerHost:   4,
 		IdleConnTimeout:       90 * time.Second,
 	}
-	return &Client{base: u, key: key,
+	ob := make([]byte, 16)
+	rand.Read(ob)
+	return &Client{base: u, key: key, owner: hex.EncodeToString(ob),
 		http:   &http.Client{Transport: tr, Timeout: requestTimeout},
 		stream: &http.Client{Transport: tr}}, nil
 }
