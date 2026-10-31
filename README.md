@@ -4,7 +4,7 @@ A terminal app that watches CPU, GPU, memory, temperatures, disks, network, proc
 power on one machine, or on every machine on your network, from a single binary on Windows,
 macOS and Linux.
 
-**Status:** planning. Nothing is built yet. The build plan is in [docs/PLAN.md](docs/PLAN.md).
+**Status:** early development (M0 skeleton). Nothing usable yet. The build plan is in [docs/PLAN.md](docs/PLAN.md).
 
 ## Credit
 
