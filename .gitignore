@@ -1,0 +1,15 @@
+# Binaries and build output
+/machine-monitor
+/machine-monitor.exe
+/dist/
+
+# Local data
+/data/
+*.ndjson
+
+# Go
+/vendor/
+coverage.out
+
+# Env
+.env
