@@ -1,0 +1,3 @@
+#!/bin/sh
+# Prints the environment it was started with, to check command strips it.
+env

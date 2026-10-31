@@ -1,0 +1,21 @@
+#!/bin/sh
+# Fake ioreg: an Apple Silicon GPU ("Device Utilization %") and an older Intel-Mac GPU
+# ("GPU Activity(%)") with no model key. First entry recorded from upstream build/test/macos/bin/ioreg.
+case "$*" in
+  *IOAccelerator*) cat <<'X'
++-o AGXAcceleratorG15X  <class AGXAcceleratorG15X, id 0x1000003b3, registered, matched, active, busy 0 (0 ms), retain 52>
+    {
+      "IOClass" = "AGXAcceleratorG15X"
+      "gpu-core-count" = 40
+      "PerformanceStatistics" = {"In use system memory (driver)"=0,"Alloc system memory"=4423761920,"Tiler Utilization %"=12,"recoveryCount"=0,"Renderer Utilization %"=31,"SplitSceneCount"=0,"Device Utilization %"=33,"Allocated PB Size"=1572864,"In use system memory"=2147483648}
+      "model" = "Apple M3 Max"
+    }
++-o AMDRadeonX6000_AMDNavi14GraphicsAccelerator  <class AMDRadeonX6000_AMDNavi14GraphicsAccelerator, id 0x100000999, registered, matched, active, busy 0 (0 ms), retain 20>
+    {
+      "IOClass" = "AMDRadeonX6000_AMDNavi14GraphicsAccelerator"
+      "PerformanceStatistics" = {"GPU Activity(%)"=5,"In use system memory"=104857600}
+    }
+X
+  ;;
+  *) echo "unexpected args: $*" >&2; exit 2 ;;
+esac

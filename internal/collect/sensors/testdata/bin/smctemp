@@ -1,0 +1,3 @@
+#!/bin/sh
+# Fake smctemp, recorded from upstream build/test/macos/bin/smctemp.
+case "$1" in -c) echo 61.4 ;; -g) echo 55.2 ;; esac

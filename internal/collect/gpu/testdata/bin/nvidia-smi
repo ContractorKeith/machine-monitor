@@ -1,0 +1,8 @@
+#!/bin/sh
+# Fake nvidia-smi: two GPUs as `--query-gpu=... --format=csv,noheader,nounits` prints them.
+case "$*" in
+  *--query-gpu=name,utilization.gpu,temperature.gpu,memory.used,memory.total,power.draw,power.limit,fan.speed,clocks.gr*)
+    echo 'NVIDIA GeForce RTX 3060, 7, 41, 1024, 12288, 18.52, 170.00, 30, 210'
+    echo 'NVIDIA GeForce RTX 4090, 97, 72, 20480, 24564, 412.33, 450.00, [N/A], 2520' ;;
+  *) echo "unexpected args: $*" >&2; exit 2 ;;
+esac
