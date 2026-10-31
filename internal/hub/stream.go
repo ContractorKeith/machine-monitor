@@ -367,6 +367,9 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer h.releaseStream(s)
+	if owner := pairOwner(r); owner != "" { // a pair run: its code ends with its last stream
+		defer h.watchPair(owner)()
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
 	rc := http.NewResponseController(w)

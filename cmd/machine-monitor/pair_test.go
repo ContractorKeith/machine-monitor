@@ -12,8 +12,10 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -96,6 +98,44 @@ func TestPairPrintsCodeUntilUsed(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "\r") || strings.Contains(out.String(), "\033") {
 		t.Errorf("terminal control codes on a non-terminal: %q", out.String())
+	}
+}
+
+// TestPairSignalsCancelCode is skeptic report N3: a pair stopped by SIGHUP (terminal
+// closed, SSH dropped) or SIGPIPE (`pair | head -1`) left its code live, so the next pair
+// refused for up to 10 minutes. Both must end the run's code, as Ctrl+C does.
+func TestPairSignalsCancelCode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no SIGHUP or SIGPIPE on Windows")
+	}
+	for _, sig := range []os.Signal{syscall.SIGHUP, syscall.SIGPIPE} {
+		t.Run(sig.String(), func(t *testing.T) {
+			h, srv, port := pairHub(t)
+			out, errOut, rc := startPair(port)
+			for deadline := time.Now().Add(10 * time.Second); !strings.Contains(out.String(), "Pairing code"); time.Sleep(20 * time.Millisecond) {
+				if time.Now().After(deadline) {
+					t.Fatalf("no code: stdout %q, stderr %q", out.String(), errOut.String())
+				}
+			}
+			self, _ := os.FindProcess(os.Getpid())
+			if err := self.Signal(sig); err != nil {
+				t.Fatal(err)
+			}
+			if c := waitExit(t, rc, errOut); c != 1 {
+				t.Fatalf("exit %d after %v; stdout %q", c, sig, out.String())
+			}
+			req, _ := http.NewRequest("POST", srv.URL+"/api/pair/code", strings.NewReader(`{"replace":false}`))
+			req.Header.Set("Authorization", "Bearer "+h.Token())
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != 200 {
+				t.Fatalf("a new code after %v: %d %s", sig, resp.StatusCode, body)
+			}
+		})
 	}
 }
 
