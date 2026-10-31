@@ -1,0 +1,24 @@
+machine-monitor · hub hub.lan:7777   1 Dashboard  2 Device  3 Processes      ?/q
+1   dashboard    ↑/k  up           ←/h previous device                          
+2   device       ↓/j  down         →/l next device                              
+3   processes    pgup page up      K   move card earlier                        
+tab next view    pgdn page down    J   move card later                          
+?   help         g    top          R   rename device                            
+q   quit         G    bottom       D   remove device                            
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+esc or ? to close                                                               

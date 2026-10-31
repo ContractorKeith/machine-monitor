@@ -7,10 +7,20 @@ type keyMap struct {
 	Dashboard, Device, Processes, Next, Help, Quit key.Binding
 	Up, Down, PageUp, PageDown, Top, Bottom        key.Binding
 	Filter, Sort, Reverse, Clear                   key.Binding
+	Left, Right, MoveUp, MoveDown, Rename, Remove  key.Binding // hub mode
+
+	hub bool // hub mode: help lists the device keys
 }
 
-func newKeyMap() keyMap {
+func newKeyMap(hub bool) keyMap {
 	return keyMap{
+		hub:       hub,
+		Left:      key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("←/h", "previous device")),
+		Right:     key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("→/l", "next device")),
+		MoveUp:    key.NewBinding(key.WithKeys("K"), key.WithHelp("K", "move card earlier")),
+		MoveDown:  key.NewBinding(key.WithKeys("J"), key.WithHelp("J", "move card later")),
+		Rename:    key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "rename device")),
+		Remove:    key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "remove device")),
 		Dashboard: key.NewBinding(key.WithKeys("1"), key.WithHelp("1", "dashboard")),
 		Device:    key.NewBinding(key.WithKeys("2"), key.WithHelp("2", "device")),
 		Processes: key.NewBinding(key.WithKeys("3"), key.WithHelp("3", "processes")),
@@ -37,9 +47,12 @@ func (k keyMap) ShortHelp() []key.Binding {
 
 // FullHelp implements help.KeyMap: one column per group.
 func (k keyMap) FullHelp() [][]key.Binding {
-	return [][]key.Binding{
+	groups := [][]key.Binding{
 		{k.Dashboard, k.Device, k.Processes, k.Next, k.Help, k.Quit},
 		{k.Up, k.Down, k.PageUp, k.PageDown, k.Top, k.Bottom},
-		{k.Filter, k.Sort, k.Reverse, k.Clear},
 	}
+	if k.hub { // the process list is local-only, so its keys make room for the device keys
+		return append(groups, []key.Binding{k.Left, k.Right, k.MoveUp, k.MoveDown, k.Rename, k.Remove})
+	}
+	return append(groups, []key.Binding{k.Filter, k.Sort, k.Reverse, k.Clear})
 }

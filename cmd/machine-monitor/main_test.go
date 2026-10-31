@@ -27,7 +27,6 @@ func TestRun(t *testing.T) {
 		{[]string{"help"}, 0, "Usage:", ""},
 		{[]string{"-h"}, 0, "", "Usage:"},
 		{nil, 0, "", ""},
-		{[]string{"--hub", "http://h:7777"}, 2, "", "--hub: not built yet"},
 		{[]string{"nope"}, 2, "", `unknown command "nope"`},
 		{[]string{"--bogus"}, 2, "", "flag provided but not defined"},
 		{[]string{"hub", "x"}, 2, "", `hub: unexpected argument "x"`},

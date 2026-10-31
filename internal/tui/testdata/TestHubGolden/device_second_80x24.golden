@@ -1,0 +1,24 @@
+machine-monitor · studio   1 Dashboard  2 Device  3 Processes     ? help  q quit
+System                                                                          
+  Host          studio                                                          
+  OS            macOS 15.1 · Mac Studio                                         
+  Platform      macos                                                           
+  Form factor   desktop                                                         
+  Uptime        1d 2h 0m                                                        
+  ID            mac-0001                                                        
+                                                                                
+CPU                                                                             
+  Model         Apple M2 Ultra                                                  
+  Usage         18%   threads 12   clock —                                      
+  Temp          —                                                               
+   0 █░░░░░░░░░  11%   4 ██████░░░░  58%   8 ░░░░░░░░░░   4%                    
+   1 █████░░░░░  48%   5 ██████████  95%   9 ████░░░░░░  41%                    
+   2 █████████░  85%   6 ███░░░░░░░  31%  10 ████████░░  78%                    
+   3 ██░░░░░░░░  21%   7 ███████░░░  68%  11 █░░░░░░░░░  14%                    
+                                                                                
+Memory                                                                          
+  RAM           █████████████████████░░░░░░░░░░░   64%  41.0 GiB / 64.0 GiB     
+                                                                                
+GPUs                                                                            
+  Apple M2 Ultra (apple)                                                        
+lines 1–22 of 52 · ↑/↓ pgup/pgdn scroll · ? help                                

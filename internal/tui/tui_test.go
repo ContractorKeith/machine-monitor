@@ -65,7 +65,7 @@ func waitUntil(t *testing.T, tm *teatest.TestModel, ch chan model, ready func(mo
 
 // loaded is true once the first sample is in and, on the Processes view, the list too.
 func loaded(m model) bool {
-	return m.last != nil && (m.view != viewProcesses || m.procs != nil)
+	return m.report() != nil && (m.view != viewProcesses || m.procs != nil)
 }
 
 // start runs the TUI at w×h through teatest and waits for the first sample.

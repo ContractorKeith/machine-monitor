@@ -10,9 +10,14 @@ import (
 
 // deviceLines is view 2, one string per line; the view scrolls through them.
 func (m model) deviceLines() []string {
-	r := m.last
-	if r == nil {
+	r := m.report()
+	switch {
+	case r == nil && !m.multi():
 		return []string{m.theme.dim.Render("Collecting the first sample…")}
+	case r == nil && m.cur() == nil:
+		return []string{m.theme.dim.Render("No device to show yet.")}
+	case r == nil:
+		return []string{m.theme.dim.Render(m.cur().name + " has not reported since the hub started.")}
 	}
 	t := m.theme
 	w := m.width
