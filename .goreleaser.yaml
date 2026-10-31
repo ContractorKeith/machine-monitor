@@ -1,5 +1,5 @@
-# GoReleaser v2. Local dry run: goreleaser release --snapshot --clean
-# Signing is added in M8.
+# GoReleaser v2. Local dry run: goreleaser release --snapshot --clean --skip=sign
+# Releases run from .github/workflows/release.yml on a v* tag.
 version: 2
 
 project_name: machine-monitor
@@ -17,6 +17,8 @@ builds:
     ldflags:
       - -s -w -X main.version={{.Version}}
 
+# Archive names are a contract: internal/update.ArchiveName builds the same names, and the
+# hub-served installers and `machine-monitor update` download by them.
 archives:
   - id: machine-monitor
     formats: [tar.gz]
@@ -31,6 +33,67 @@ archives:
 checksum:
   name_template: checksums.txt
   algorithm: sha256
+
+# cosign keyless (GitHub OIDC) signs checksums.txt into a Sigstore bundle. `update` and the
+# hub check it against the Fulcio root and this repo's release workflow identity.
+signs:
+  - id: cosign
+    cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - --yes
+    output: true
+
+# Homebrew cask in the existing tap (brew install --cask contractorkeith/tap/machine-monitor).
+# Pushing to another repo needs a token with write access there: add it as the
+# HOMEBREW_TAP_GITHUB_TOKEN secret. Without it the cask is still generated in dist/ but not
+# pushed.
+homebrew_casks:
+  - name: machine-monitor
+    repository:
+      owner: ContractorKeith
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    homepage: https://github.com/ContractorKeith/machine-monitor
+    description: Monitor CPU, GPU, memory, temperatures and power for one machine or your whole network, in a terminal
+    skip_upload: '{{ if index .Env "HOMEBREW_TAP_GITHUB_TOKEN" }}false{{ else }}true{{ end }}'
+    commit_author:
+      name: ContractorKeith
+      email: ContractorKeith@users.noreply.github.com
+    binaries: [machine-monitor]
+    # The binary is not notarized, so Gatekeeper may block the first run.
+    caveats: |
+      If macOS says machine-monitor can't be opened, run:
+        xattr -dr com.apple.quarantine "$(brew --prefix)/Caskroom/machine-monitor"
+
+# Scoop manifest, committed to this repo's packaging/scoop/ with the workflow's token.
+# TODO(scoop-bucket): no ContractorKeith/scoop-bucket repo exists yet. Once it does, point
+# repository.name at it, drop `directory`, and give it a token like the tap's.
+scoops:
+  - name: machine-monitor
+    repository:
+      owner: ContractorKeith
+      name: machine-monitor
+      branch: main
+    directory: packaging/scoop
+    homepage: https://github.com/ContractorKeith/machine-monitor
+    description: Monitor CPU, GPU, memory, temperatures and power for one machine or your whole network, in a terminal
+    license: MIT
+    commit_author:
+      name: ContractorKeith
+      email: ContractorKeith@users.noreply.github.com
+    commit_msg_template: "chore: scoop manifest for {{ .ProjectName }} {{ .Tag }}"
+
+# release.yml publishes the draft after checking the signature. The cask and Scoop manifest
+# are pushed while it is still a draft, so their download links work once it is published.
+release:
+  draft: true
+  replace_existing_draft: true
 
 changelog:
   use: github

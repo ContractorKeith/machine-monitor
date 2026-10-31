@@ -22,7 +22,7 @@ import (
 )
 
 // openPaths answer without the key, so they are rate-limited per client address.
-var openPaths = map[string]bool{"/api/info": true, "/api/pair": true}
+var openPaths = map[string]bool{"/api/info": true, "/api/pair": true, "/install.sh": true, "/install.ps1": true}
 
 // Handler is the hub's HTTP API.
 func (h *Hub) Handler() http.Handler {
@@ -30,6 +30,8 @@ func (h *Hub) Handler() http.Handler {
 	mux.HandleFunc("POST /api/report", h.handleReport)
 	mux.HandleFunc("GET /api/info", h.handleInfo)
 	mux.HandleFunc("POST /api/pair", h.handlePair)
+	mux.HandleFunc("GET /install.sh", h.handleInstall) // checks the key itself (install.go)
+	mux.HandleFunc("GET /install.ps1", h.handleInstall)
 
 	key := func(pattern string, f http.HandlerFunc) { mux.Handle(pattern, h.requireKey(f)) }
 	key("POST /api/pair/code", h.handlePairCode)

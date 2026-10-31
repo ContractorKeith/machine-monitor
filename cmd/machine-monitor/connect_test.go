@@ -163,6 +163,27 @@ func TestConnectWithDashboardLink(t *testing.T) {
 	}
 }
 
+func TestConnectKeyFromStdin(t *testing.T) {
+	h, srv, clientPath := connectHub(t)
+	stubAgent(t)
+	setStdin(t, h.Token()+"\n")
+	var out, errOut bytes.Buffer
+	if rc := run([]string{"connect", "--no-agent", "--key-stdin", srv.URL}, &out, &errOut); rc != 0 {
+		t.Fatalf("exit %d: %s", rc, errOut.String())
+	}
+	if cl, _ := agent.LoadClient(clientPath); cl.Key != h.Token() {
+		t.Errorf("client.json key %q", cl.Key)
+	}
+	setStdin(t, "")
+	if rc := run([]string{"connect", "--no-agent", "--key-stdin", srv.URL}, &out, &errOut); rc != 2 {
+		t.Errorf("empty stdin: exit %d", rc)
+	}
+	setStdin(t, h.Token()+"\n")
+	if rc := run([]string{"connect", "--key-stdin", "--code", "123456", srv.URL}, &out, &errOut); rc != 2 {
+		t.Errorf("--key-stdin with --code: exit %d", rc)
+	}
+}
+
 func TestAgentNeedsPairing(t *testing.T) {
 	t.Setenv(config.DirEnv, t.TempDir())
 	var out, errOut bytes.Buffer

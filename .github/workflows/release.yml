@@ -1,0 +1,87 @@
+name: release
+
+# A v* tag builds a draft GitHub Release with goreleaser: six archives, checksums.txt signed
+# with cosign keyless (this workflow's GitHub OIDC identity, which `machine-monitor update`
+# and the hub's installers check), the Homebrew cask and the Scoop manifest. The draft is
+# published only after the signature verifies the way update checks it. Pull requests that
+# touch release files run the same build as a snapshot, without signing or publishing.
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - .goreleaser.yaml
+      - .github/workflows/release.yml
+      - go.mod
+      - go.sum
+      - cmd/**
+      - internal/update/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CGO_ENABLED: "0"
+  GORELEASER: github.com/goreleaser/goreleaser/v2@v2.19.0
+
+jobs:
+  snapshot:
+    if: github.ref_type != 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: go run "$GORELEASER" check
+      - run: go run "$GORELEASER" release --snapshot --clean --skip=sign
+      - name: check the generated artifacts
+        run: |
+          set -eu
+          test "$(ls dist/*.tar.gz dist/*.zip | wc -l)" -eq 6
+          (cd dist && sha256sum -c checksums.txt)
+          test -s dist/homebrew/Casks/machine-monitor.rb
+          test -s dist/scoop/packaging/scoop/machine-monitor.json
+          tar -xzf dist/machine-monitor_*_linux_amd64.tar.gz -C "$RUNNER_TEMP" machine-monitor
+          "$RUNNER_TEMP/machine-monitor" --version
+
+  release:
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release; commit packaging/scoop
+      id-token: write # cosign keyless signing
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          # v3 writes the Sigstore bundle (checksums.txt.sigstore.json) that
+          # internal/update/verify.go reads; change both together.
+          cosign-release: v3.1.3
+      - run: go test ./...
+      - name: build and upload a draft release
+        run: go run "$GORELEASER" release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Optional: a token that can push to ContractorKeith/homebrew-tap. Without it the
+          # cask is built but not published.
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+      - name: verify the signature like update does
+        run: |
+          cosign verify-blob dist/checksums.txt \
+            --bundle dist/checksums.txt.sigstore.json \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+      - name: publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest

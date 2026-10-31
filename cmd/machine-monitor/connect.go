@@ -29,15 +29,17 @@ var stdinIsTerminal = func() bool {
 // connectAgent starts the agent after a successful connect; tests replace it.
 var connectAgent = startAgent
 
-// runConnect is `machine-monitor connect [--code CODE] [--no-agent] URL`: pair this machine
-// with a hub, save client.json, then report to the hub. URL may be a dashboard link with
-// ?key=, which skips the pairing code. Either way the hub must prove it holds the key
-// before the key is saved or sent.
+// runConnect is `machine-monitor connect [--code CODE] [--key-stdin] [--no-agent] URL`: pair
+// this machine with a hub, save client.json, then report to the hub. URL may be a dashboard
+// link with ?key=, or --key-stdin reads the key from stdin (keeping it out of argv, as the
+// hub's installers do); either skips the pairing code. Either way the hub must prove it
+// holds the key before the key is saved or sent.
 func runConnect(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("connect", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	codeFlag := fs.String("code", "", "pairing code from the hub (prompted for when omitted)")
 	noAgent := fs.Bool("no-agent", false, "save the pairing and exit instead of starting the agent")
+	keyStdin := fs.Bool("key-stdin", false, "read the hub key from the first line of stdin")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -45,7 +47,7 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if fs.NArg() != 1 {
-		fmt.Fprintln(stderr, "usage: machine-monitor connect [--code CODE] [--no-agent] URL")
+		fmt.Fprintln(stderr, "usage: machine-monitor connect [--code CODE] [--key-stdin] [--no-agent] URL")
 		return 2
 	}
 	fail := func(code int, format string, a ...any) int {
@@ -55,6 +57,15 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 	hubURL, key, err := agent.NormalizeURL(fs.Arg(0))
 	if err != nil {
 		return fail(2, "%v", err)
+	}
+	if *keyStdin {
+		if key != "" || *codeFlag != "" {
+			return fail(2, "--key-stdin can't be combined with --code or a link with ?key=")
+		}
+		line, err := bufio.NewReader(stdin).ReadString('\n')
+		if key = strings.TrimSpace(line); key == "" {
+			return fail(2, "--key-stdin: no key on stdin (%v)", err)
+		}
 	}
 	if key == "" && *codeFlag == "" && !stdinIsTerminal() { // nobody to answer the prompt
 		return fail(2, "no terminal to ask for the pairing code: pass --code CODE (usage: machine-monitor connect [--code CODE] [--no-agent] URL)")
