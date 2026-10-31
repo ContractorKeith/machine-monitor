@@ -241,3 +241,23 @@ func TestFromACPI(t *testing.T) {
 		t.Errorf("no zones = %v, want nil", *v)
 	}
 }
+
+// On an AMD APU the PPT sensor is CPU package power, used when RAPL and Grace give nothing.
+func TestAPUPackagePower(t *testing.T) {
+	apu := filepath.Join("testdata", "apu", "sys")
+	s := readLinux(apu, &raplMeter{}, time.Now())
+	r := &report.Report{}
+	s.apply()(r)
+	if r.Power == nil || r.Power.CPU == nil || *r.Power.CPU != 23 {
+		t.Errorf("APU report = %s, want power.cpu 23", asJSON(t, r))
+	}
+	// A value another probe already set wins.
+	r = &report.Report{Power: &report.Power{CPU: report.Ptr(10.0)}}
+	s.apply()(r)
+	if *r.Power.CPU != 10 {
+		t.Errorf("power.cpu = %v, want 10 kept", *r.Power.CPU)
+	}
+	if p := apuPower(fixture); p != nil {
+		t.Errorf("no PPT chip = %v, want nil", *p)
+	}
+}

@@ -201,3 +201,17 @@ func TestAppendGPUsSortsByVRAM(t *testing.T) {
 		t.Error("no GPUs should give a nil Apply")
 	}
 }
+
+// An APU's amdgpu hwmon labels its power PPT (the whole package). It is not GPU power.
+func TestReadAMDAPUPowerIsNotGPUPower(t *testing.T) {
+	gpus := readAMD(filepath.Join("testdata", "apu", "sys"))
+	if len(gpus) != 1 || gpus[0].Usage == nil || *gpus[0].Usage != 6 {
+		t.Fatalf("APU GPUs = %s", asJSON(t, gpus))
+	}
+	if gpus[0].Power != nil {
+		t.Errorf("APU GPU power = %v, want nil (PPT is package power)", *gpus[0].Power)
+	}
+	if gpus[0].Temp == nil || *gpus[0].Temp != 41 {
+		t.Errorf("APU GPU temp = %v, want 41", gpus[0].Temp)
+	}
+}

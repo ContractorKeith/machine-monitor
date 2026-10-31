@@ -1,6 +1,8 @@
 package power
 
 import (
+	"math"
+	"math/big"
 	"time"
 )
 
@@ -84,8 +86,27 @@ func Accumulate(points []Minute, bounds []time.Time, hw HW, price *Settings, loc
 	return u
 }
 
-// fixed4 is upstream's +v.toFixed(4). toFixed rounds an exact tie up, where Go's formatter
-// rounds it to even, so ties are rounded up here first.
-func fixed4(v float64) float64 {
-	return jsRound(v*1e4) / 1e4
+// fixed4 is upstream's +v.toFixed(4).
+func fixed4(v float64) float64 { return ToFixed(v, 4) }
+
+// ToFixed is JavaScript's +v.toFixed(digits): v rounded to digits decimals by its exact
+// binary value, an exact tie going away from zero. 0.15 is really 0.1499999999999999944...,
+// so it gives 0.1, where Math.round(v*10)/10 and Go's math.Round(v*10)/10 give 0.2: the
+// product v*10 is exactly 1.5, a tie the exact value does not have. Go's strconv breaks
+// true ties to even, so the rounding is done on the exact fraction instead. Non-finite
+// values are returned as they are.
+func ToFixed(v float64, digits int) float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return v
+	}
+	scale := new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(digits)), nil))
+	x := new(big.Rat).SetFloat64(math.Abs(v))
+	x.Mul(x, scale)
+	x.Add(x, big.NewRat(1, 2))
+	n := new(big.Int).Div(x.Num(), x.Denom()) // floor, since x >= 0
+	r, _ := new(big.Rat).SetFrac(n, scale.Num()).Float64()
+	if r == 0 {
+		return 0 // toFixed never yields -0
+	}
+	return math.Copysign(r, v)
 }

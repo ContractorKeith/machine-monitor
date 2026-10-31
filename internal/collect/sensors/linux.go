@@ -151,6 +151,25 @@ func gracePower(sys string) *float64 {
 	return report.Ptr(round1(sum / 1e6))
 }
 
+// apuPower is the package power (watts) an AMD APU's amdgpu hwmon labels PPT. It covers the
+// CPU cores as well as the graphics, so it is CPU package power; the gpu probe leaves it out
+// of the GPU's power. Upstream's agent.sh has no equivalent. nil when there is no such chip.
+func apuPower(sys string) *float64 {
+	for _, h := range numbered(filepath.Join(sys, "class", "hwmon"), hwmonDir) {
+		if readString(filepath.Join(h, "name")) != "amdgpu" || readString(filepath.Join(h, "power1_label")) != "PPT" {
+			continue
+		}
+		v := readNum(filepath.Join(h, "power1_average")) // microwatts
+		if v == nil {
+			v = readNum(filepath.Join(h, "power1_input"))
+		}
+		if v != nil && *v > 0 {
+			return report.Ptr(round1(*v / 1e6))
+		}
+	}
+	return nil
+}
+
 // raplMeter turns RAPL energy counters into CPU package watts between two Runs. energy_uj
 // is root-only on most kernels since 2020, so this is often nil for a normal user and the
 // hub estimates CPU power from load instead.
@@ -214,7 +233,7 @@ func (m *raplMeter) watts(sys string, now time.Time) *float64 {
 	return report.Ptr(round1(joules / sec))
 }
 
-// readLinux gathers every Linux sensor. CPU power prefers Grace meters over RAPL.
+// readLinux gathers every Linux sensor. CPU power prefers Grace meters, then RAPL, then an APU's PPT.
 func readLinux(sys string, rapl *raplMeter, now time.Time) reading {
 	var s reading
 	s.temps, s.fans, s.cpuTemp = readHwmon(sys)
@@ -225,6 +244,9 @@ func readLinux(sys string, rapl *raplMeter, now time.Time) reading {
 	raplW := rapl.watts(sys, now)
 	if s.cpuPower = gracePower(sys); s.cpuPower == nil {
 		s.cpuPower = raplW
+	}
+	if s.cpuPower == nil {
+		s.cpuPower = apuPower(sys)
 	}
 	return s
 }
