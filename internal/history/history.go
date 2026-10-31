@@ -189,7 +189,10 @@ func (s *Store) load() error {
 			id = *lastID
 		}
 		s.minutes[id] = pts
-		if merged || len(pts) < len(lines)-1 { // drop expired lines and duplicate minutes
+		// Rewrite to drop expired lines and duplicate minutes, and to cut a partial last line
+		// left by a crash mid-append, which the next append would otherwise run into.
+		partial := len(data) > 0 && data[len(data)-1] != '\n'
+		if merged || partial || len(pts) < len(lines)-1 {
 			if err := s.rewrite(id); err != nil {
 				errs = append(errs, err)
 			}
