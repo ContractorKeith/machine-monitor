@@ -37,7 +37,7 @@ type (
 		Name          string
 		MaxClockSpeed uint32
 	}
-	win32SystemEnclosure struct{ ChassisTypes []uint16 }
+	win32SystemEnclosure struct{ ChassisTypes []int32 } // WMI returns the array as int32
 	win32ProcessorInfo   struct{ PercentProcessorPerformance uint64 }
 	win32LogicalDisk     struct {
 		DeviceID   string
@@ -86,7 +86,7 @@ func (s *windowsSource) static(ctx context.Context) staticInfo {
 			for _, t := range e.ChassisTypes {
 				// portable, laptop, notebook, hand held, sub notebook, docking station
 				// (attached), tablet, convertible, detachable
-				if slices.Contains([]uint16{8, 9, 10, 11, 12, 14, 18, 21, 30, 31, 32}, t) {
+				if slices.Contains([]int32{8, 9, 10, 11, 12, 14, 18, 21, 30, 31, 32}, t) {
 					ff = report.FormFactorLaptop
 				}
 			}

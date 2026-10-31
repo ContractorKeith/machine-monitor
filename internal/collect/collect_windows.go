@@ -37,7 +37,15 @@ func (wmiClient) Query(ctx context.Context, q string, dst any) error {
 	defer cancel()
 	done := make(chan error, 1)
 	tmp := reflect.New(reflect.TypeOf(dst).Elem()) // so a late query never writes dst
-	go func() { done <- wmi.Query(q, tmp.Interface()) }()
+	go func() {
+		// wmi panics when a property's type doesn't match the field; fail soft instead.
+		defer func() {
+			if v := recover(); v != nil {
+				done <- fmt.Errorf("wmi: %s: panic: %v", q, v)
+			}
+		}()
+		done <- wmi.Query(q, tmp.Interface())
+	}()
 	select {
 	case err := <-done:
 		if err != nil {
