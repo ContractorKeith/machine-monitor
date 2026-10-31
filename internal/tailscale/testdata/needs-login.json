@@ -1,0 +1,16 @@
+{
+  "Version": "1.104.2",
+  "BackendState": "NeedsLogin",
+  "AuthURL": "",
+  "TailscaleIPs": null,
+  "Self": {
+    "HostName": "studio",
+    "DNSName": "",
+    "OS": "linux",
+    "TailscaleIPs": null,
+    "Online": false
+  },
+  "MagicDNSSuffix": "",
+  "CurrentTailnet": null,
+  "Peer": null
+}
