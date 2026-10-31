@@ -1,6 +1,6 @@
 package hub
 
-// HTTP routes (PLAN §6). Pairing (/api/pair*), installers, processes on demand, power
+// HTTP routes (PLAN §6). Pairing is in pair.go. Installers, processes on demand, power
 // actions and the remote (Tailscale) endpoints arrive in later milestones.
 //
 // Ported from Forward-Future/device-monitor server.js @ c3a4c41
@@ -22,15 +22,17 @@ import (
 )
 
 // openPaths answer without the key, so they are rate-limited per client address.
-var openPaths = map[string]bool{"/api/info": true}
+var openPaths = map[string]bool{"/api/info": true, "/api/pair": true}
 
 // Handler is the hub's HTTP API.
 func (h *Hub) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/report", h.handleReport)
 	mux.HandleFunc("GET /api/info", h.handleInfo)
+	mux.HandleFunc("POST /api/pair", h.handlePair)
 
 	key := func(pattern string, f http.HandlerFunc) { mux.Handle(pattern, h.requireKey(f)) }
+	key("POST /api/pair/code", h.handlePairCode)
 	key("GET /api/devices", h.handleDevices)
 	key("GET /api/stream", h.handleStream)
 	key("GET /api/history/{id}", h.handleHistory)
