@@ -38,9 +38,16 @@ const maxBatch = 512
 // staleAfter is how long the stream may stay silent before the dashboard stops trusting
 // its online flags: the hub sends a status event every 3 s, so 10 s of silence means the
 // hub or the network is gone.
-// The same bound applies to reports that arrive late: data staleAfter behind is as
-// untrustworthy as none, even while the stream is up (skeptic report N1).
 const staleAfter = 10 * time.Second
+
+// Reports that arrive late, while the stream is up, mark the data late (skeptic report N1):
+// the header and footer say so, and the cards keep the hub's last online flags. Late from
+// lateAfter behind until back under lateClear, so a link that only just keeps up (lag
+// wavering around one bound) doesn't flicker or warn for ever.
+const (
+	lateAfter = 20 * time.Second
+	lateClear = 15 * time.Second
+)
 
 // hubTick is how often hub mode wakes to check for a silent stream and redraw clocks.
 const hubTick = time.Second
@@ -83,7 +90,8 @@ type hubConn struct {
 	retry     time.Duration
 	snapshot  bool      // a snapshot has arrived since the program started
 	lastEvent time.Time // when the stream last delivered anything
-	stale     bool      // silent or behind for staleAfter: online flags are unknown
+	stale     bool      // silent for staleAfter: online flags are unknown
+	late      bool      // reports arrive lateAfter behind (until under lateClear)
 	// How far behind reports arrive: each report's hub time (LastSeen) against the local
 	// clock, relative to the report that arrived soonest since the snapshot (refAt, refSeen),
 	// so a clock difference between hub and TUI cancels out.
@@ -104,10 +112,13 @@ func (c *hubConn) noteReport(now time.Time, seen int64) {
 	if c.lag < 0 { // sooner than the reference: it becomes the reference
 		c.refAt, c.refSeen, c.lag = now, seen, 0
 	}
+	switch {
+	case c.lag >= lateAfter:
+		c.late = true
+	case c.lag < lateClear:
+		c.late = false
+	}
 }
-
-// behind reports whether reports arrive staleAfter or more late.
-func (c *hubConn) behind() bool { return c.lag >= staleAfter }
 
 // startStream opens the hub's stream off the UI goroutine.
 func (m model) startStream() tea.Cmd {
@@ -178,9 +189,6 @@ func (m model) applyBatch(evs []client.Event, done bool) (model, tea.Cmd) {
 		sortDevices(m.devs)
 		m.fixSelection()
 	}
-	if m.conn.behind() {
-		m.conn.stale = true
-	}
 	m.batching, m.owned, m.dirty = false, false, false
 	m.clampScroll()
 	cmds = append(cmds, m.sparkSeed())
@@ -234,7 +242,7 @@ func (m model) updateHub(msg tea.Msg) (model, tea.Cmd, bool) {
 		m.conn.ended, m.conn.connected = true, false
 		return m, nil, true
 	case hubTickMsg:
-		if m.conn.snapshot && (m.now().Sub(m.conn.lastEvent) >= staleAfter || m.conn.behind()) {
+		if m.conn.snapshot && m.now().Sub(m.conn.lastEvent) >= staleAfter {
 			m.conn.stale = true
 		}
 		seed := m.sparkSeed() // before m is returned: it marks the fetch in flight
@@ -299,7 +307,7 @@ func (m *model) apply(ev client.Event) {
 		}
 	case client.EventSnapshot:
 		m.conn.snapshot = true
-		m.conn.lag, m.conn.refAt = 0, time.Time{} // maybe another hub, or its clock moved
+		m.conn.lag, m.conn.late, m.conn.refAt = 0, false, time.Time{} // maybe another hub, or its clock moved
 		m.notice = ""
 		m.orderGen++
 		devs := make([]device, 0, len(ev.Devices))
@@ -603,12 +611,11 @@ func (m model) hubDashboard() string {
 		head += t.dim.Render(" · ") + m.alertsCount(n)
 	}
 	switch {
-	case m.conn.stale && m.conn.connected && m.conn.behind():
-		head += t.dim.Render(" · ") + t.warm.Render(fmt.Sprintf("the hub's data is %s behind: online state unknown",
-			m.conn.lag.Truncate(time.Second)))
 	case m.conn.stale:
 		head += t.dim.Render(" · ") + t.warm.Render(fmt.Sprintf("no word from the hub for %s: online state unknown",
 			m.now().Sub(m.conn.lastEvent).Truncate(time.Second)))
+	case m.conn.late && m.conn.connected:
+		head += t.dim.Render(" · ") + t.warm.Render(fmt.Sprintf("data %s behind: the link is slow", m.conn.lag.Truncate(time.Second)))
 	}
 	if len(m.devs) == 0 {
 		return head + "\n\n" +
@@ -815,10 +822,10 @@ func (m model) hubStatus() string {
 		return fmt.Sprintf("hub %s unreachable: %s · retrying in %s", m.hubHost(), errText(m.conn.err), retry)
 	case !m.conn.connected:
 		return "connecting to " + m.hubHost() + "…"
-	case m.conn.stale && m.conn.behind():
-		return "hub " + m.hubHost() + ": the link is too slow to keep up · waiting for it"
 	case m.conn.stale:
 		return "hub " + m.hubHost() + ": the stream has gone quiet · waiting for it"
+	case m.conn.late:
+		return "hub " + m.hubHost() + ": the link is too slow to keep up · showing the newest data it can"
 	}
 	full := "hub " + m.hubHost() + " · ←↑↓→ select · J/K move · R rename · D remove · a add · / filter · , settings"
 	if lipgloss.Width(full) <= m.width {
