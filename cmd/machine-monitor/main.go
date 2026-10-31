@@ -45,6 +45,7 @@ var commands = map[string]func(args []string, stdout, stderr io.Writer) int{
 	"hub":     runHub,
 	"agent":   runAgent,
 	"connect": runConnect,
+	"pair":    runPair,
 	"status":  runStatus,
 	"export":  runExport,
 	"service": runService,

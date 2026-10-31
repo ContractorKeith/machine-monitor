@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -13,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -46,9 +48,14 @@ func newTestHub(t *testing.T) *testHub {
 	return openTestHub(t, config.At(t.TempDir()), &clock{t: time.Date(2026, 10, 31, 12, 0, 30, 0, time.UTC)})
 }
 
-func openTestHub(t *testing.T, paths config.Paths, clk *clock) *testHub {
+// openTestHub opens a hub on paths; mods may change its Options first.
+func openTestHub(t *testing.T, paths config.Paths, clk *clock, mods ...func(*Options)) *testHub {
 	t.Helper()
-	h, err := New(Options{Paths: paths, Now: clk.Now, Hostname: "testbox", Location: time.UTC, Logf: t.Logf})
+	opt := Options{Paths: paths, Now: clk.Now, Hostname: "testbox", Location: time.UTC, Logf: t.Logf}
+	for _, m := range mods {
+		m(&opt)
+	}
+	h, err := New(opt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,10 +63,17 @@ func openTestHub(t *testing.T, paths config.Paths, clk *clock) *testHub {
 	return &testHub{Hub: h, t: t, clk: clk, paths: paths, h: h.Handler()}
 }
 
+// reqTimeout bounds every test request made with req.
+const reqTimeout = 10 * time.Second
+
 // req sends a request from 127.0.0.1 to Host 127.0.0.1:7777. key "" sends no key.
 func (th *testHub) req(method, path, key, body string, hdr ...string) *httptest.ResponseRecorder {
 	th.t.Helper()
-	r := httptest.NewRequest(method, path, strings.NewReader(body))
+	// A handler that should answer at once but streams instead (/api/stream with a broken
+	// key check) fails the test after reqTimeout rather than hanging it.
+	ctx, cancel := context.WithTimeout(context.Background(), reqTimeout)
+	defer cancel()
+	r := httptest.NewRequestWithContext(ctx, method, path, strings.NewReader(body))
 	r.RemoteAddr = "127.0.0.1:50000"
 	r.Host = "127.0.0.1:7777"
 	if key != "" {
@@ -497,9 +511,16 @@ func TestRateLimit(t *testing.T) {
 	if c := spoof(); c != 429 {
 		t.Errorf("X-Forwarded-For from a LAN peer dodged the limit: %d", c)
 	}
-	// From loopback (tailscale serve) the forwarded address is the client.
+	// Loopback is no exception: any local process could send X-Forwarded-For.
+	if w := th.req("GET", "/api/info", "", "", "X-Forwarded-For", "100.64.0.7"); w.Code != 429 {
+		t.Errorf("X-Forwarded-For from loopback dodged the limit with no trusted proxy: %d", w.Code)
+	}
+	// From a trusted proxy (tailscale serve) the forwarded address is the client.
+	th.mu.Lock()
+	th.cfg.extra = map[string]json.RawMessage{"trustedProxies": json.RawMessage(`["127.0.0.1"]`)}
+	th.mu.Unlock()
 	if w := th.req("GET", "/api/info", "", "", "X-Forwarded-For", "100.64.0.7"); w.Code != 200 {
-		t.Errorf("forwarded tailnet client: %d", w.Code)
+		t.Errorf("client forwarded by a trusted proxy: %d", w.Code)
 	}
 	// The key skips the limit; the limit resets after the window.
 	if w := th.keyed("GET", "/api/info", ""); w.Code != 200 {
@@ -975,5 +996,220 @@ func TestPlatformAlwaysSent(t *testing.T) {
 	b, _ := json.Marshal(Device{ID: "x"})
 	if !strings.Contains(string(b), `"platform":""`) {
 		t.Errorf("Device JSON %s has no platform key", b)
+	}
+}
+
+// ---- fix wave #45 ------------------------------------------------------------------------
+
+// A device that goes silent gets a "status" event as it crosses OfflineAfter, not at the
+// next heartbeat (up to StatusInterval later).
+func TestOfflineStatusSentAtOnce(t *testing.T) {
+	th := newTestHub(t)
+	srv := httptest.NewServer(th.h)
+	t.Cleanup(srv.Close)
+	s := openStream(t, srv, th.Token())
+	s.next("snapshot")
+	th.postReport("dev-1", nil)
+	s.next("report")
+
+	if d := th.checkOnline(); d != time.Second {
+		t.Errorf("next check in %v, want 1s (the cap)", d)
+	}
+	th.clk.Add(OfflineAfter - 300*time.Millisecond)
+	if d := th.checkOnline(); d != 300*time.Millisecond {
+		t.Errorf("next check in %v, want 300ms (when dev-1 crosses)", d)
+	}
+	th.clk.Add(300 * time.Millisecond)
+	th.checkOnline()
+	if st := s.next("status"); st["online"].(map[string]any)["dev-1"] != false {
+		t.Fatalf("status = %v", st)
+	}
+	// Nothing changed since: no further event until the heartbeat.
+	th.checkOnline()
+	select {
+	case m := <-s.ch:
+		t.Errorf("unexpected event %v", m)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// logs collects a hub's log lines.
+type logs struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (l *logs) Logf(format string, args ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+}
+
+func (l *logs) count(sub string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n := 0
+	for _, s := range l.lines {
+		if strings.Contains(s, sub) {
+			n++
+		}
+	}
+	return n
+}
+
+func TestUnreadableHistoryIsSkipped(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs Unix permissions and a non-root user")
+	}
+	paths := config.At(t.TempDir())
+	os.MkdirAll(paths.History, 0o700)
+	bad := paths.History + "/x1.ndjson"
+	if err := os.WriteFile(bad, []byte(`{"id":"x1","t":1}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	os.Chmod(bad, 0)
+	t.Cleanup(func() { os.Chmod(bad, 0o600) })
+	var l logs
+	th := openTestHub(t, paths, &clock{t: time.Unix(1e9, 0)}, func(o *Options) { o.Logf = l.Logf })
+	if l.count("x1.ndjson") != 1 {
+		t.Errorf("logs = %q, want the skipped file named once", l.lines)
+	}
+	th.postReport("dev-1", nil) // and the hub works
+}
+
+// With a read-only data directory the failed devices.json write is logged once and retried
+// less often, not every second.
+func TestUnwritableDevicesLoggedOnce(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs Unix permissions and a non-root user")
+	}
+	paths := config.At(t.TempDir())
+	var l logs
+	th := openTestHub(t, paths, &clock{t: time.Unix(1e9, 0)}, func(o *Options) { o.Logf = l.Logf })
+	os.Chmod(paths.Dir, 0o500)
+	t.Cleanup(func() { os.Chmod(paths.Dir, 0o700) })
+	th.postReport("dev-1", nil)
+	for deadline := time.Now().Add(5 * time.Second); l.count("save devices") == 0; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the failed save was never logged")
+		}
+	}
+	// Writable again: the next try waits saveRetryMin, not saveDelay, and then succeeds.
+	os.Chmod(paths.Dir, 0o700)
+	th.clk.Add(time.Second)
+	th.postReport("dev-1", nil)
+	time.Sleep(saveDelay + 500*time.Millisecond)
+	if _, err := os.Stat(paths.Devices); err == nil {
+		t.Error("retried after saveDelay; want it to back off to saveRetryMin")
+	}
+	for deadline := time.Now().Add(saveRetryMin + 3*time.Second); l.count("saved devices again") == 0; time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("never saved again: %q", l.lines)
+		}
+	}
+	if n := l.count("save devices"); n != 1 {
+		t.Errorf("failure logged %d times, want once: %q", n, l.lines)
+	}
+	if _, err := os.Stat(paths.Devices); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestSaveFailuresBackOff(t *testing.T) {
+	var l logs
+	th := openTestHub(t, config.At(t.TempDir()), &clock{t: time.Unix(1e9, 0)}, func(o *Options) { o.Logf = l.Logf })
+	for _, want := range []time.Duration{saveRetryMin, 2 * saveRetryMin, 4 * saveRetryMin} {
+		th.saved(errors.New("read-only file system"))
+		if th.saveBackoff != want {
+			t.Errorf("backoff %v, want %v", th.saveBackoff, want)
+		}
+	}
+	for range 10 {
+		th.saved(errors.New("read-only file system"))
+	}
+	if th.saveBackoff != saveRetryMax {
+		t.Errorf("backoff %v, want the cap %v", th.saveBackoff, saveRetryMax)
+	}
+	if n := l.count("read-only"); n != 1 {
+		t.Errorf("failure logged %d times, want once", n)
+	}
+	th.saved(nil)
+	th.saved(nil)
+	if th.saveFailing || l.count("saved devices again") != 1 {
+		t.Errorf("failing %v, logs %q", th.saveFailing, l.lines)
+	}
+}
+
+func TestSaveSkipsUnchangedRegistry(t *testing.T) {
+	th := newTestHub(t)
+	th.postReport("dev-1", nil)
+	if err := th.saveRegistry(); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(th.paths.Devices)
+	if err := th.saveRegistry(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(th.paths.Devices); err == nil {
+		t.Error("devices.json rewritten with nothing changed")
+	}
+	th.clk.Add(time.Second)
+	th.postReport("dev-1", nil) // LastSeen changes
+	if err := th.saveRegistry(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(th.paths.Devices); err != nil {
+		t.Errorf("devices.json not written after a change: %v", err)
+	}
+}
+
+// readCounter records whether a request body was read.
+type readCounter struct {
+	r    io.Reader
+	read atomic.Bool
+}
+
+func (c *readCounter) Read(p []byte) (int, error) { c.read.Store(true); return c.r.Read(p) }
+
+// A peer whose reports keep failing is refused before its next body is read.
+func TestFailedReportsLimited(t *testing.T) {
+	th := newTestHub(t)
+	post := func(remote, body string) (int, bool) {
+		rc := &readCounter{r: strings.NewReader(body)}
+		r := httptest.NewRequest("POST", "/api/report", rc)
+		r.RemoteAddr, r.Host = remote, "127.0.0.1:7777"
+		w := httptest.NewRecorder()
+		th.h.ServeHTTP(w, r)
+		return w.Code, rc.read.Load()
+	}
+	bad := `{"token":"wrong","id":"dev-1"}`
+	for i := range reportFailMax {
+		if code, _ := post("192.168.1.9:4000", bad); code != 401 {
+			t.Fatalf("bad report %d: %d", i+1, code)
+		}
+	}
+	if code, read := post("192.168.1.9:4000", bad); code != 429 || read {
+		t.Fatalf("over the budget: %d, body read %v; want 429 unread", code, read)
+	}
+	if code, _ := post("192.168.1.10:4000", bad); code != 401 {
+		t.Errorf("another address: %d", code)
+	}
+	if code, _ := post("192.168.1.9:4000", "{not json"); code != 429 {
+		t.Errorf("garbage over the budget: %d", code)
+	}
+	th.clk.Add(RateWindow + time.Second)
+	if code, _ := post("192.168.1.9:4000", th.agentReport("dev-1", nil)); code != 200 {
+		t.Errorf("after the window: %d", code)
+	}
+}
+
+func TestLocalKey(t *testing.T) {
+	paths := config.At(t.TempDir())
+	if _, err := LocalKey(paths); err == nil || !strings.Contains(err.Error(), "machine-monitor hub") {
+		t.Errorf("no config: %v", err)
+	}
+	th := openTestHub(t, paths, &clock{t: time.Unix(1e9, 0)})
+	if k, err := LocalKey(paths); err != nil || k != th.Token() {
+		t.Errorf("LocalKey = %q, %v; want %q", k, err, th.Token())
 	}
 }

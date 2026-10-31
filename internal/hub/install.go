@@ -20,6 +20,7 @@ import (
 	"net/netip"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -64,7 +65,7 @@ func (h *Hub) handleInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hubURL := h.hubURLFor(r)
-	if !installHostRE.MatchString(r.Host) {
+	if !installHost(r.Host) {
 		fail(http.StatusBadRequest, "unusable Host header")
 		return
 	}
@@ -125,8 +126,37 @@ func verifiedSums(ctx context.Context, tag string) (map[string]string, error) {
 	return s, nil
 }
 
-// installHostRE is what a Host may hold to be pasted into a script: a name or IP and port.
-var installHostRE = regexp.MustCompile(`^[A-Za-z0-9.\-]+(:[0-9]+)?$|^\[[0-9A-Fa-f:.%]+\](:[0-9]+)?$`)
+// installNameRE is a host name or IPv4 address, and zoneRE an IPv6 zone (interface name).
+var (
+	installNameRE = regexp.MustCompile(`^[A-Za-z0-9.\-]+$`)
+	zoneRE        = regexp.MustCompile(`^[A-Za-z0-9._~\-]+$`)
+)
+
+// installHost reports whether a Host header may be pasted into a script as the hub URL: a
+// name or IPv4 address, or a bracketed IPv6 address whose zone is written "%25zone" as URLs
+// require (RFC 6874), with an optional port 1-65535.
+func installHost(host string) bool {
+	name, port := host, ""
+	if i := strings.LastIndex(host, ":"); i >= 0 && !strings.HasSuffix(host, "]") {
+		name, port = host[:i], host[i+1:]
+		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 || port[0] == '0' {
+			return false
+		}
+	}
+	if inner, ok := strings.CutPrefix(name, "["); ok {
+		inner, ok = strings.CutSuffix(inner, "]")
+		if !ok {
+			return false
+		}
+		addr, zone, hasZone := strings.Cut(inner, "%25")
+		if hasZone && !zoneRE.MatchString(zone) || strings.Contains(addr, "%") {
+			return false
+		}
+		a, err := netip.ParseAddr(addr)
+		return err == nil && a.Is6()
+	}
+	return installNameRE.MatchString(name)
+}
 
 // hubURLFor is the hub origin as the client addressed it (the guard already checked Host).
 // Behind `tailscale serve` or another HTTPS proxy the request arrives with

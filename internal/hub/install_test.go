@@ -143,6 +143,36 @@ func TestInstallHubURL(t *testing.T) {
 	if w := th.req("GET", "/install.sh", th.Token(), "", "Host", "[::1]'x"); w.Code == 200 {
 		t.Fatalf("odd Host accepted: %d", w.Code)
 	}
+	// An IPv6 zone in URL form makes a working hub URL.
+	w := th.req("GET", "/install.sh", th.Token(), "", "Host", "[fe80::1%25eth0]:7777")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "HUB='http://[fe80::1%25eth0]:7777'") {
+		t.Fatalf("zoned IPv6 Host: %d\n%s", w.Code, w.Body)
+	}
+}
+
+func TestInstallHost(t *testing.T) {
+	for host, want := range map[string]bool{
+		"hub.lan": true, "hub.lan:7777": true, "192.168.1.5:65535": true, "[::1]": true, "[::1]:7777": true,
+		"[fe80::1%25eth0]:7777": true, "[fe80::1%25en0.5]": true,
+		"[fe80::1%a]":          false, // not URL form: http://[fe80::1%a] is not a valid URL
+		"[fe80::1%25]":         false,
+		"[fe80::1%25eth0%25x]": false,
+		"[fe80::1%25eth/0]":    false,
+		"127.0.0.1:99999999":   false,
+		"127.0.0.1:0":          false,
+		"127.0.0.1:":           false,
+		"127.0.0.1:07777":      false,
+		"fe80::1":              false, // IPv6 needs brackets
+		"[127.0.0.1]":          false,
+		"[::1":                 false,
+		"[::1]'x":              false,
+		"hub lan":              false,
+		"":                     false,
+	} {
+		if got := installHost(host); got != want {
+			t.Errorf("installHost(%q) = %v, want %v", host, got, want)
+		}
+	}
 }
 
 // A value with quotes in it can't end the string it is pasted into.
