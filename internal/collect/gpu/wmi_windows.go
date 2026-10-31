@@ -4,43 +4,27 @@ package gpu
 
 import (
 	"context"
-	"errors"
 
-	"github.com/yusufpapurcu/wmi"
+	"github.com/ContractorKeith/machine-monitor/internal/collect/wmiq"
 )
 
 // queryGeneric reads the GPU perf counter and video controller classes the generic GPU
-// probe needs.
+// probe needs, through the shared WMI worker.
 func queryGeneric(ctx context.Context) ([]gpuEngine, []gpuAdapterMemory, []videoController, error) {
 	var engines []gpuEngine
 	var mems []gpuAdapterMemory
 	var vcs []videoController
-	if err := query(ctx, "SELECT Name, UtilizationPercentage FROM Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine", &engines); err != nil {
+	if err := wmiq.Query(ctx, "SELECT Name, UtilizationPercentage FROM Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine", `root\cimv2`, &engines); err != nil {
 		return nil, nil, nil, err
 	}
-	if err := query(ctx, "SELECT Name, DedicatedUsage FROM Win32_PerfFormattedData_GPUPerformanceCounters_GPUAdapterMemory", &mems); err != nil {
+	if err := wmiq.Query(ctx, "SELECT Name, DedicatedUsage FROM Win32_PerfFormattedData_GPUPerformanceCounters_GPUAdapterMemory", `root\cimv2`, &mems); err != nil {
 		return nil, nil, nil, err
 	}
 	// Names are optional: without them GPUs are still reported, as "GPU".
-	_ = query(ctx, "SELECT Name, AdapterRAM FROM Win32_VideoController", &vcs)
+	_ = queryVideoControllers(ctx, &vcs)
 	return engines, mems, vcs, nil
 }
 
-// query runs a WMI query in root\cimv2, giving up when ctx is done. wmi has no
-// cancellation, so a hung query finishes in the background into a dst nobody reads.
-func query[T any](ctx context.Context, q string, dst *[]T) error {
-	var rows []T
-	done := make(chan error, 1)
-	go func() { done <- wmi.Query(q, &rows) }()
-	select {
-	case err := <-done:
-		var mismatch *wmi.ErrFieldMismatch
-		if err != nil && !errors.As(err, &mismatch) {
-			return err
-		}
-		*dst = rows
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+func queryVideoControllers(ctx context.Context, dst *[]videoController) error {
+	return wmiq.Query(ctx, "SELECT Name, AdapterRAM FROM Win32_VideoController", `root\cimv2`, dst)
 }

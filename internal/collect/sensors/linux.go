@@ -200,6 +200,9 @@ func (m *raplMeter) watts(sys string, now time.Time) *float64 {
 		}
 		d := c.energy - p.energy
 		if d < 0 {
+			if c.max <= 0 {
+				continue // wrapped, but with no known range there's no way to unwrap it
+			}
 			d += c.max
 		}
 		joules += d / 1e6

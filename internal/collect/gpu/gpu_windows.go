@@ -6,12 +6,15 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/ContractorKeith/machine-monitor/internal/collect"
 )
 
 func init() {
-	collect.Register(collect.Probe{Name: "gpu/windows", Run: func(ctx context.Context) (collect.Apply, error) {
+	// WMI is slow (GPUEngine alone can take seconds), so check every 5th sample with room
+	// to finish; the collector repeats the last result in between.
+	collect.Register(collect.Probe{Name: "gpu/windows", Every: 5, Timeout: 10 * time.Second, Run: func(ctx context.Context) (collect.Apply, error) {
 		smi := findTool("nvidia-smi", filepath.Join(os.Getenv("SystemRoot"), "System32", "nvidia-smi.exe"))
 		return runWindows(ctx, smi, queryGeneric)
 	}})

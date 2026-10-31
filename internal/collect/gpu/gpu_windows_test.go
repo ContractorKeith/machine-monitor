@@ -33,11 +33,36 @@ func TestRunWindowsGenericFallback(t *testing.T) {
 	}
 }
 
-// TestQueryGenericLive runs the real WMI queries; any machine with a GPU driver answers.
-func TestQueryGenericLive(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+// TestQueryVideoControllersLive checks the WMI class and property names against a real
+// machine: every Windows install, CI's included, has at least one video controller.
+func TestQueryVideoControllersLive(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if _, _, _, err := queryGeneric(ctx); err != nil {
+	var vcs []videoController
+	if err := queryVideoControllers(ctx, &vcs); err != nil {
+		t.Fatal(err)
+	}
+	if len(vcs) == 0 {
+		t.Fatal("Win32_VideoController returned no rows")
+	}
+	named := false
+	for _, vc := range vcs {
+		t.Logf("video controller %q, AdapterRAM %d", vc.Name, vc.AdapterRAM)
+		named = named || vc.Name != ""
+	}
+	if !named {
+		t.Errorf("every row decoded with an empty Name: %+v", vcs)
+	}
+}
+
+// TestQueryGenericLive runs the real GPU perf counter queries. CI VMs may lack the
+// counters, so an error skips, but it must come back within the deadline.
+func TestQueryGenericLive(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	engines, mems, _, err := queryGeneric(ctx)
+	if err != nil {
 		t.Skipf("GPU perf counters unavailable: %v", err)
 	}
+	t.Logf("%d GPU engines, %d adapter memory rows", len(engines), len(mems))
 }

@@ -113,6 +113,19 @@ func TestRAPL(t *testing.T) {
 	if w := m.watts(writeTree(t, zone("50000000")), t0.Add(time.Second)); w == nil || *w != 50.3 {
 		t.Errorf("wrapped watts = %v, want 50.3", w)
 	}
+	// A wrap with an unreadable max_energy_range_uj can't be unwrapped: skip the zone, never
+	// report negative watts.
+	noMax := func(e string) map[string]string {
+		return map[string]string{"class/powercap/intel-rapl:0/name": "package-0", "class/powercap/intel-rapl:0/energy_uj": e}
+	}
+	m = raplMeter{}
+	m.watts(writeTree(t, noMax("262143000000")), t0)
+	if w := m.watts(writeTree(t, noMax("50000000")), t0.Add(time.Second)); w != nil {
+		t.Errorf("wrap without max = %v, want nil", *w)
+	}
+	if w := m.watts(writeTree(t, noMax("80000000")), t0.Add(2*time.Second)); w == nil || *w != 30 {
+		t.Errorf("after wrap without max = %v, want 30", w)
+	}
 	// Unreadable energy_uj (root-only): nil, never 0.
 	m = raplMeter{}
 	empty := t.TempDir()

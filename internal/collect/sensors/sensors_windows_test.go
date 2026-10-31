@@ -28,3 +28,15 @@ func TestQueriesLive(t *testing.T) {
 	_ = queryLHM(ctx)
 	_ = queryThermalZones(ctx)
 }
+
+func TestQueryLHMStopsWhenDone(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	if rows := queryLHM(ctx); rows != nil {
+		t.Errorf("cancelled ctx returned %d rows", len(rows))
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("queryLHM took %v with a cancelled ctx", d)
+	}
+}
