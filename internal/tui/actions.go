@@ -93,6 +93,7 @@ func (m model) updateActions(msg tea.Msg) (model, tea.Cmd, bool) {
 			m.act.supported = &msg.p.Supported
 			m.procs = nil
 			if msg.p.Procs != nil {
+				cleanAll(&msg.p.Procs.List)
 				m.procs = msg.p.Procs.List
 				if m.procs == nil {
 					m.procs = []report.Process{}
@@ -110,7 +111,7 @@ func (m model) updateActions(msg tea.Msg) (model, tea.Cmd, bool) {
 		return m, m.fetchRemoteProcs(msg.gen, m.act.procsDev), true
 	case actionMsg:
 		if msg.err != nil {
-			m.notice = msg.action + " failed: " + msg.err.Error()
+			m.notice = msg.action + " failed: " + hubErr(msg.err)
 		} else if msg.action == "wake" {
 			m.notice = "Wake-up signal sent to " + msg.name + "."
 		} else {
@@ -131,7 +132,7 @@ func (m model) remoteProcsNote() string {
 	case m.actionHub() == nil:
 		return t.dim.Render("Process lists for devices on a hub are not available.")
 	case m.procsErr != nil:
-		return t.err.Render("process list: " + m.procsErr.Error())
+		return t.err.Render("process list: " + hubErr(m.procsErr))
 	case !d.online:
 		return t.dim.Render(d.name + " is offline.")
 	case m.act.supported != nil && !*m.act.supported:

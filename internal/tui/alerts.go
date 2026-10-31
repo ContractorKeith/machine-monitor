@@ -10,10 +10,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
+	"net"
+	"net/url"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"charm.land/bubbles/v2/key"
@@ -129,6 +134,7 @@ func (m model) updateAlerts(msg tea.Msg) (model, tea.Cmd, bool) {
 			m.al.loaded = true
 			m.al.active, m.al.priceSet = msg.a.Active, msg.a.PriceSet
 			m.setRules(msg.a.Settings)
+			cleanAll(&msg.a)
 			m.al.events = msg.a.Events
 			if len(m.al.events) > maxAlertLog {
 				m.al.events = m.al.events[:maxAlertLog]
@@ -169,6 +175,7 @@ func (m *model) applyAlert(ev client.Event) tea.Cmd {
 	if json.Unmarshal(ev.Raw, &msg) != nil {
 		return nil
 	}
+	cleanAll(&msg)
 	if msg.Active != nil {
 		m.al.active = msg.Active
 	}
@@ -217,13 +224,33 @@ func (m *model) setRules(s alerts.Settings) {
 	m.clampAlerts()
 }
 
-// hubErr is an error for the footer: just the hub's own sentence for a refused request.
+// hubErr turns an error into a sentence for the footer: the hub's own message for a refused
+// request, a plain-words reason for the usual network failures, never Go's "Get \"url\": dial
+// tcp …". Whatever is left is cleaned of control characters.
 func hubErr(err error) string {
 	var se *client.StatusError
 	if errors.As(err, &se) && se.Message != "" {
-		return se.Message
+		return clean(se.Message)
 	}
-	return err.Error()
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		err = ue.Err
+	}
+	var dns *net.DNSError
+	text := err.Error()
+	switch {
+	case errors.Is(err, syscall.ECONNREFUSED), strings.Contains(text, "refused"):
+		return "the hub isn't accepting connections (is it running?)"
+	case errors.As(err, &dns):
+		return "can't find the hub's address"
+	case errors.Is(err, context.DeadlineExceeded), os.IsTimeout(err), strings.Contains(text, "went quiet"):
+		return "the hub didn't answer in time"
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF), strings.Contains(text, "stream ended"):
+		return "the hub closed the connection"
+	case strings.Contains(text, "no route to host"), strings.Contains(text, "network is unreachable"):
+		return "no route to the hub"
+	}
+	return clean(text)
 }
 
 // testResult says how a test alert's deliveries went.

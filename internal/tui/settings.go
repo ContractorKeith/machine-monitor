@@ -328,7 +328,7 @@ func (m *model) saveLocal() {
 		p.Price = loadPrefs(m.opts.PrefsPath).Price // keep local mode's price
 	}
 	if err := savePrefs(m.opts.PrefsPath, p); err != nil {
-		m.set.notice = sentence("Couldn't save the settings on this machine: " + err.Error())
+		m.set.notice = sentence("Couldn't save the settings on this machine: " + hubErr(err))
 	}
 }
 

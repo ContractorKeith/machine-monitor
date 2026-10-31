@@ -376,7 +376,7 @@ func TestHubEvents(t *testing.T) {
 
 	// Disconnected: the footer says so, and the cards stay until a fresh snapshot.
 	m = run(t, m, hubMsg{client.Event{Type: client.EventDisconnected, Err: errors.New("connection refused"), Retry: 4 * time.Second}})
-	if s := m.hubStatus(); !strings.Contains(s, "unreachable: connection refused · retrying in 4s") {
+	if s := m.hubStatus(); !strings.Contains(s, "unreachable: the hub isn't accepting connections (is it running?) · retrying in 4s") {
 		t.Errorf("footer = %q", s)
 	}
 	m = run(t, m, hubMsg{client.Event{Type: client.EventSnapshot, Devices: devs[:1]}})

@@ -26,17 +26,19 @@ Usage:
   machine-monitor hub --show-key             print this machine's hub key
   machine-monitor pair [--port 7777]         on the hub: show a code for connect to pair with
   machine-monitor agent --hub URL            report this machine to a hub
-  machine-monitor connect [URL]              pair with a hub (finds LAN hubs if no URL), open the TUI
+  machine-monitor connect [--code C] [--key-stdin] [--no-tui] [URL]
+                                             pair with a hub (finds LAN hubs if no URL), open the TUI
   machine-monitor status --json              print one report
   machine-monitor export ID|NAME --range 7d  export a device's history
   machine-monitor service install|uninstall  start at login
-  machine-monitor update                     update to the latest release
+  machine-monitor update [--check]           update to the latest release (--check only looks)
   machine-monitor help                       show this help
 
 Flags:
   --version   print the version
   --hub URL   hub to connect the TUI to
-  --key KEY   the hub's key (default: the one client.json holds for that hub)
+  --key KEY   the hub's key (default: the one client.json holds for that hub). It shows in
+              the process list: prefer MACHINE_MONITOR_KEY in the environment
   --ascii     ASCII bars and charts instead of braille (also MACHINE_MONITOR_ASCII=1)
 
 The TUI respects NO_COLOR.
@@ -81,9 +83,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	rest := fs.Args()
 	if len(rest) == 0 {
 		if *hub != "" {
-			return runConnected(*hub, *key, tui.OptionsFromEnv(tui.Options{ASCII: *ascii}), stderr)
+			return runConnected(*hub, keyArg(*key, stderr), tuiOptions(tui.Options{ASCII: *ascii}), stderr)
 		}
-		return runTUI(tui.OptionsFromEnv(tui.Options{ASCII: *ascii}), stderr)
+		return runTUI(tuiOptions(tui.Options{ASCII: *ascii}), stderr)
 	}
 	name, rest := rest[0], rest[1:]
 	if name == "help" {
@@ -100,7 +102,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			rest = append([]string{"--hub", *hub}, rest...)
 		}
 		if *key != "" {
-			rest = append([]string{"--key", *key}, rest...)
+			rest = append([]string{"--key", *key}, rest...) // export warns about it
 		}
 	}
 	return cmd(rest, stdout, stderr)

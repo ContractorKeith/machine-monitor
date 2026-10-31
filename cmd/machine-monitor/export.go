@@ -8,8 +8,10 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
+	"github.com/ContractorKeith/machine-monitor/internal/agent"
 	"github.com/ContractorKeith/machine-monitor/internal/config"
 	"github.com/ContractorKeith/machine-monitor/internal/export"
 )
@@ -70,14 +72,18 @@ func runExport(args []string, stdout, stderr io.Writer) int {
 		return fail(err)
 	}
 	var src export.Source = export.Local{Dir: paths.History, DevicesFile: paths.Devices, Now: exportNow}
+	key := ""
 	if *hubURL != "" {
+		if _, linkKey, err := agent.NormalizeURL(*hubURL); err == nil && linkKey != "" {
+			fmt.Fprintf(stderr, "machine-monitor export: %v\n", agent.ErrKeyInURL)
+			return 2
+		}
 		u, err := export.HubURL(*hubURL)
 		if err != nil {
 			return fail(err)
 		}
-		key := *keyFlag
-		if key == "" {
-			if key, err = export.KeyFor(paths.Client, u); err != nil {
+		if key = keyArg(*keyFlag, stderr); key == "" {
+			if key, err = savedKey(paths.Client, u); err != nil {
 				return fail(err)
 			}
 		}
@@ -89,14 +95,38 @@ func runExport(args []string, stdout, stderr io.Writer) int {
 	w := bufio.NewWriter(stdout)
 	id, err := export.ResolveDevice(ctx, src, ids[0])
 	if err != nil {
-		return fail(err)
+		return fail(lockedWithKey(err, *hubURL, key))
 	}
 	opts := export.Options{ID: id, From: start, To: end, Format: *format, Loc: time.Local}
 	if err := export.Run(ctx, src, opts, w); err != nil {
-		return fail(err)
+		return fail(lockedWithKey(err, *hubURL, key))
 	}
 	if err := w.Flush(); err != nil {
 		return fail(err)
 	}
 	return 0
+}
+
+// savedKey is the key client.json holds for hub u. "localhost" and the loopback addresses
+// are the same hub, so a client.json that says 127.0.0.1 serves --hub localhost too.
+func savedKey(clientPath, u string) (string, error) {
+	key, err := export.KeyFor(clientPath, u)
+	if key != "" || err != nil || !strings.Contains(u, "localhost") {
+		return key, err
+	}
+	for _, loop := range []string{"127.0.0.1", "[::1]"} {
+		if key, err = export.KeyFor(clientPath, strings.Replace(u, "localhost", loop, 1)); key != "" || err != nil {
+			return key, err
+		}
+	}
+	return "", nil
+}
+
+// lockedWithKey rewrites export's "locked and this machine has no key" when a key was sent
+// and the hub still refused it: the key is wrong, not missing.
+func lockedWithKey(err error, hub, key string) error {
+	if key != "" && strings.Contains(err.Error(), "is locked and this machine has no key") {
+		return fmt.Errorf("the hub at %s refused the key. Check it with the one the hub prints (machine-monitor hub --show-key), or pair again: machine-monitor connect %s", hub, hub)
+	}
+	return err
 }

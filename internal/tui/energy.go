@@ -152,7 +152,7 @@ func (m model) energyFooter() string {
 		s += fmt.Sprintf(" · %d–%d of %d", m.ev.scroll+1, min(n, m.ev.scroll+h), n)
 	}
 	if m.ev.err != nil && m.ev.data != nil {
-		s = "energy: " + m.ev.err.Error() + " · " + s
+		s = "energy: " + hubErr(m.ev.err) + " · " + s
 	}
 	return s
 }
@@ -218,7 +218,7 @@ func (m model) energyLines() []string {
 		return append(lines, "", t.dim.Render("Energy is not available here."))
 	}
 	if m.ev.err != nil && m.ev.data == nil {
-		return append(lines, "", t.err.Render("energy: "+m.ev.err.Error()))
+		return append(lines, "", t.err.Render("energy: "+hubErr(m.ev.err)))
 	}
 
 	price, guessed := m.priceSettings()

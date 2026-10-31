@@ -7,8 +7,14 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,6 +40,7 @@ type addState struct {
 	busy   bool
 	url    string // the hub address other machines use
 	sh, ps string // the one-line installs
+	theirs bool   // an upstream (Electron) hub: other pairing limits, a bash installer
 	notice string
 	shown  bool // the install lines show the key (s); hidden until asked, for screen sharing
 	paired bool // a device used the code
@@ -45,6 +52,8 @@ type pairMsg struct {
 	code *client.PairCode
 	info *client.Info
 	err  error
+	// theirs is true when the hub is upstream's server.js rather than machine-monitor.
+	theirs bool
 }
 
 // pairHub is the hub's pairing API, or nil.
@@ -78,7 +87,7 @@ func (m *model) newCode() tea.Cmd {
 			return pairMsg{err: err}
 		}
 		info, _ := ph.Info(ctx) // without it the installs use the address this TUI uses
-		return pairMsg{code: code, info: info}
+		return pairMsg{code: code, info: info, theirs: isUpstream(ctx, ph)}
 	})
 }
 
@@ -92,8 +101,12 @@ func (m model) updateAdd(msg tea.Msg) (model, tea.Cmd, bool) {
 	if msg2.err == nil {
 		m.add.code = msg2.code
 		ph := m.pairHub()
-		m.add.url = ph.InstallURL(msg2.info)
+		m.add.url = hubOwnPort(ph.InstallURL(msg2.info), m.hubHost(), msg2.info)
 		m.add.sh, m.add.ps = ph.InstallCommands(m.add.url)
+		m.add.theirs = msg2.theirs
+		if m.add.theirs { // upstream's install.sh starts with #!/usr/bin/env bash
+			m.add.sh = strings.TrimSuffix(m.add.sh, "| sh") + "| bash"
+		}
 	}
 	return m, nil, true
 }
@@ -173,8 +186,8 @@ func (m model) addView() string {
 		lines = append(lines,
 			t.label.Render("Pairing code:")+" "+style.Render(code)+"   "+status,
 			"On the new device, run: machine-monitor connect "+m.add.url,
-			t.dim.Render(fmt.Sprintf("and type the code. It works once, for %.0f minutes, with %d tries per device.",
-				hub.PairTTL.Minutes(), hub.PairTries)))
+			t.dim.Render(m.pairLimits()),
+			t.dim.Render("That only lets it watch. To make it report here, also run machine-monitor agent on it (service install --role agent starts it at login)."))
 	}
 	if m.add.sh != "" {
 		sh, ps := m.add.sh, m.add.ps
@@ -191,6 +204,66 @@ func (m model) addView() string {
 		lines = append(lines, "", m.add.notice)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// pairLimits says how long a code lives and how many wrong guesses it allows. Upstream's
+// hub counts 5 tries for everyone together; ours gives each device its own 5.
+func (m model) pairLimits() string {
+	if m.add.theirs {
+		return fmt.Sprintf("and type the code. It works once, for %.0f minutes, and dies after %d wrong tries in all.",
+			hub.PairTTL.Minutes(), hub.PairTries)
+	}
+	return fmt.Sprintf("and type the code. It works once, for %.0f minutes, with %d tries per device.",
+		hub.PairTTL.Minutes(), hub.PairTries)
+}
+
+// hubOwnPort gives other machines the port the hub says it listens on when the TUI reaches
+// it on loopback, through a port forward: the LAN address InstallURL picked is the hub's, so
+// its port is too. A non-loopback connection address is kept as it is.
+func hubOwnPort(raw, connectedTo string, info *client.Info) string {
+	if info == nil || info.Port <= 0 {
+		return raw
+	}
+	host, _, err := net.SplitHostPort(connectedTo)
+	if ip := net.ParseIP(host); err != nil || !(ip != nil && ip.IsLoopback() || strings.EqualFold(host, "localhost")) {
+		return raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	if h := u.Hostname(); net.ParseIP(h) != nil && net.ParseIP(h).IsLoopback() || strings.EqualFold(h, "localhost") {
+		return raw // nothing better than loopback to offer
+	}
+	u.Host = net.JoinHostPort(u.Hostname(), strconv.Itoa(info.Port))
+	return u.String()
+}
+
+// isUpstream reports whether the hub is upstream's server.js: its open /api/info (asked at
+// the address this TUI already reaches it on, no key sent) doesn't say impl
+// "machine-monitor". A hub that can't give its URL or doesn't answer counts as ours.
+func isUpstream(ctx context.Context, ph PairHub) bool {
+	u, ok := ph.(interface{ URL() string })
+	if !ok {
+		return false
+	}
+	hubURL := u.URL()
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(hubURL, "/")+"/api/info", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	var body struct{ Impl string }
+	if json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&body) != nil {
+		return false
+	}
+	return body.Impl != "machine-monitor"
 }
 
 // wrapCmd indents a command and breaks it to the window's width, so all of it shows; c and p

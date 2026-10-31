@@ -114,6 +114,8 @@ func TestRemoteProcesses(t *testing.T) {
 		t.Errorf("filter on a remote list: %d rows", len(v))
 	}
 
+	m = runActs(t, m, keyMsg("esc")) // the one filter would hide every device from the dashboard
+
 	// The poll goes on while the view is open and stops when it closes.
 	gen := m.act.procsGen
 	next, cmd := m.Update(remoteTickMsg{gen})
