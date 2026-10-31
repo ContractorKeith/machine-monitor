@@ -138,7 +138,7 @@ func newFakeHub(devs []client.Device) *fakeHub {
 }
 
 func hubOptions(f *fakeHub) Options {
-	return Options{Hub: f, Interval: time.Hour, Now: func() time.Time { return hubNow }}
+	return Options{Hub: f, Interval: time.Hour, Now: func() time.Time { return hubNow }, Location: time.UTC} // "today" is a local day
 }
 
 // synced is true once the hub's snapshot is in, and the header's cost today when the hub
