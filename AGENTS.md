@@ -8,9 +8,10 @@ and Linux. It is a clean-room Go reimplementation of the ideas in
 feature-parity matrix in `docs/PLAN.md` shipped on all three OSes.
 
 ## Status
-Through M4 plus M5 history/export and M8: collectors, local and connected TUI, hub, agent and
-pairing, history, power, alerts, discovery, tailscale, `service`, hub-served installers
-(`/install.sh`, `/install.ps1`), `update`, and signed goreleaser releases (`release.yml`).
+M0–M8 built: collectors, local and connected TUI (dashboard, device, processes, history,
+energy, alerts), hub, agent and pairing, history, power, alerts, discovery and Wake-on-LAN,
+signed power actions, tailscale, export, `service`, installers, `update`, signed releases.
+Not yet: a first tagged release, the PLAN §8 manual and VM checks, and the open issues.
 Last touched 2026-10-31.
 
 ## Pointers

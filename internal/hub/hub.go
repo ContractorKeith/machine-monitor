@@ -52,6 +52,9 @@ type Options struct {
 	// Collector samples this machine so the hub monitors itself, as upstream's hub runs its
 	// own agent. nil turns self-monitoring off.
 	Collector collect.Collector
+	// Agent is stamped on the hub's own reports, as agents stamp theirs, e.g.
+	// "machine-monitor/1.0.0". Empty leaves it unset.
+	Agent string
 	// Procs lists this machine's processes, added to its own report while a viewer has its
 	// Processes open (procs.go). nil never lists them.
 	Procs func(ctx context.Context) ([]report.Process, error)
