@@ -10,7 +10,7 @@ import (
 )
 
 // built lists the commands that are no longer stubs; each has its own test.
-var built = map[string]bool{"status": true}
+var built = map[string]bool{"status": true, "hub": true}
 
 type runCase struct {
 	args        []string
@@ -30,6 +30,8 @@ func TestRun(t *testing.T) {
 		{[]string{"--hub", "http://h:7777"}, 2, "", "--hub: not built yet"},
 		{[]string{"nope"}, 2, "", `unknown command "nope"`},
 		{[]string{"--bogus"}, 2, "", "flag provided but not defined"},
+		{[]string{"hub", "x"}, 2, "", `hub: unexpected argument "x"`},
+		{[]string{"hub", "--port", "0"}, 2, "", "hub: bad port 0"},
 	}
 	for name := range commands {
 		if built[name] {
