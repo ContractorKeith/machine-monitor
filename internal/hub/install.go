@@ -1,7 +1,7 @@
 package hub
 
-// Agent installers (PLAN §3 row 33): GET /install.sh and GET /install.ps1, key required, as
-// upstream. Each returns a script that downloads the release this hub runs from GitHub,
+// Agent installers (PLAN §3 row 33): GET /install.sh and GET /install.ps1, key required and
+// rate-limited, as upstream. Every refusal is itself a script that prints why and exits 1. Each returns a script that downloads the release this hub runs from GitHub,
 // checks it against a SHA-256 the hub pins into the script, installs it under the user's
 // home, pairs (saves the key in client.json) and installs the agent service.
 //
@@ -57,6 +57,11 @@ func (h *Hub) handleInstall(w http.ResponseWriter, r *http.Request) {
 		} else {
 			sendText(w, status, "echo '"+shQuote("machine-monitor install: "+msg)+"' >&2; exit 1\n")
 		}
+	}
+	// Key required, as upstream; refused with a script so `| sh` and `| iex` fail loudly.
+	if !h.authorized(r) {
+		fail(http.StatusUnauthorized, "the hub key is missing or wrong; copy the install command from the hub again")
+		return
 	}
 	hubURL := h.hubURLFor(r)
 	if !installHostRE.MatchString(r.Host) {

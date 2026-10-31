@@ -19,7 +19,7 @@ installs it in your home directory, pairs with the hub and starts the agent at l
 Linux and macOS (installs to `~/.local/bin`):
 
 ```sh
-curl -fsSL --fail-with-body -H "Authorization: Bearer HUB_KEY" http://HUB:7777/install.sh | sh
+curl -sSL --fail-with-body -H "Authorization: Bearer HUB_KEY" http://HUB:7777/install.sh | sh
 ```
 
 Windows PowerShell 5.1 or 7 (installs to `%LOCALAPPDATA%\Programs\machine-monitor`):
@@ -29,8 +29,18 @@ irm -Headers @{Authorization='Bearer HUB_KEY'} http://HUB:7777/install.ps1 | iex
 ```
 
 `HUB_KEY` is the key the hub prints when it starts. The hub must be a release build, not one
-you built yourself. Keep `--fail-with-body`: it passes the hub's error message to `sh`, so a
-refused install fails loudly instead of silently doing nothing.
+you built yourself.
+
+Keep `--fail-with-body` and don't add `-f`: macOS curl refuses the two together. With it,
+the hub's refusals (wrong key, unverifiable release) reach `sh` as a script that prints why
+and exits 1, and every step inside the script exits non-zero on failure. If curl itself fails
+before any script arrives (no network, or curl older than 7.76, such as Ubuntu 20.04, which
+doesn't know `--fail-with-body`), `sh` receives nothing and the pipeline exits 0 after
+curl's error. To get a reliable exit status there, download first:
+
+```sh
+curl -fsSL -H "Authorization: Bearer HUB_KEY" -o install.sh http://HUB:7777/install.sh && sh install.sh
+```
 
 Behind an HTTPS proxy such as `tailscale serve`, list the proxy's address in the hub's
 `config.json` as `"trustedProxies": ["127.0.0.1", "::1"]` so the installer links to the

@@ -120,6 +120,13 @@ func (r *Release) Set(name string, data []byte) {
 	r.files[name] = data
 }
 
+// Remove stops serving a file (it 404s), leaving checksums.txt as it is.
+func (r *Release) Remove(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.files, name)
+}
+
 // Sign writes checksums.txt.sigstore.json: a leaf certificate for identity issued by caCert,
 // and its signature over the current checksums.txt.
 func (r *Release) Sign(identity string, caKey *ecdsa.PrivateKey, caCert *x509.Certificate) {

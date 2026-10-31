@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -19,8 +20,10 @@ import (
 
 // fakeBinary stands in for machine-monitor: it records each call's arguments.
 // connect also records what it read on stdin.
+// FAKE_FAIL=<command> makes that command exit 3.
 const fakeBinary = "#!/bin/sh\necho \"$*\" >> \"$HOME/calls.log\"\n" +
-	"if [ \"$1\" = connect ]; then cat >> \"$HOME/stdin.log\"; fi\n"
+	"if [ \"$1\" = connect ]; then cat >> \"$HOME/stdin.log\"; fi\n" +
+	"if [ \"$1\" = \"${FAKE_FAIL:-}\" ]; then exit 3; fi\n"
 
 // withRelease points the installers at a fake release of version.
 func withRelease(t *testing.T, version string) *updatetest.Release {
@@ -159,13 +162,21 @@ func TestFillTemplateQuoting(t *testing.T) {
 	}
 }
 
-// installRun is the documented one-liner, curl ... | bash, against a live hub, in a temp HOME.
+// The documented ways to run install.sh: the one-liner, and the download-first form for
+// curl older than 7.76 (no --fail-with-body). Both use $KEY and $URL.
+const (
+	oneLiner      = `curl -sSL --fail-with-body -H "Authorization: Bearer $KEY" "$URL/install.sh" | sh`
+	downloadFirst = `curl -fsSL -H "Authorization: Bearer $KEY" -o install.sh "$URL/install.sh" && sh install.sh`
+)
+
+// installRun runs the one-liner with the hub's key against a live hub, in a temp HOME.
 func installRun(t *testing.T, th *testHub) (home, hubURL string, out []byte, err error) {
-	return installRunKey(t, th, th.Token())
+	return installRunWith(t, th, th.Token(), oneLiner)
 }
 
-// installRunKey is installRun with the given key in the Authorization header.
-func installRunKey(t *testing.T, th *testHub, key string) (home, hubURL string, out []byte, err error) {
+// installRunWith runs command (oneLiner or downloadFirst) with key; extra is added to the
+// environment.
+func installRunWith(t *testing.T, th *testHub, key, command string, extra ...string) (home, hubURL string, out []byte, err error) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("install.sh is for Linux and macOS")
@@ -182,10 +193,10 @@ func installRunKey(t *testing.T, th *testHub, key string) (home, hubURL string, 
 	os.Mkdir(tmp, 0o700)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "bash", "-c", `curl -fsSL --fail-with-body -H "Authorization: Bearer $KEY" "$URL/install.sh" | sh`)
+	cmd := exec.CommandContext(ctx, "bash", "-c", command)
 	cmd.Dir = home
-	cmd.Env = []string{"HOME=" + home, "TMPDIR=" + tmp, "PATH=" + os.Getenv("PATH"),
-		"KEY=" + key, "URL=" + srv.URL}
+	cmd.Env = append([]string{"HOME=" + home, "TMPDIR=" + tmp, "PATH=" + os.Getenv("PATH"),
+		"KEY=" + key, "URL=" + srv.URL}, extra...)
 	out, err = cmd.CombinedOutput()
 	if left, _ := os.ReadDir(tmp); len(left) > 0 {
 		t.Errorf("installer left %d temp entries", len(left))
@@ -193,34 +204,50 @@ func installRunKey(t *testing.T, th *testHub, key string) (home, hubURL string, 
 	return home, srv.URL, out, err
 }
 
+// wantFailure checks that an install exited non-zero, said msg, and left no binary behind.
+func wantFailure(t *testing.T, what, home string, out []byte, err error, msg string) {
+	t.Helper()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() == 0 {
+		t.Errorf("%s: want a non-zero exit, got %v\n%s", what, err, out)
+	}
+	if !strings.Contains(string(out), msg) {
+		t.Errorf("%s: output lacks %q:\n%s", what, msg, out)
+	}
+	if _, err := os.Stat(filepath.Join(home, "pwned")); err == nil {
+		t.Errorf("%s: a tampered binary ran", what)
+	}
+}
+
 func TestInstallShEndToEnd(t *testing.T) {
 	withRelease(t, "1.2.3")
 	th := newTestHub(t)
-	home, hub, out, err := installRun(t, th)
-	if err != nil {
-		t.Fatalf("installer failed: %v\n%s", err, out)
+	for _, form := range []string{oneLiner, downloadFirst} {
+		home, hub, out, err := installRunWith(t, th, th.Token(), form)
+		if err != nil {
+			t.Fatalf("%s: installer failed: %v\n%s", form, err, out)
+		}
+		bin := filepath.Join(home, ".local", "bin", "machine-monitor")
+		b, err := os.ReadFile(bin)
+		if err != nil || string(b) != fakeBinary {
+			t.Fatalf("installed binary %q, %v", b, err)
+		}
+		if fi, _ := os.Stat(bin); fi.Mode().Perm()&0o111 == 0 {
+			t.Fatalf("binary not executable: %v", fi.Mode())
+		}
+		calls, _ := os.ReadFile(filepath.Join(home, "calls.log"))
+		want := "connect --no-agent --key-stdin " + hub + "\n" +
+			"service install --role agent --hub " + hub + "\n"
+		if string(calls) != want {
+			t.Fatalf("binary called with\n%s\nwant\n%s\ninstaller output:\n%s", calls, want, out)
+		}
+		if in, _ := os.ReadFile(filepath.Join(home, "stdin.log")); string(in) != th.Token()+"\n" {
+			t.Fatalf("connect read %q on stdin, want the key", in)
+		}
+		if strings.Contains(string(calls), th.Token()) {
+			t.Fatal("the key is in the binary's arguments")
+		}
 	}
-	bin := filepath.Join(home, ".local", "bin", "machine-monitor")
-	b, err := os.ReadFile(bin)
-	if err != nil || string(b) != fakeBinary {
-		t.Fatalf("installed binary %q, %v", b, err)
-	}
-	if fi, _ := os.Stat(bin); fi.Mode().Perm()&0o111 == 0 {
-		t.Fatalf("binary not executable: %v", fi.Mode())
-	}
-	calls, _ := os.ReadFile(filepath.Join(home, "calls.log"))
-	want := "connect --no-agent --key-stdin " + hub + "\n" +
-		"service install --role agent --hub " + hub + "\n"
-	if string(calls) != want {
-		t.Fatalf("binary called with\n%s\nwant\n%s\ninstaller output:\n%s", calls, want, out)
-	}
-	if in, _ := os.ReadFile(filepath.Join(home, "stdin.log")); string(in) != th.Token()+"\n" {
-		t.Fatalf("connect read %q on stdin, want the key", in)
-	}
-	if strings.Contains(string(calls), th.Token()) {
-		t.Fatal("the key is in the binary's arguments")
-	}
-
 	// Running it again replaces the binary in place.
 	if _, _, out, err := installRun(t, th); err != nil {
 		t.Fatalf("second install: %v\n%s", err, out)
@@ -236,32 +263,58 @@ func TestInstallShRefusesBadChecksum(t *testing.T) {
 	}
 	th := newTestHub(t)
 	home, _, out, err := installRun(t, th)
-	if err == nil || !strings.Contains(string(out), "SHA-256") {
-		t.Fatalf("tampered archive: err %v\n%s", err, out)
-	}
-	for _, f := range []string{".local/bin/machine-monitor", "calls.log", "pwned"} {
+	wantFailure(t, "tampered archive", home, out, err, "failed its SHA-256 check")
+	for _, f := range []string{".local/bin/machine-monitor", "calls.log"} {
 		if _, err := os.Stat(filepath.Join(home, f)); err == nil {
 			t.Errorf("%s exists after a failed install", f)
 		}
 	}
 }
 
-// The documented one-liner fails when the hub refuses: curl --fail-with-body hands sh the
-// hub's error script (or its JSON 401), and sh exits non-zero.
+// A failed download inside the script (the archive 404s) stops it with a non-zero exit.
+func TestInstallShFailsOnDownloadError(t *testing.T) {
+	rel := withRelease(t, "1.2.3")
+	for _, p := range []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64"} {
+		goos, goarch, _ := strings.Cut(p, "/")
+		rel.Remove(update.ArchiveName("1.2.3", goos, goarch))
+	}
+	th := newTestHub(t)
+	home, _, out, err := installRun(t, th)
+	wantFailure(t, "archive 404", home, out, err, "download failed")
+	if _, err := os.Stat(filepath.Join(home, ".local", "bin", "machine-monitor")); err == nil {
+		t.Error("binary installed after a failed download")
+	}
+}
+
+// A failing step after the download (here: pairing) stops the script before the service.
+func TestInstallShFailsWhenPairingFails(t *testing.T) {
+	withRelease(t, "1.2.3")
+	th := newTestHub(t)
+	home, _, out, err := installRunWith(t, th, th.Token(), oneLiner, "FAKE_FAIL=connect")
+	wantFailure(t, "connect fails", home, out, err, "pairing with")
+	if calls, _ := os.ReadFile(filepath.Join(home, "calls.log")); strings.Contains(string(calls), "service") {
+		t.Error("service installed after pairing failed")
+	}
+}
+
+// Both documented forms fail with a non-zero exit when the hub refuses. The one-liner also
+// shows why: curl --fail-with-body hands sh the hub's error script.
 func TestInstallShFailsLoudlyOnHubError(t *testing.T) {
 	rel := withRelease(t, "1.2.5")
 	key, cert := updatetest.NewCA(t)
 	rel.Sign(update.WorkflowIdentity(update.Repo)("v1.2.5"), key, cert)
 	th := newTestHub(t)
+
 	home, _, out, err := installRun(t, th)
-	if err == nil || !strings.Contains(string(out), "verified checksums") {
-		t.Fatalf("hub 502: err %v\n%s", err, out)
-	}
+	wantFailure(t, "hub 502", home, out, err, "couldn't get verified checksums")
+	home, _, out, err = installRunWith(t, th, "wrong", oneLiner)
+	wantFailure(t, "wrong key", home, out, err, "the hub key is missing or wrong")
+	home, _, out, err = installRunWith(t, th, th.Token(), downloadFirst)
+	wantFailure(t, "hub 502, download first", home, out, err, "502")
+	home, _, out, err = installRunWith(t, th, "wrong", downloadFirst)
+	wantFailure(t, "wrong key, download first", home, out, err, "401")
 	if _, err := os.Stat(filepath.Join(home, "calls.log")); err == nil {
 		t.Error("ran the binary after a hub error")
-	}
-	if _, _, out, err := installRunKey(t, th, "wrong"); err == nil {
-		t.Fatalf("wrong key: pipeline succeeded\n%s", out)
 	}
 }
 
@@ -344,29 +397,33 @@ func TestInstallPs1DownloadsAndVerifies(t *testing.T) {
 	th := newTestHub(t)
 	srv := httptest.NewServer(th.h)
 	t.Cleanup(srv.Close)
-	run := func() (exe string, out []byte) {
+	run := func(key string) (exe string, out []byte, err error) {
 		home := t.TempDir()
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, ps, "-NoProfile", "-NonInteractive", "-Command",
 			`irm -Headers @{Authorization="Bearer $env:KEY"} "$env:URL/install.ps1" | iex`)
 		cmd.Env = []string{"HOME=" + home, "LOCALAPPDATA=" + home, "TMPDIR=" + home, "PATH=" + os.Getenv("PATH"),
-			"PROCESSOR_ARCHITECTURE=AMD64", "KEY=" + th.Token(), "URL=" + srv.URL}
-		out, _ = cmd.CombinedOutput()
-		return filepath.Join(home, "Programs", "machine-monitor", "machine-monitor.exe"), out
+			"PROCESSOR_ARCHITECTURE=AMD64", "KEY=" + key, "URL=" + srv.URL}
+		out, err = cmd.CombinedOutput()
+		return filepath.Join(home, "Programs", "machine-monitor", "machine-monitor.exe"), out, err
 	}
-	exe, out := run()
+	exe, out, _ := run(th.Token())
 	if b, err := os.ReadFile(exe); err != nil || string(b) != fakeBinary {
 		t.Fatalf("installed %q, %v\n%s", b, err, out)
 	}
 
 	name := update.ArchiveName("1.2.3", "windows", "amd64")
 	rel.Set(name, updatetest.Archive(t, name, []byte("evil")))
-	exe, out = run()
-	if !strings.Contains(string(out), "SHA-256") {
-		t.Fatalf("tampered archive not refused:\n%s", out)
-	}
+	exe, out, err = run(th.Token())
+	wantFailure(t, "tampered archive", t.TempDir(), out, err, "failed its SHA-256 check")
 	if _, err := os.Stat(exe); err == nil {
 		t.Fatal("binary installed after a failed check")
+	}
+	// irm throws on the hub's refusal, so iex never runs and PowerShell exits non-zero.
+	exe, out, err = run("wrong")
+	wantFailure(t, "wrong key", t.TempDir(), out, err, "the hub key is missing or wrong")
+	if _, err := os.Stat(exe); err == nil {
+		t.Fatal("binary installed with a wrong key")
 	}
 }
