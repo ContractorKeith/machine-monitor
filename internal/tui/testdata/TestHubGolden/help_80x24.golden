@@ -1,4 +1,4 @@
-machine-monitor · hub hub.lan:7777   1  2  3  6                   ? help  q quit
+machine-monitor · hub hub.lan:7777   1  2  3  6                              ?/q
 1   dashboard    ↑/k  up           ←/h previous device                          
 2   device       ↓/j  down         →/l next device                              
 3   processes    pgup page up      K   move card earlier                        

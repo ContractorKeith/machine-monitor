@@ -1,4 +1,4 @@
-machine-monitor · hub hub.lan:7777   1  2  3  6 Alerts            ? help  q quit
+machine-monitor · hub hub.lan:7777   1  2  3  6 Alerts                       ?/q
  ⚠ studio: GPU load 99% · Above 95% for 5 min. (+1 more)  esc dismiss · 6 alerts
 Active (1)                                                                      
   ⚠ studio: GPU load 99% · Above 95% for 5 min. · since 12:00                   

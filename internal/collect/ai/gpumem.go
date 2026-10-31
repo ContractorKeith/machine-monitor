@@ -7,6 +7,7 @@ import (
 	"context"
 	"regexp"
 	"strconv"
+	"strings"
 )
 
 // Windows only; nil elsewhere (win_windows.go sets them).
@@ -14,9 +15,32 @@ var (
 	// winGPUMem maps pid to dedicated GPU memory in bytes from the GPUProcessMemory perf
 	// counters; nil when the query fails.
 	winGPUMem func(ctx context.Context) map[int]float64
-	// winListenPID is the pid listening on a local TCP port, 0 when none.
-	winListenPID func(ctx context.Context, port string) int
+	// winListener reports whether a local TCP port has a listener, and its pid (0 when
+	// Windows won't say).
+	winListener func(ctx context.Context, port string) (listening bool, pid int)
+	// winCmdline is a process's command line, "" when unknown.
+	winCmdline func(ctx context.Context, pid int) string
 )
+
+// mainPyRe finds the directory before main.py in a command line, as agent.ps1's
+// '"?([^"]*?)main\.py' (PowerShell's -match ignores case).
+var mainPyRe = regexp.MustCompile(`(?i)"?([^"]*?)main\.py`)
+
+// comfyHome is ComfyUI's directory from its server's command line, "" when it doesn't run
+// main.py. Its models live in comfyHome/models.
+func comfyHome(cmdline string) string {
+	m := mainPyRe.FindStringSubmatch(cmdline)
+	if m == nil {
+		return ""
+	}
+	// A quoted path starts right after its quote. Otherwise (no quote, or the match began at
+	// the closing quote of python.exe) the path has no spaces: it is the last word.
+	dir := m[1]
+	if !strings.HasPrefix(m[0], `"`) || strings.HasPrefix(dir, " ") {
+		dir = dir[strings.LastIndex(dir, " ")+1:]
+	}
+	return dir
+}
 
 // gpuProcMemRow is one Win32_PerfFormattedData_GPUPerformanceCounters_GPUProcessMemory row.
 type gpuProcMemRow struct {

@@ -406,20 +406,18 @@ func (m model) header() string {
 		}
 		return "  " + strings.Join(out, "")
 	}
-	fits := func(l, r string) bool { return lipgloss.Width(l)+1+lipgloss.Width(r) <= m.width }
-	full := left + tabs(false)
-	if !fits(full, "?/q") { // a long hub address, or many tabs
-		full = left + tabs(true)
-	}
-	left = full
-	right := t.dim.Render("? help  q quit")
-	if !fits(left, right) {
-		right = t.dim.Render("?/q")
-		if !fits(left, right) {
-			right = ""
+	// A long hub address or many tabs: shorten the hint first, then the tabs, then drop the
+	// hint.
+	for _, try := range []struct {
+		compact bool
+		hint    string
+	}{{false, "? help  q quit"}, {false, "?/q"}, {true, "?/q"}} {
+		l, r := left+tabs(try.compact), t.dim.Render(try.hint)
+		if lipgloss.Width(l)+1+lipgloss.Width(r) <= m.width {
+			return spread(l, r, m.width)
 		}
 	}
-	return spread(left, right, m.width)
+	return spread(left+tabs(true), "", m.width)
 }
 
 // statusLine is the footer for views without their own: collection state.

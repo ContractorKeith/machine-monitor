@@ -8,6 +8,7 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -122,7 +123,11 @@ func (m model) updateAlerts(msg tea.Msg) (model, tea.Cmd, bool) {
 		switch msg.ev.Type {
 		case client.EventAlert, client.EventAlertSettings:
 			bell := m.applyAlert(msg.ev)
-			return m, tea.Batch(waitEvent(m.events), bell), true
+			var wait tea.Cmd
+			if m.events != nil { // a nil channel would block a goroutine for ever
+				wait = waitEvent(m.events)
+			}
+			return m, tea.Batch(wait, bell), true
 		case client.EventSnapshot: // a (re)connection: what we have may be stale
 			next, cmd, _ := m.updateHub(msg)
 			if !next.al.loaded {
@@ -135,7 +140,8 @@ func (m model) updateAlerts(msg tea.Msg) (model, tea.Cmd, bool) {
 		m.al.err = msg.err
 		if msg.err == nil && msg.a != nil {
 			m.al.loaded = true
-			m.al.cfg, m.al.active, m.al.priceSet = msg.a.Settings, msg.a.Active, msg.a.PriceSet
+			m.al.active, m.al.priceSet = msg.a.Active, msg.a.PriceSet
+			m.setRules(msg.a.Settings)
 			m.al.events = msg.a.Events
 			if len(m.al.events) > maxAlertLog {
 				m.al.events = m.al.events[:maxAlertLog]
@@ -145,10 +151,11 @@ func (m model) updateAlerts(msg tea.Msg) (model, tea.Cmd, bool) {
 		return m, nil, true
 	case alertsSavedMsg:
 		if msg.err != nil {
-			m.al.notice = "save failed: " + msg.err.Error()
+			m.al.notice = "save failed: " + hubErr(msg.err)
 			return m, nil, true
 		}
-		m.al.cfg, m.al.active, m.al.loaded = msg.s, msg.active, true
+		m.al.active, m.al.loaded = msg.active, true
+		m.setRules(msg.s)
 		m.al.notice = "saved"
 		m.clampAlerts()
 		return m, nil, true
@@ -157,7 +164,7 @@ func (m model) updateAlerts(msg tea.Msg) (model, tea.Cmd, bool) {
 		return m, nil, true
 	case alertsClearedMsg:
 		if msg.err != nil {
-			m.al.notice = "clear failed: " + msg.err.Error()
+			m.al.notice = "clear failed: " + hubErr(msg.err)
 		} else {
 			m.al.events, m.al.notice = nil, "log cleared"
 		}
@@ -177,8 +184,10 @@ func (m *model) applyAlert(ev client.Event) tea.Cmd {
 		m.al.active = msg.Active
 	}
 	if msg.Settings != nil {
-		m.al.cfg = *msg.Settings
-		m.clampAlerts()
+		m.setRules(*msg.Settings)
+		if m.al.confirm == "rule" { // the rule it asked about may be gone or moved
+			m.al.confirm, m.al.notice = "", "the rules changed on the hub"
+		}
 	}
 	e := msg.Event
 	if e == nil || slices.Contains(m.al.seen, e.ID) {
@@ -205,10 +214,33 @@ func (m *model) applyAlert(ev client.Event) tea.Cmd {
 	return tea.Raw(string(rune(ansi.BEL)))
 }
 
+// setRules takes settings from the hub. An open rule editor follows its rule to its new
+// place, or closes when the rule is gone, so saving can't overwrite another rule.
+func (m *model) setRules(s alerts.Settings) {
+	m.al.cfg = s
+	if f := &m.al.form; f.open && f.rule >= 0 {
+		f.rule = slices.IndexFunc(s.Rules, func(r alerts.Rule) bool { return r.ID == f.ruleID })
+		if f.rule < 0 {
+			m.al.form = alertForm{}
+			m.al.notice = "the rules changed on the hub"
+		}
+	}
+	m.clampAlerts()
+}
+
+// hubErr is an error for the footer: just the hub's own sentence for a refused request.
+func hubErr(err error) string {
+	var se *client.StatusError
+	if errors.As(err, &se) && se.Message != "" {
+		return se.Message
+	}
+	return err.Error()
+}
+
 // testResult says how a test alert's deliveries went.
 func testResult(d alerts.Delivery, err error) string {
 	if err != nil {
-		return "test failed: " + err.Error()
+		return "test failed: " + hubErr(err)
 	}
 	parts := []string{"test alert sent"}
 	for _, c := range []struct {
@@ -258,6 +290,9 @@ func (m model) alertsPreKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
 			}), true
 		}
 		s := cloneSettings(m.al.cfg)
+		if m.al.cursor >= len(s.Rules) {
+			return m, nil, true
+		}
 		s.Rules = slices.Delete(s.Rules, m.al.cursor, m.al.cursor+1)
 		next, cmd := m.saveAlerts(s)
 		return next, cmd, true
@@ -392,7 +427,8 @@ type formField struct {
 // alertForm is the rule or channels editor.
 type alertForm struct {
 	open   bool
-	rule   int // index of the rule being edited, -1 for a new one; -2 for the channels
+	rule   int    // index of the rule being edited, -1 for a new one; -2 for the channels
+	ruleID string // the edited rule's id, to find it again when the rules change
 	fields []formField
 	cur    int
 	err    string
@@ -433,6 +469,9 @@ func textField(label, value, unit string, limit int) formField {
 	in.Prompt = ""
 	in.CharLimit = limit
 	in.SetValue(value)
+	st := in.Styles()
+	st.Cursor.Blink = false // a steady cursor: the form needs no blink ticks
+	in.SetStyles(st)
 	return formField{label: label, kind: fieldText, input: in, unit: unit}
 }
 
@@ -460,7 +499,7 @@ func (m *model) openRuleForm(i int) {
 	if r.Threshold != nil {
 		th = strconv.FormatFloat(*r.Threshold, 'f', -1, 64)
 	}
-	m.al.form = alertForm{open: true, rule: i, fields: []formField{
+	m.al.form = alertForm{open: true, rule: i, ruleID: r.ID, fields: []formField{
 		typ, dev,
 		textField("Threshold", th, "", 12),
 		textField("Minutes", strconv.Itoa(r.Minutes), "min", 4),
@@ -604,12 +643,13 @@ func defaultMinutes(typ string) int {
 // saveRule builds the rule from the form and saves every rule with it.
 func (m model) saveRule() (tea.Model, tea.Cmd) {
 	f := m.al.form
+	if f.rule >= len(m.al.cfg.Rules) { // setRules keeps it in range; never index past the end
+		m.al.form, m.al.notice = alertForm{}, "the rules changed on the hub"
+		return m, nil
+	}
 	typ := ruleTypes[f.fields[ruleType].idx]
 	dev := f.fields[ruleDevice]
-	r := alerts.Rule{Type: typ, Device: dev.values[dev.idx], Enabled: f.fields[ruleEnabled].on}
-	if f.rule >= 0 {
-		r.ID = m.al.cfg.Rules[f.rule].ID
-	}
+	r := alerts.Rule{ID: f.ruleID, Type: typ, Device: dev.values[dev.idx], Enabled: f.fields[ruleEnabled].on}
 	if alerts.Types[typ].HasThreshold {
 		v, err := strconv.ParseFloat(strings.TrimSpace(f.fields[ruleThreshold].input.Value()), 64)
 		if err != nil {

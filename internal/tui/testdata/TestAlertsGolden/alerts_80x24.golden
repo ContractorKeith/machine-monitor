@@ -1,4 +1,4 @@
-machine-monitor · hub hub.lan:7777   1  2  3  6 Alerts            ? help  q quit
+machine-monitor · hub hub.lan:7777   1  2  3  6 Alerts                       ?/q
 Active (1)                                                                      
   ⚠ ws-01: CPU temperature 93°C · Above 90°C for 2 min. · since 11:57           
                                                                                 

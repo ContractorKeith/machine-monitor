@@ -47,10 +47,12 @@ type detector struct {
 	lmsPIDs    func(ctx context.Context) []int           // LM Studio / llmster processes; none when not running
 	proc       func(pid int) (argv []string, cwd string) // nil argv when unreadable
 	comfyRoots []string                                  // extra ComfyUI models dirs to size files in
-	// Windows only (nil elsewhere), as agent.ps1: GPU memory per pid from the perf counters,
-	// and the pid listening on a port, which gates the ComfyUI check.
-	gpuMem    func(ctx context.Context) map[int]float64
-	listenPID func(ctx context.Context, port string) int
+	// Windows only (nil elsewhere), as agent.ps1: GPU memory per pid from the perf counters;
+	// whether a port has a listener (which gates the ComfyUI check) and its pid, 0 when
+	// unknown; and a process's command line.
+	gpuMem   func(ctx context.Context) map[int]float64
+	listener func(ctx context.Context, port string) (listening bool, pid int)
+	cmdline  func(ctx context.Context, pid int) string
 }
 
 // newDetector returns a detector wired to this machine's tools.
@@ -62,7 +64,8 @@ func newDetector() *detector {
 		lmsPIDs:    lmsPIDs,
 		proc:       procInfo,
 		gpuMem:     winGPUMem,
-		listenPID:  winListenPID,
+		listener:   winListener,
+		cmdline:    winCmdline,
 	}
 	home, _ := os.UserHomeDir()
 	if home != "" {
@@ -177,13 +180,20 @@ func (d *detector) detect(ctx context.Context) []report.AIGroup {
 
 	switch {
 	case haveComfy:
-	case d.listenPID != nil: // Windows: something listens on the port and /history answers
-		if owner := d.listenPID(ctx, d.comfyPort); owner > 0 {
+	case d.listener != nil: // Windows, as agent.ps1: the port has a listener and /history answers
+		if listening, owner := d.listener(ctx, d.comfyPort); listening {
+			// The owner, when known, gives the GPU memory and the models root next to main.py.
 			var mem *float64
-			if d.gpuMem != nil {
-				mem = winMemOf(owner)
+			home := ""
+			if owner > 0 {
+				if d.gpuMem != nil {
+					mem = winMemOf(owner)
+				}
+				if d.cmdline != nil {
+					home = comfyHome(d.cmdline(ctx, owner))
+				}
 			}
-			if g := d.comfy(ctx, d.comfyPort, "", mem); len(g.Models) > 0 {
+			if g := d.comfy(ctx, d.comfyPort, home, mem); len(g.Models) > 0 {
 				groups = append(groups, g)
 			}
 		}

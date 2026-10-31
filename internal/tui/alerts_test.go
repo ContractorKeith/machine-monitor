@@ -87,30 +87,35 @@ func alertsFixture() *fakeAlertsHub {
 	return f
 }
 
-// settle runs cmd and feeds every message it answers at once back into the model, through
-// batches; commands that wait (the stream, the cursor blink) are left alone. It returns the
+// settle runs cmd and feeds every message it answers back into the model, through
+// batches. Commands run concurrently under one deadline (settleTimeout, long enough for a
+// slow -race run); ones still waiting then (the stream) are left alone. It returns the
 // model and how many bells were printed.
 func settle(t *testing.T, m model, cmd tea.Cmd) (model, int) {
 	t.Helper()
-	bells := 0
-	queue := []tea.Cmd{cmd}
-	for len(queue) > 0 {
-		c := queue[0]
-		queue = queue[1:]
-		if c == nil {
-			continue
+	bells, pending := 0, 0
+	out := make(chan tea.Msg, 64)
+	start := func(c tea.Cmd) {
+		if c != nil {
+			pending++
+			go func() { out <- c() }()
 		}
-		out := make(chan tea.Msg, 1)
-		go func() { out <- c() }()
+	}
+	start(cmd)
+	deadline := time.After(settleTimeout)
+	for pending > 0 {
 		var res tea.Msg
 		select {
 		case res = <-out:
-		case <-time.After(50 * time.Millisecond):
-			continue
+			pending--
+		case <-deadline:
+			return m, bells
 		}
 		switch r := res.(type) {
 		case tea.BatchMsg:
-			queue = append(queue, r...)
+			for _, c := range r {
+				start(c)
+			}
 		case tea.RawMsg:
 			if r.Msg == "\a" {
 				bells++
@@ -118,11 +123,14 @@ func settle(t *testing.T, m model, cmd tea.Cmd) (model, int) {
 		case alertsLoadedMsg, alertsSavedMsg, alertsTestMsg, alertsClearedMsg, renameMsg, removeMsg, orderMsg:
 			next, c := m.Update(r)
 			m = next.(model)
-			queue = append(queue, c)
+			start(c)
 		}
 	}
 	return m, bells
 }
+
+// settleTimeout bounds one settle.
+const settleTimeout = 2 * time.Second
 
 // send sends msgs one at a time, settling each; it returns the bells rung.
 func send(t *testing.T, m model, msgs ...tea.Msg) (model, int) {
@@ -142,8 +150,9 @@ func alertsModel(t *testing.T, f *fakeAlertsHub, w, h int) model {
 	t.Helper()
 	m := New(Options{Hub: f, Interval: time.Hour, Now: func() time.Time { return hubNow }}).(model)
 	m, _ = send(t, m, tea.WindowSizeMsg{Width: w, Height: h})
-	for _, e := range f.events {
-		m, _ = send(t, m, hubMsg{e})
+	for _, e := range f.events { // their commands only wait on the (absent) stream
+		next, _ := m.Update(hubMsg{e})
+		m = next.(model)
 	}
 	m, _ = send(t, m, keyMsg("6"))
 	if !m.al.loaded {
@@ -467,4 +476,79 @@ func TestAlertsEditorAgainstHub(t *testing.T) {
 		t.Fatalf("banner %+v, bells %d", m.al.banner, m.al.bells)
 	}
 	finish(t, tm)
+}
+
+// settingsEvent is the hub's alerts event with the first n of s's rules.
+func settingsEvent(t *testing.T, s alerts.Settings, n int) hubMsg {
+	t.Helper()
+	s = cloneSettings(s)
+	s.Rules = s.Rules[:n]
+	b, err := json.Marshal(alerts.Message{Type: "alerts", Settings: &s, Active: []alerts.Active{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return hubMsg{client.Event{Type: client.EventAlertSettings, Raw: b}}
+}
+
+// Another client removes the rule being edited: the editor closes instead of saving past
+// the end of the list. One that only moves keeps editing the same rule.
+func TestEditorRuleRemovedOnHub(t *testing.T) {
+	f := alertsFixture()
+	m := alertsModel(t, f, 80, 24)
+	full := m.al.cfg
+	m, _ = send(t, m, keys("G", "j", "j", "j", "j", "j", "enter")...) // the last rule (dailyCost)
+	if !m.al.form.open || m.al.form.rule != 5 {
+		t.Fatalf("editor on rule %d (open %v)", m.al.form.rule, m.al.form.open)
+	}
+	m, _ = send(t, m, settingsEvent(t, full, 2))
+	if m.al.form.open || m.al.notice != "the rules changed on the hub" || m.al.cursor != 1 {
+		t.Fatalf("open %v, notice %q, cursor %d", m.al.form.open, m.al.notice, m.al.cursor)
+	}
+	// enter now edits a rule that exists, and saving it doesn't panic or grow the list.
+	m, _ = send(t, m, keyMsg("enter"), keyMsg("enter"))
+	if len(f.saved) != 1 || len(f.saved[0].Rules) != 2 {
+		t.Fatalf("saves %+v", f.saved)
+	}
+
+	// The edited rule moves to index 0: saving writes it there, by id.
+	m = alertsModel(t, alertsFixture(), 80, 24)
+	m, _ = send(t, m, keys("j", "enter")...) // cpuTemp, id bbbb…
+	moved := cloneSettings(full)
+	moved.Rules = moved.Rules[1:]
+	b, _ := json.Marshal(alerts.Message{Type: "alerts", Settings: &moved})
+	m, _ = send(t, m, hubMsg{client.Event{Type: client.EventAlertSettings, Raw: b}})
+	if !m.al.form.open || m.al.form.rule != 0 {
+		t.Fatalf("moved rule: open %v, index %d", m.al.form.open, m.al.form.rule)
+	}
+}
+
+// Rules shrink while a delete waits for y: the question is withdrawn and nothing is deleted.
+func TestDeleteConfirmRulesChanged(t *testing.T) {
+	f := alertsFixture()
+	m := alertsModel(t, f, 80, 24)
+	m, _ = send(t, m, keyMsg("D"), settingsEvent(t, m.al.cfg, 0), keyMsg("y"))
+	if m.al.confirm != "" || len(f.saved) != 0 || m.al.notice != "the rules changed on the hub" {
+		t.Fatalf("confirm %q, saves %d, notice %q", m.al.confirm, len(f.saved), m.al.notice)
+	}
+	// The guard alone: a confirm over an empty list does nothing.
+	m.al.confirm = "rule"
+	m, _ = send(t, m, keyMsg("y"))
+	if len(f.saved) != 0 {
+		t.Fatal("deleted from an empty list")
+	}
+}
+
+// A refused save shows the hub's own sentence.
+func TestHubErrText(t *testing.T) {
+	err := &client.StatusError{Code: 400, Message: "invalid alert settings"}
+	if got := hubErr(err); got != "invalid alert settings" {
+		t.Errorf("hubErr = %q", got)
+	}
+	f := alertsFixture()
+	m := alertsModel(t, f, 80, 24)
+	f.fail = err
+	m, _ = send(t, m, keyMsg(" "))
+	if m.al.notice != "save failed: invalid alert settings" {
+		t.Errorf("notice = %q", m.al.notice)
+	}
 }

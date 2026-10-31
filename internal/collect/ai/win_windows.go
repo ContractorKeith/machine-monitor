@@ -2,11 +2,13 @@
 
 package ai
 
-// Windows GPU process memory and port owner, as agent.ps1 (Get-GpuProcessMemory and
-// Get-NetTCPConnection) at c3a4c41. MIT License, Copyright (c) 2026 Matt.
+// Windows GPU process memory, port listener and command line, as agent.ps1
+// (Get-GpuProcessMemory, GetActiveTcpListeners, Get-NetTCPConnection and Win32_Process) at
+// c3a4c41. MIT License, Copyright (c) 2026 Matt.
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 
 	"github.com/shirou/gopsutil/v4/net"
@@ -22,20 +24,32 @@ func init() {
 		}
 		return parseGPUProcMem(rows)
 	}
-	winListenPID = func(ctx context.Context, port string) int {
+	winListener = func(ctx context.Context, port string) (bool, int) {
 		p, err := strconv.ParseUint(port, 10, 16)
 		if err != nil {
-			return 0
+			return false, 0
 		}
 		conns, err := net.ConnectionsWithContext(ctx, "tcp")
 		if err != nil {
-			return 0
+			return false, 0
 		}
+		listening := false
 		for _, c := range conns {
-			if c.Status == "LISTEN" && c.Laddr.Port == uint32(p) && c.Pid > 0 {
-				return int(c.Pid)
+			if c.Status == "LISTEN" && c.Laddr.Port == uint32(p) {
+				if c.Pid > 0 {
+					return true, int(c.Pid)
+				}
+				listening = true // a listener whose owner Windows won't name
 			}
 		}
-		return 0
+		return listening, 0
+	}
+	winCmdline = func(ctx context.Context, pid int) string {
+		var rows []struct{ CommandLine string }
+		q := fmt.Sprintf("SELECT CommandLine FROM Win32_Process WHERE ProcessId = %d", pid)
+		if wmiq.Query(ctx, q, `root\cimv2`, &rows) != nil || len(rows) == 0 {
+			return ""
+		}
+		return rows[0].CommandLine
 	}
 }

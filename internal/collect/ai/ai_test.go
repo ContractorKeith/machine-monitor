@@ -292,27 +292,61 @@ func TestWindowsGPUProcessMemory(t *testing.T) {
 		queries++
 		return map[int]float64{40: 1e9, 41: 5e8, 77: 3e9, 99: 1}
 	}
-	d.listenPID = func(_ context.Context, port string) int {
+	comfyHomeDir := filepath.Join(t.TempDir(), "ComfyUI")
+	os.MkdirAll(filepath.Join(comfyHomeDir, "models", "loras"), 0o755)
+	os.WriteFile(filepath.Join(comfyHomeDir, "models", "loras", "style.safetensors"), make([]byte, 42), 0o644)
+	d.listener = func(_ context.Context, port string) (bool, int) {
 		if port != comfyPort {
 			t.Errorf("listener asked for port %s", port)
 		}
-		return 77
+		return true, 77
+	}
+	d.cmdline = func(_ context.Context, pid int) string {
+		if pid != 77 {
+			t.Errorf("command line asked for pid %d", pid)
+		}
+		return `"C:\Python\python.exe" "` + comfyHomeDir + string(filepath.Separator) + `main.py" --listen`
 	}
 	got := d.detect(context.Background())
 	if len(got) != 2 || *got[0].App != "LM Studio" || got[0].Mem == nil || *got[0].Mem != 1.5e9 ||
 		*got[1].App != "ComfyUI" || got[1].Mem == nil || *got[1].Mem != 3e9 || len(got[1].Models) != 2 {
 		t.Fatalf("got %s", jsonOf(t, got))
 	}
+	if s := got[1].Models[1].Size; s == nil || *s != 42 { // found under the main.py directory
+		t.Errorf("lora size = %v, want 42 from %s", s, comfyHomeDir)
+	}
 	if queries != 1 {
 		t.Errorf("GPU memory queried %d times, want 1", queries)
 	}
 
+	// A listener Windows won't name the owner of: ComfyUI is still found, with no memory.
+	d.listener = func(context.Context, string) (bool, int) { return true, 0 }
+	d.cmdline = func(context.Context, int) string { t.Error("command line asked without an owner"); return "" }
+	got = d.detect(context.Background())
+	if len(got) != 2 || *got[1].App != "ComfyUI" || got[1].Mem != nil {
+		t.Fatalf("unnamed owner: got %s", jsonOf(t, got))
+	}
+
 	// No listener: ComfyUI isn't asked. No GPU memory for the pid: mem is null.
-	d.listenPID = func(context.Context, string) int { return 0 }
+	d.listener = func(context.Context, string) (bool, int) { return false, 0 }
 	d.gpuMem = func(context.Context) map[int]float64 { return nil }
 	got = d.detect(context.Background())
 	if len(got) != 1 || *got[0].App != "LM Studio" || got[0].Mem != nil {
 		t.Fatalf("got %s", jsonOf(t, got))
+	}
+}
+
+func TestComfyHome(t *testing.T) {
+	for in, want := range map[string]string{
+		`"C:\Python\python.exe" "C:\My Apps\ComfyUI\main.py" --port 8188`: `C:\My Apps\ComfyUI\`,
+		`python.exe C:\ComfyUI\main.py --listen`:                          `C:\ComfyUI\`,
+		`"C:\py\python.exe" D:\Comfy\MAIN.PY`:                             `D:\Comfy\`,
+		`python main.py`:                                                  ``,
+		`C:\ComfyUI\python_embeded\python.exe -s server.py`:               ``,
+	} {
+		if got := comfyHome(in); got != want {
+			t.Errorf("comfyHome(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

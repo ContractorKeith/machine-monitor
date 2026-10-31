@@ -1,4 +1,4 @@
-machine-monitor · hub hub.lan:7777   1  2  3  6 Alerts            ? help  q quit
+machine-monitor · hub hub.lan:7777   1  2  3  6 Alerts                       ?/q
 Edit rule                                                                       
                                                                                 
 ▶ Type               ◀ CPU temperature ▶                                        
