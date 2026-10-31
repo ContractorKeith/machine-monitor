@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -38,7 +39,11 @@ func (f *fakeHub) Stream(ctx context.Context) <-chan client.Event {
 	for _, e := range f.events {
 		ch <- e
 	}
-	return ch // left open: the stream lives on
+	go func() { // like the client: the stream ends with ctx
+		<-ctx.Done()
+		close(ch)
+	}()
+	return ch
 }
 
 func (f *fakeHub) record(s string) error {
@@ -439,5 +444,109 @@ func TestAgo(t *testing.T) {
 	}
 	if got := m.ago(0); got != "never seen" {
 		t.Errorf("ago(0) = %q", got)
+	}
+}
+
+// TestHubStreamEnds: when the stream closes, the footer says updates have stopped.
+func TestHubStreamEnds(t *testing.T) {
+	m := New(hubOptions(newFakeHub(threeDevices()))).(model)
+	ctx, cancel := context.WithCancel(context.Background())
+	m.ctx = ctx
+	next, cmd := m.Update(m.Init()()) // streamMsg: start reading
+	m = next.(model)
+	for range 2 { // connected, snapshot
+		next, cmd = m.Update(cmd())
+		m = next.(model)
+	}
+	if !m.conn.connected || !m.conn.snapshot {
+		t.Fatalf("not synced: %+v", m.conn)
+	}
+	cancel()
+	msg := cmd()
+	if _, ok := msg.(hubDoneMsg); !ok {
+		t.Fatalf("after the stream closed got %T", msg)
+	}
+	next, cmd = m.Update(msg)
+	m = next.(model)
+	if cmd != nil {
+		t.Error("still waiting on a closed stream")
+	}
+	if s := m.hubStatus(); !strings.Contains(s, "hub hub.lan:7777: the stream ended · no longer updating · q quit") {
+		t.Errorf("footer = %q", s)
+	}
+}
+
+// TestHubLateFailures: a reorder refused after the hub sent its own order keeps the hub's
+// order, and a rename answered after the device was removed doesn't bring it back.
+func TestHubLateFailures(t *testing.T) {
+	f := newFakeHub(threeDevices())
+	m := hubModel(t, f, 160, 48)
+	ws := threeDevices()[0].ID
+	next, cmd := m.Update(keyMsg("J")) // the PUT is now "in flight"
+	m = next.(model)
+	m = run(t, m, hubMsg{client.Event{Type: client.EventOrder, Order: map[string]int{"nas-0002": 0, "mac-0001": 1, ws: 2}}})
+	f.fail = errors.New("boom")
+	next, _ = m.Update(cmd())
+	m = next.(model)
+	if got := ids(m); got != "mac-0001,"+ws+",nas-0002" || m.devs[0].id != "nas-0002" {
+		t.Errorf("late rollback overwrote the hub's order: %s (devs[0] %s)", got, m.devs[0].id)
+	}
+	if !strings.Contains(m.hubStatus(), "reorder failed") {
+		t.Errorf("footer = %q", m.hubStatus())
+	}
+
+	// Rename answered after removal.
+	f.fail = nil
+	next, cmd = m.Update(keyMsg("R"))
+	m = next.(model)
+	_ = cmd
+	next, cmd = m.Update(keyMsg("enter"))
+	m = next.(model)
+	m = run(t, m, hubMsg{client.Event{Type: client.EventRemoved, ID: m.renameID}})
+	gone := m.renameID
+	next, _ = m.Update(cmd())
+	m = next.(model)
+	if m.hasDev(gone) {
+		t.Errorf("rename brought back removed %s", gone)
+	}
+
+	// A fresh connection clears a stale error so the connection state shows.
+	m.notice = "rename failed: boom"
+	m = run(t, m, hubMsg{client.Event{Type: client.EventDisconnected, Err: errors.New("refused"), Retry: 0}})
+	m.conn.ended = false
+	m = run(t, m, hubMsg{client.Event{Type: client.EventConnected}})
+	if m.notice != "" {
+		t.Errorf("notice survived a reconnect: %q", m.notice)
+	}
+	m = run(t, m, hubMsg{client.Event{Type: client.EventDisconnected, Err: errors.New("refused"), Retry: 300 * time.Millisecond}})
+	if s := m.hubStatus(); !strings.Contains(s, "retrying in 1s") {
+		t.Errorf("footer = %q", s)
+	}
+}
+
+// TestOfflineRowWindow: many offline devices show a window around the selection with a tail.
+func TestOfflineRowWindow(t *testing.T) {
+	var devs []client.Device
+	for i := range 12 {
+		r := workstation(2)
+		r.ID, r.Hostname = fmt.Sprintf("dev-%02d", i), report.Ptr(fmt.Sprintf("machine-%02d", i))
+		devs = append(devs, hubDevice(r, i, false, hubNow.Add(-time.Hour)))
+	}
+	m := hubModel(t, newFakeHub(devs), 80, 24)
+	for _, sel := range []string{"dev-00", "dev-06", "dev-11"} {
+		m.sel = sel
+		row := ansi.Strip(m.offlineRow(m.offline()))
+		if w := ansi.StringWidth(row); w > 80 {
+			t.Errorf("%s: row is %d wide: %q", sel, w, row)
+		}
+		want := "▶ machine-" + sel[4:]
+		if !strings.Contains(row, want) || !strings.Contains(row, "more") {
+			t.Errorf("%s: row %q lacks the selection or the tail", sel, row)
+		}
+	}
+	m.sel = "dev-11"
+	row := ansi.Strip(m.offlineRow(m.offline()))
+	if strings.Contains(row, "machine-00") {
+		t.Errorf("window not around the selection: %q", row)
 	}
 }

@@ -67,7 +67,8 @@ type model struct {
 	rename    textinput.Model
 	renameID  string // device being renamed while rename is focused
 	confirmID string // device awaiting remove confirmation
-	notice    string // last action's error, until the next action
+	notice    string // last action's error, until the next action or reconnect
+	orderGen  int    // counts order and snapshot events, so a late reorder failure can't undo them
 
 	deviceScroll int
 
@@ -379,7 +380,10 @@ func (m model) header() string {
 	left += "  " + strings.Join(tabs, "")
 	right := t.dim.Render("? help  q quit")
 	if m.multi() && lipgloss.Width(left)+1+lipgloss.Width(right) > m.width { // a long hub address
-		right = ""
+		right = t.dim.Render("?/q")
+		if lipgloss.Width(left)+1+lipgloss.Width(right) > m.width {
+			right = ""
+		}
 	}
 	return spread(left, right, m.width)
 }

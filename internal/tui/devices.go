@@ -124,6 +124,11 @@ func (m *model) editDev(id string, f func(*device)) bool {
 	return false
 }
 
+// hasDev reports whether a device with id is on the list.
+func (m model) hasDev(id string) bool {
+	return slices.ContainsFunc(m.devs, func(d device) bool { return d.id == id })
+}
+
 // online and offline split the devices for the dashboard grid and its footer, in order.
 func (m model) online() []device {
 	return slices.DeleteFunc(slices.Clone(m.devs), func(d device) bool { return !d.online })

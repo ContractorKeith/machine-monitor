@@ -162,9 +162,12 @@ func (st *streamState) send(ctx context.Context, e Event) bool {
 // streamOnce runs one connection: proof, request, then events until it fails.
 func (c *Client) streamOnce(ctx context.Context, st *streamState) error {
 	st.gotSnapshot = false
-	if err := c.Verify(ctx); err != nil {
+	if err := c.Verify(ctx); err != nil { // every connection: the address may now be another machine
 		return err
 	}
+	c.vmu.Lock()
+	c.verified = true
+	c.vmu.Unlock()
 	cctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	req, err := http.NewRequestWithContext(cctx, "GET", c.base.String()+"/api/stream", nil)
@@ -183,9 +186,8 @@ func (c *Client) streamOnce(ctx context.Context, st *streamState) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		b := make([]byte, 4096)
-		n, _ := resp.Body.Read(b)
-		return statusErr(resp.StatusCode, b[:n])
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return statusErr(resp.StatusCode, b)
 	}
 	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
 		return fmt.Errorf("hub: stream has Content-Type %q", ct)

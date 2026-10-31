@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ContractorKeith/machine-monitor/internal/hub"
@@ -64,7 +65,10 @@ func (e *StatusError) Error() string {
 type Client struct {
 	base *url.URL
 	key  string
-	http *http.Client // requests (with requestTimeout)
+
+	vmu      sync.Mutex
+	verified bool         // the hub has proved it knows the key; keyed requests may go out
+	http     *http.Client // requests (with requestTimeout)
 	// stream is for the SSE stream: no overall timeout, since it stays open; a stalled
 	// stream is caught by the idle watchdog instead.
 	stream *http.Client
@@ -107,15 +111,19 @@ func ParseURL(s string) (*url.URL, error) {
 	if !strings.Contains(s, "://") {
 		s = "http://" + s
 	}
+	// Errors never echo the URL: it may carry a password.
 	u, err := url.Parse(s)
 	if err != nil {
-		return nil, fmt.Errorf("hub URL: %w", err)
+		return nil, errors.New("hub URL: not a valid address; want http://host:port")
+	}
+	if u.User != nil {
+		return nil, errors.New("hub URL: must not contain a user name or password")
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return nil, fmt.Errorf("hub URL: scheme %q, want http or https", u.Scheme)
 	}
-	if u.Hostname() == "" || u.User != nil || strings.Trim(u.Path, "/") != "" || u.RawQuery != "" || u.Fragment != "" {
-		return nil, fmt.Errorf("hub URL %q: want http://host:port", s)
+	if u.Hostname() == "" || strings.Trim(u.Path, "/") != "" || u.RawQuery != "" || u.Fragment != "" {
+		return nil, fmt.Errorf("hub URL for %q: want http://host:port with no path or query", u.Host)
 	}
 	host := u.Host
 	if u.Port() == "" && u.Scheme == "http" {
@@ -133,8 +141,27 @@ func SameHub(a, b string) bool {
 
 // ---- requests ----------------------------------------------------------------------------
 
-// do sends one keyed request and decodes a JSON reply into out (unless out is nil).
+// verifyOnce checks the hub's proof before the client's first keyed request. A failure is
+// not remembered, so the next request tries again.
+func (c *Client) verifyOnce(ctx context.Context) error {
+	c.vmu.Lock()
+	defer c.vmu.Unlock()
+	if c.verified {
+		return nil
+	}
+	if err := c.Verify(ctx); err != nil {
+		return err
+	}
+	c.verified = true
+	return nil
+}
+
+// do sends one keyed request and decodes a JSON reply into out (unless out is nil). The key
+// goes out only after the hub has proved it knows it.
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
+	if err := c.verifyOnce(ctx); err != nil {
+		return err
+	}
 	var rd io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)

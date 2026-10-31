@@ -46,6 +46,7 @@ type (
 	}
 	orderMsg struct {
 		prev map[string]int // orders before the move, restored if the hub refused it
+		gen  int            // orderGen when the move was made
 		err  error
 	}
 )
@@ -92,7 +93,7 @@ func (m model) updateHub(msg tea.Msg) (model, tea.Cmd, bool) {
 	case renameMsg:
 		if msg.err != nil {
 			m.notice = "rename failed: " + msg.err.Error()
-		} else if msg.dev != nil {
+		} else if msg.dev != nil && m.hasDev(msg.dev.ID) { // not one removed meanwhile
 			m.editDev(msg.dev.ID, func(d *device) { d.setRegistry(msg.dev) })
 		}
 		return m, nil, true
@@ -106,6 +107,9 @@ func (m model) updateHub(msg tea.Msg) (model, tea.Cmd, bool) {
 	case orderMsg:
 		if msg.err != nil {
 			m.notice = "reorder failed: " + msg.err.Error()
+			if msg.gen != m.orderGen { // the hub has sent an order since: it wins
+				return m, nil, true
+			}
 			m.devs = slices.Clone(m.devs)
 			for i := range m.devs {
 				if o, ok := msg.prev[m.devs[i].id]; ok {
@@ -124,6 +128,7 @@ func (m *model) apply(ev client.Event) {
 	switch ev.Type {
 	case client.EventConnected:
 		m.conn.connected, m.conn.err = true, nil
+		m.notice = "" // a stale action error must not hide the connection state
 	case client.EventDisconnected:
 		m.conn.connected, m.conn.err, m.conn.retry = false, ev.Err, ev.Retry
 		if ev.Retry == 0 {
@@ -131,6 +136,8 @@ func (m *model) apply(ev client.Event) {
 		}
 	case client.EventSnapshot:
 		m.conn.snapshot = true
+		m.notice = ""
+		m.orderGen++
 		devs := make([]device, 0, len(ev.Devices))
 		for _, v := range ev.Devices {
 			devs = append(devs, fromHub(v))
@@ -158,6 +165,7 @@ func (m *model) apply(ev client.Event) {
 			}
 		}
 	case client.EventOrder:
+		m.orderGen++
 		m.devs = slices.Clone(m.devs)
 		for i := range m.devs {
 			if o, ok := ev.Order[m.devs[i].id]; ok {
@@ -333,8 +341,9 @@ func (m model) move(delta int) (tea.Model, tea.Cmd) {
 	}
 	sortDevices(m.devs)
 	m.notice = ""
+	gen := m.orderGen
 	return m, m.hubCall(func(ctx context.Context, h Hub) tea.Msg {
-		return orderMsg{prev: prev, err: h.SetOrder(ctx, ids)}
+		return orderMsg{prev: prev, gen: gen, err: h.SetOrder(ctx, ids)}
 	})
 }
 
@@ -457,22 +466,45 @@ func (m model) grid(online []device, h int) string {
 	return out
 }
 
-// offlineRow is the footer row of offline devices, the selected one highlighted.
+// offlineRow is the footer row of offline devices, the selected one highlighted. When they
+// don't all fit, it shows a window around the selection and a "+N more" tail.
 func (m model) offlineRow(offline []device) string {
 	t := m.theme
 	parts := make([]string, len(offline))
+	sel := 0
 	for i, d := range offline {
-		s := d.name + " " + t.dim.Render("("+m.ago(d.lastSeen)+")")
+		name := d.name
 		if d.id == m.sel {
 			marker := "▶ "
 			if t.ascii {
 				marker = "> "
 			}
-			s = t.selected.Render(marker+d.name) + " " + t.dim.Render("("+m.ago(d.lastSeen)+")")
+			name, sel = t.selected.Render(marker+d.name), i
 		}
-		parts[i] = s
+		parts[i] = name + " " + t.dim.Render("("+m.ago(d.lastSeen)+")")
 	}
-	return t.label.Render(fmt.Sprintf("Offline (%d)", len(offline))) + "  " + strings.Join(parts, "   ")
+	const sep = "   "
+	head := t.label.Render(fmt.Sprintf("Offline (%d)", len(offline))) + "  "
+	tail := func(hidden int) string {
+		if hidden == 0 {
+			return ""
+		}
+		return sep + t.dim.Render(fmt.Sprintf("+%d more", hidden))
+	}
+	width := func(lo, hi int) int { // the row showing parts[lo:hi]
+		return lipgloss.Width(head + strings.Join(parts[lo:hi], sep) + tail(len(parts)-(hi-lo)))
+	}
+	lo, hi := sel, sel+1
+	for grew := true; grew; { // grow right first, then left, while the row fits
+		grew = false
+		if hi < len(parts) && width(lo, hi+1) <= m.width {
+			hi, grew = hi+1, true
+		}
+		if lo > 0 && width(lo-1, hi) <= m.width {
+			lo, grew = lo-1, true
+		}
+	}
+	return head + strings.Join(parts[lo:hi], sep) + tail(len(parts)-(hi-lo))
 }
 
 // ago is how long ago a Unix-ms time was: "3h ago", or "never".
@@ -521,9 +553,10 @@ func (m model) hubStatus() string {
 	case m.notice != "":
 		return m.notice
 	case m.conn.ended:
-		return "hub " + m.hubHost() + ": " + errText(m.conn.err) + " · q quit"
+		return "hub " + m.hubHost() + ": " + errText(m.conn.err) + " · no longer updating · q quit"
 	case !m.conn.connected && m.conn.err != nil:
-		return fmt.Sprintf("hub %s unreachable: %s · retrying in %s", m.hubHost(), errText(m.conn.err), m.conn.retry.Round(time.Second))
+		retry := max(time.Second, m.conn.retry.Round(time.Second)) // never "retrying in 0s"
+		return fmt.Sprintf("hub %s unreachable: %s · retrying in %s", m.hubHost(), errText(m.conn.err), retry)
 	case !m.conn.connected:
 		return "connecting to " + m.hubHost() + "…"
 	}
@@ -532,7 +565,7 @@ func (m model) hubStatus() string {
 
 func errText(err error) string {
 	if err == nil {
-		return "disconnected"
+		return "the stream ended"
 	}
 	return err.Error()
 }

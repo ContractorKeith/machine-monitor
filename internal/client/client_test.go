@@ -156,9 +156,13 @@ func TestParseURL(t *testing.T) {
 			t.Errorf("ParseURL(%q) = %v, %v; want %s", in, u, err, want)
 		}
 	}
-	for _, bad := range []string{"", "ftp://hub", "http://user:pw@hub", "http://hub/api", "http://hub?x=1", "http://"} {
-		if _, err := ParseURL(bad); err == nil {
+	for _, bad := range []string{"", "ftp://hub", "http://user:pw@hub", "http://hub/api", "http://hub?x=1", "http://",
+		"http://user:secret@hub/x", "http://a:secret@[::1", "secret@hub"} {
+		_, err := ParseURL(bad)
+		if err == nil {
 			t.Errorf("ParseURL(%q) accepted", bad)
+		} else if strings.Contains(err.Error(), "secret") {
+			t.Errorf("ParseURL(%q) error echoes the password: %v", bad, err)
 		}
 	}
 	if !SameHub("hub.lan", "http://hub.lan:7777/") || SameHub("hub.lan", "hub.lan:8000") {
@@ -287,7 +291,7 @@ func TestWrongKey(t *testing.T) {
 	if err := c.Verify(context.Background()); !errors.Is(err, ErrBadProof) {
 		t.Errorf("Verify = %v", err)
 	}
-	if _, err := c.Devices(context.Background()); !errors.Is(err, ErrUnauthorized) {
+	if _, err := c.Devices(context.Background()); !errors.Is(err, ErrBadProof) {
 		t.Errorf("Devices = %v", err)
 	}
 	ev := stream(t, c, fastConfig())
@@ -485,5 +489,82 @@ func TestConfig(t *testing.T) {
 	os.WriteFile(path, []byte(`{`), 0o600)
 	if _, err := LoadConfig(path); err == nil {
 		t.Error("damaged file accepted")
+	}
+}
+
+// TestNoKeyBeforeProof: no request carries the key until the hub has proved it knows it,
+// and a hub that can't prove it never sees the key at all.
+func TestNoKeyBeforeProof(t *testing.T) {
+	var mu sync.Mutex
+	var keyed []string // paths requested with a key
+	proof := "wrong"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		if r.Header.Get("Authorization") != "" {
+			keyed = append(keyed, r.URL.Path)
+		}
+		p := proof
+		mu.Unlock()
+		if r.URL.Path == "/api/info" {
+			if p == "" {
+				m := hmac.New(sha256.New, []byte("k"))
+				m.Write([]byte("device-monitor-hub:" + r.URL.Query().Get("nonce")))
+				p = hex.EncodeToString(m.Sum(nil))
+			}
+			fmt.Fprintf(w, `{"proof":%q}`, p)
+			return
+		}
+		io.WriteString(w, "[]")
+	}))
+	defer srv.Close()
+	c, _ := New(srv.URL, "k")
+	ctx := context.Background()
+	_, err1 := c.Devices(ctx)
+	_, err2 := c.Rename(ctx, "a", "b")
+	for _, err := range []error{err1, err2, c.Remove(ctx, "a"), c.SetOrder(ctx, nil)} {
+		if !errors.Is(err, ErrBadProof) {
+			t.Errorf("request to an unproven hub: %v", err)
+		}
+	}
+	mu.Lock()
+	if len(keyed) != 0 {
+		t.Errorf("key sent to an unproven hub: %v", keyed)
+	}
+	proof = "" // now the hub proves itself
+	mu.Unlock()
+	if _, err := c.Devices(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Devices(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(keyed) != 2 {
+		t.Errorf("keyed requests after the proof: %v", keyed)
+	}
+}
+
+// TestStreamStatusMessage: a refused stream keeps the hub's sentence, e.g. the 503 at the
+// connection limit.
+func TestStreamStatusMessage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/info" {
+			m := hmac.New(sha256.New, []byte("k"))
+			m.Write([]byte("device-monitor-hub:" + r.URL.Query().Get("nonce")))
+			fmt.Fprintf(w, `{"proof":%q}`, hex.EncodeToString(m.Sum(nil)))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(503)
+		io.WriteString(w, `{"error":"too many connections"}`)
+	}))
+	defer srv.Close()
+	c, _ := New(srv.URL, "k")
+	ev := stream(t, c, fastConfig())
+	d := ev.next(EventDisconnected)
+	var se *StatusError
+	if !errors.As(d.Err, &se) || se.Code != 503 || se.Message != "too many connections" {
+		t.Errorf("disconnected with %v", d.Err)
 	}
 }
