@@ -53,9 +53,44 @@ func stubAgent(t *testing.T) *[2]string {
 }
 
 func setStdin(t *testing.T, s string) {
-	old := stdin
+	old, oldTTY := stdin, stdinIsTerminal
 	stdin = strings.NewReader(s)
-	t.Cleanup(func() { stdin = old })
+	stdinIsTerminal = func() bool { return true }
+	t.Cleanup(func() { stdin, stdinIsTerminal = old, oldTTY })
+}
+
+func TestConnectWithoutTerminalNeedsCode(t *testing.T) {
+	_, srv, _ := connectHub(t)
+	old := stdinIsTerminal
+	stdinIsTerminal = func() bool { return false }
+	t.Cleanup(func() { stdinIsTerminal = old })
+	var out, errOut bytes.Buffer
+	if rc := run([]string{"connect", srv.URL}, &out, &errOut); rc != 2 || !strings.Contains(errOut.String(), "--code") {
+		t.Fatalf("exit %d, %q", rc, errOut.String())
+	}
+	if strings.Contains(out.String(), "Pairing code") {
+		t.Error("prompted with no terminal")
+	}
+}
+
+func TestConnectNamesReplacedHub(t *testing.T) {
+	h, srv, clientPath := connectHub(t)
+	stubAgent(t)
+	if err := agent.SaveClient(clientPath, agent.Client{HubURL: "http://10.0.0.9:7777", Key: "0123456789abcdef"}); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if rc := run([]string{"connect", "--no-agent", srv.URL + "/?key=" + h.Token()}, &out, &errOut); rc != 0 {
+		t.Fatalf("exit %d: %s", rc, errOut.String())
+	}
+	if !strings.Contains(out.String(), "Replacing the pairing with http://10.0.0.9:7777.") {
+		t.Errorf("stdout %q", out.String())
+	}
+	out.Reset()
+	if rc := run([]string{"connect", "--no-agent", srv.URL + "/?key=" + h.Token()}, &out, &errOut); rc != 0 ||
+		strings.Contains(out.String(), "Replacing") {
+		t.Errorf("same hub again: exit %d, stdout %q", rc, out.String())
+	}
 }
 
 func TestConnectPromptsThenRunsAgent(t *testing.T) {

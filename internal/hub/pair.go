@@ -66,6 +66,7 @@ func (h *Hub) handlePair(w http.ResponseWriter, r *http.Request) {
 	if !safeEqual(given, p.code) {
 		p.tries++
 		dead := p.tries >= PairTries
+		left := PairTries - p.tries
 		if dead {
 			p.code = ""
 		}
@@ -74,7 +75,8 @@ func (h *Hub) handlePair(w http.ResponseWriter, r *http.Request) {
 		if dead {
 			msg = "Wrong pairing code. Too many tries: get a new code from the hub."
 		}
-		sendJSON(w, http.StatusForbidden, errorBody(msg))
+		// retry and triesLeft are additive to upstream's reply, so clients needn't parse msg.
+		sendJSON(w, http.StatusForbidden, map[string]any{"error": msg, "retry": !dead, "triesLeft": left})
 		return
 	}
 	p.code = ""

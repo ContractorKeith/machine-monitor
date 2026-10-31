@@ -20,6 +20,12 @@ import (
 // stdin is where connect reads the pairing code; tests replace it.
 var stdin io.Reader = os.Stdin
 
+// stdinIsTerminal reports whether a person can answer the pairing prompt; tests replace it.
+var stdinIsTerminal = func() bool {
+	fi, err := os.Stdin.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
 // connectAgent starts the agent after a successful connect; tests replace it.
 var connectAgent = startAgent
 
@@ -50,6 +56,9 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(2, "%v", err)
 	}
+	if key == "" && *codeFlag == "" && !stdinIsTerminal() { // nobody to answer the prompt
+		return fail(2, "no terminal to ask for the pairing code: pass --code CODE (usage: machine-monitor connect [--code CODE] [--no-agent] URL)")
+	}
 	paths, err := config.Default()
 	if err != nil {
 		return fail(1, "%v", err)
@@ -74,6 +83,9 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
+	if old, err := agent.LoadClient(paths.Client); err == nil && old.HubURL != "" && old.HubURL != hubURL {
+		fmt.Fprintf(stdout, "Replacing the pairing with %s.\n", old.HubURL)
+	}
 	if err := agent.SaveClient(paths.Client, agent.Client{HubURL: hubURL, Key: key}); err != nil {
 		return fail(1, "save %s: %v", paths.Client, err)
 	}

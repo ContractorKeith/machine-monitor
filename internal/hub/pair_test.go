@@ -28,10 +28,10 @@ func (th *testHub) newCode() string {
 	return v.Code
 }
 
-func (th *testHub) pair(code string) (int, map[string]string) {
+func (th *testHub) pair(code string) (int, map[string]any) {
 	th.t.Helper()
 	w := th.req("POST", "/api/pair", "", fmt.Sprintf(`{"code":%q}`, code))
-	return w.Code, decode[map[string]string](th.t, w)
+	return w.Code, decode[map[string]any](th.t, w)
 }
 
 // wrongCode is a code that differs from code.
@@ -51,7 +51,7 @@ func TestPairCodeNeedsKey(t *testing.T) {
 
 func TestPairGivesKeyOnce(t *testing.T) {
 	th := newTestHub(t)
-	if code, body := th.pair("123456"); code != 403 || body["token"] != "" {
+	if code, body := th.pair("123456"); code != 403 || body["token"] != nil {
 		t.Fatalf("no active code: %d %v", code, body)
 	}
 	c := th.newCode()
@@ -60,7 +60,7 @@ func TestPairGivesKeyOnce(t *testing.T) {
 	if code != 200 || body["token"] != th.Token() {
 		t.Fatalf("pair: %d %v", code, body)
 	}
-	if code, body := th.pair(c); code != 403 || body["token"] != "" {
+	if code, body := th.pair(c); code != 403 || body["token"] != nil {
 		t.Fatalf("reused code: %d %v", code, body)
 	}
 }
@@ -70,7 +70,7 @@ func TestPairCodeExpires(t *testing.T) {
 	c := th.newCode()
 	th.clk.Add(PairTTL - time.Second)
 	th.clk.Add(2 * time.Second)
-	if code, body := th.pair(c); code != 403 || body["token"] != "" {
+	if code, body := th.pair(c); code != 403 || body["token"] != nil {
 		t.Fatalf("expired code: %d %v", code, body)
 	}
 
@@ -89,11 +89,14 @@ func TestPairCodeDiesAfterFiveTries(t *testing.T) {
 		if code != 403 {
 			t.Fatalf("try %d: %d", i, code)
 		}
+		if want := float64(PairTries - i); body["triesLeft"] != want || body["retry"] != (i < PairTries) {
+			t.Fatalf("try %d: retry %v, triesLeft %v", i, body["retry"], body["triesLeft"])
+		}
 		if i == PairTries && body["error"] != "Wrong pairing code. Too many tries: get a new code from the hub." {
 			t.Fatalf("last try: %q", body["error"])
 		}
 	}
-	if code, body := th.pair(c); code != 403 || body["token"] != "" {
+	if code, body := th.pair(c); code != 403 || body["token"] != nil {
 		t.Fatalf("right code after %d wrong tries: %d %v", PairTries, code, body)
 	}
 

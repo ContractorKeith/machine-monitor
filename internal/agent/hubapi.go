@@ -8,6 +8,11 @@
 // before any proof is possible (the client doesn't know the key yet); it is single-use and
 // short-lived, and the key it buys is proven before it is used or saved.
 //
+// The proof only shows the server holds the key; it is not bound to the connection. On
+// plain HTTP the key travels in cleartext in every report, so anyone who can read or
+// intercept traffic on the path can take it. Confidentiality relies on the LAN or tailnet
+// being trusted, or on HTTPS (for example through tailscale serve).
+//
 // Ported from Forward-Future/device-monitor main.js (fetchInfo, pairWithHub, hubAnswers,
 // the connect flow) and server.js (hubProof) @ c3a4c41
 // (MIT, © 2026 Matt): https://github.com/Forward-Future/device-monitor
@@ -171,6 +176,7 @@ func Pair(ctx context.Context, c *http.Client, hubURL, code string) (string, err
 	var reply struct {
 		Token string `json:"token"`
 		Error string `json:"error"`
+		Retry *bool  `json:"retry"` // machine-monitor hubs only
 	}
 	json.NewDecoder(io.LimitReader(resp.Body, maxReply)).Decode(&reply)
 	if resp.StatusCode != http.StatusOK || reply.Token == "" {
@@ -178,7 +184,11 @@ func Pair(ctx context.Context, c *http.Client, hubURL, code string) (string, err
 		if msg == "" {
 			msg = fmt.Sprintf("HTTP %d", resp.StatusCode)
 		}
-		return "", &PairError{Msg: msg, Retry: resp.StatusCode == http.StatusForbidden && msg == "Wrong pairing code."}
+		retry := resp.StatusCode == http.StatusForbidden && msg == "Wrong pairing code."
+		if reply.Retry != nil {
+			retry = *reply.Retry
+		} // else an upstream hub: its server.js wording is the only signal (pinned at c3a4c41)
+		return "", &PairError{Msg: msg, Retry: retry}
 	}
 	if !keyRE.MatchString(reply.Token) {
 		return "", errors.New("the hub handed over an unusable key")

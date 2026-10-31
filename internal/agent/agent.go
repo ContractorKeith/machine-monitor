@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"slices"
@@ -87,7 +88,7 @@ func Run(ctx context.Context, opt Options) error {
 		wait := opt.Interval
 		if err != nil {
 			a.fails++
-			wait = backoff(opt.Interval, opt.MaxBackoff, a.fails)
+			wait = jittered(backoff(opt.Interval, opt.MaxBackoff, a.fails))
 			a.logState(fmt.Sprintf("%v (retrying in %s)", err, wait.Round(time.Second/10)), err.Error())
 		} else {
 			a.fails = 0
@@ -196,6 +197,12 @@ func (a *runner) logState(msg, key string) {
 	if a.opt.Logf != nil {
 		a.opt.Logf("agent: %s", msg)
 	}
+}
+
+// jittered spreads a wait by ×(1 + rand·0.2), so agents that lose the hub together don't
+// retry in lockstep.
+func jittered(d time.Duration) time.Duration {
+	return d + time.Duration(rand.Float64()*0.2*float64(d))
 }
 
 // backoff is the wait after the nth failure in a row: interval × 2^(n-1), capped at max.

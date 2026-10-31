@@ -418,3 +418,42 @@ func TestHubDownLoggedOnce(t *testing.T) {
 		t.Errorf("logs = %q", logs)
 	}
 }
+
+func TestJitter(t *testing.T) {
+	d := time.Second
+	seen := map[time.Duration]bool{}
+	for range 200 {
+		j := jittered(d)
+		if j < d || j > d*12/10 {
+			t.Fatalf("jittered(%v) = %v, want within [1s, 1.2s]", d, j)
+		}
+		seen[j] = true
+	}
+	if len(seen) < 2 {
+		t.Error("jitter never varies")
+	}
+}
+
+func TestPairRetrySignal(t *testing.T) {
+	for _, c := range []struct {
+		name, body string
+		retry      bool
+	}{
+		{"field says retry", `{"error":"Falscher Code","retry":true,"triesLeft":3}`, true},
+		{"field says dead", `{"error":"Wrong pairing code.","retry":false,"triesLeft":0}`, false},
+		{"upstream wording", `{"error":"Wrong pairing code."}`, true},
+		{"upstream dead", `{"error":"Wrong pairing code. Too many tries: get a new code from the hub."}`, false},
+		{"upstream no code", `{"error":"No pairing code is active."}`, false},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(403)
+			io.WriteString(w, c.body)
+		}))
+		_, err := Pair(context.Background(), NewHTTPClient(), srv.URL, "1")
+		srv.Close()
+		var pe *PairError
+		if !errors.As(err, &pe) || pe.Retry != c.retry {
+			t.Errorf("%s: err %v, want retry %v", c.name, err, c.retry)
+		}
+	}
+}
