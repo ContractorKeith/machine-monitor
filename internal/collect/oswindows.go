@@ -106,8 +106,9 @@ func (s *windowsSource) clockMHz(ctx context.Context) *float64 {
 	return report.Ptr(math.Round(s.maxClock * float64(perf[0].PercentProcessorPerformance) / 100))
 }
 
-// memory is total − available (GlobalMemoryStatusEx), the same as upstream's
-// TotalVisibleMemorySize − FreePhysicalMemory.
+// memory is ullTotalPhys − ullAvailPhys from GlobalMemoryStatusEx (via gopsutil). This is a
+// deliberate difference from upstream's TotalVisibleMemorySize − FreePhysicalMemory: the
+// totals differ by the memory firmware reserves.
 func (s *windowsSource) memory(ctx context.Context) report.Memory {
 	vm, err := s.ps.VirtualMemory(ctx)
 	if err != nil || vm.Total == 0 {

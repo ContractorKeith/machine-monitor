@@ -10,6 +10,8 @@ import (
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/mem"
 	"github.com/shirou/gopsutil/v4/net"
+
+	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
 // twoSamples is a fakePS with two samples 2 s apart's worth of counters.
@@ -144,4 +146,49 @@ func deref(p *float64) any {
 		return nil
 	}
 	return *p
+}
+
+// stuckSource is a Linux source whose memory read waits for its ctx (a command that obeys
+// its timeout) and whose network read ignores ctx entirely (a hung statfs or WMI call).
+type stuckSource struct {
+	linuxSource
+	release chan struct{}
+}
+
+func (s stuckSource) memory(ctx context.Context) report.Memory {
+	<-ctx.Done()
+	return report.Memory{} // like vm_stat killed at the deadline
+}
+
+func (s stuckSource) netIO(context.Context) []ifaceBytes {
+	<-s.release
+	return nil
+}
+
+func TestCoreSampleDeadline(t *testing.T) {
+	p := twoSamples()
+	src := stuckSource{linuxSource: linuxFixture(p), release: make(chan struct{})}
+	defer close(src.release)
+	c := &core{src: src, ps: p, probes: newProbeRunner(nil), now: time.Now, timeout: 50 * time.Millisecond}
+
+	for i := range 2 {
+		p.sample = i
+		start := time.Now()
+		r, err := c.Collect(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d := time.Since(start); d > time.Second {
+			t.Fatalf("sample %d took %v, want about the 50 ms budget", i+1, d)
+		}
+		if r.Memory.Total != nil || r.Memory.Used != nil || r.NetIfaces != nil || r.Net != nil {
+			t.Errorf("sample %d: stuck reads should leave memory and net nil: %+v %+v", i+1, r.Memory, r.Net)
+		}
+		if r.Uptime == nil || r.CPU.ClockMHz == nil {
+			t.Errorf("sample %d: healthy reads should still be filled", i+1)
+		}
+		if i == 1 && (r.CPU.Usage == nil || r.DiskIO == nil) {
+			t.Errorf("sample 2: usage and disk I/O should not wait on the stuck reads")
+		}
+	}
 }

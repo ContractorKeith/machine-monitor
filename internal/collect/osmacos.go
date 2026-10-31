@@ -155,8 +155,10 @@ func vmStatUsed(out string) *float64 {
 	found := 0
 	for line := range strings.Lines(out) {
 		if _, after, ok := strings.Cut(line, "page size of "); ok {
-			if f, err := strconv.ParseFloat(strings.Fields(after)[0], 64); err == nil && f > 0 {
-				page = f
+			if f := strings.Fields(after); len(f) > 0 {
+				if n, err := strconv.ParseFloat(f[0], 64); err == nil && n > 0 {
+					page = n
+				}
 			}
 			continue
 		}
@@ -184,26 +186,32 @@ func vmStatUsed(out string) *float64 {
 }
 
 // netstatBytes reads per-interface byte counters from netstat -ibn: the <Link#n> row of
-// each interface. Columns: Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes
-// Coll; Address is blank for interfaces without a MAC (utun, gif).
+// each interface. The Ibytes and Obytes columns come from the header line. Address (before
+// the counters) is blank for interfaces without a MAC (utun, gif), so a row can be one
+// field short; the counters are found by their distance from the end of the line.
 func netstatBytes(out string) []ifaceBytes {
 	var res []ifaceBytes
 	seen := map[string]bool{}
+	inEnd, outEnd := 0, 0 // Ibytes and Obytes, counted back from the last column
 	for line := range strings.Lines(out) {
 		f := strings.Fields(line)
-		if len(f) < 10 || !strings.HasPrefix(f[2], "<Link#") {
+		if len(f) > 0 && f[0] == "Name" {
+			in, out := slices.Index(f, "Ibytes"), slices.Index(f, "Obytes")
+			if in < 0 || out < 0 {
+				return nil
+			}
+			inEnd, outEnd = len(f)-in, len(f)-out
+			continue
+		}
+		if inEnd == 0 || len(f) < 3 || !strings.HasPrefix(f[2], "<Link#") || len(f)-inEnd < 3 || len(f)-outEnd < 3 {
 			continue
 		}
 		name := strings.TrimSuffix(f[0], "*") // * marks an interface that is down
 		if strings.HasPrefix(name, "lo") || seen[name] {
 			continue
 		}
-		in, out := 6, 9
-		if len(f) == 10 { // no Address column
-			in, out = 5, 8
-		}
-		rx, err1 := strconv.ParseUint(f[in], 10, 64)
-		tx, err2 := strconv.ParseUint(f[out], 10, 64)
+		rx, err1 := strconv.ParseUint(f[len(f)-inEnd], 10, 64)
+		tx, err2 := strconv.ParseUint(f[len(f)-outEnd], 10, 64)
 		if err1 != nil || err2 != nil || (rx == 0 && tx == 0) {
 			continue
 		}

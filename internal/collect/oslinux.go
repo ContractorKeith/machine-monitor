@@ -113,9 +113,10 @@ var linuxSkipFS = []string{"tmpfs", "devtmpfs", "squashfs", "overlay", "efivarfs
 // Mount points upstream drops: /boot*, /snap*, /init, WSL's internal mounts.
 var linuxSkipMount = regexp.MustCompile(`^/(boot|snap|init$|usr/lib/wsl|mnt/wsl)`)
 
-// disks follows upstream's df filter. Unlike df it also drops repeat mounts of one device
-// (btrfs subvolumes, bind mounts), keeping the shortest mount point, so a 1 TB disk mounted
-// four times is shown once.
+// disks follows upstream's df filter. Unlike df it also drops repeat mounts of one block
+// device (btrfs subvolumes, bind mounts), keeping the shortest mount point, so a 1 TB disk
+// mounted four times is shown once. Only /dev/ sources are deduplicated: "none", fuse and
+// ZFS dataset names can be shared by unrelated filesystems.
 func (s linuxSource) disks(ctx context.Context) []report.Disk {
 	parts, err := s.ps.Partitions(ctx)
 	if err != nil {
@@ -132,7 +133,9 @@ func (s linuxSource) disks(ctx context.Context) []report.Disk {
 		if err != nil || u.Total == 0 { // df hides "dummy" filesystems with no blocks
 			continue
 		}
-		seen[p.Device] = true
+		if strings.HasPrefix(p.Device, "/dev/") {
+			seen[p.Device] = true
+		}
 		out = append(out, report.Disk{
 			Name:  report.Ptr(p.Mountpoint),
 			Total: report.Ptr(float64(u.Total)),

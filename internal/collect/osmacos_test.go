@@ -70,6 +70,11 @@ func TestMacMemory(t *testing.T) {
 	if got := vmStatUsed("Mach Virtual Memory Statistics: (page size of 4096 bytes)\nPages active: 10.\n"); got != nil {
 		t.Errorf("partial vm_stat = %v, want nil", *got)
 	}
+	// A page-size line cut off after "page size of " keeps the 4 KiB default, not a panic.
+	cut := "Mach Virtual Memory Statistics: (page size of \nPages active: 1.\nPages wired down: 1.\nPages occupied by compressor: 1.\n"
+	if got := val(t, "used", vmStatUsed(cut)); got != 3*4096 {
+		t.Errorf("truncated header: used = %v, want 3 × 4096", got)
+	}
 }
 
 func TestMacDisks(t *testing.T) {
@@ -117,6 +122,23 @@ func TestMacNet(t *testing.T) {
 	}
 	if !s.inNetTotal("en0") || s.inNetTotal("utun0") || s.inNetTotal("awdl0") {
 		t.Error("only en* interfaces count toward the total")
+	}
+}
+
+// TestNetstatColumnsFromHeader reads a netstat layout without the Coll column: the byte
+// counters must come from the header, for rows with and without an Address.
+func TestNetstatColumnsFromHeader(t *testing.T) {
+	out := `Name  Mtu   Network     Address            Ipkts Ierrs  Ibytes Opkts Oerrs  Obytes
+en0   1500  <Link#4>    a4:83:e7:12:34:56    100     0    5000    80     0    4000
+utun3 1380  <Link#20>                         10     0     700     9     0     600
+en0   1500  192.168.1   192.168.1.20         100     -    5000    80     -    4000
+`
+	got := netstatBytes(out)
+	if len(got) != 2 || got[0] != (ifaceBytes{"en0", 5000, 4000}) || got[1] != (ifaceBytes{"utun3", 700, 600}) {
+		t.Errorf("netstatBytes = %+v, want en0 5000/4000 and utun3 700/600", got)
+	}
+	if got := netstatBytes("en0 1500 <Link#4> a4:83:e7:12:34:56 1 0 2 3 0 4 0\n"); got != nil {
+		t.Errorf("no header: %+v, want nil", got)
 	}
 }
 

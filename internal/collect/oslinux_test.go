@@ -135,6 +135,38 @@ func TestLinuxDisks(t *testing.T) {
 	}
 }
 
+// TestLinuxDisksSharedSource keeps filesystems whose source isn't a /dev/ block device,
+// even when several share it.
+func TestLinuxDisksSharedSource(t *testing.T) {
+	gb := uint64(1 << 30)
+	p := &fakePS{
+		parts: []disk.PartitionStat{
+			{Device: "tank/data", Mountpoint: "/tank/data", Fstype: "zfs"},
+			{Device: "tank/data", Mountpoint: "/srv/data", Fstype: "zfs"},
+			{Device: "none", Mountpoint: "/mnt/a", Fstype: "ext4"},
+			{Device: "none", Mountpoint: "/mnt/b", Fstype: "xfs"},
+			{Device: "sshfs#me@host:", Mountpoint: "/mnt/c", Fstype: "fuse.sshfs"},
+			{Device: "sshfs#me@host:", Mountpoint: "/mnt/d", Fstype: "fuse.sshfs"},
+			{Device: "/dev/sdb1", Mountpoint: "/data", Fstype: "ext4"},
+			{Device: "/dev/sdb1", Mountpoint: "/data/bind", Fstype: "ext4"},
+		},
+		usage: map[string]*disk.UsageStat{},
+	}
+	for _, part := range p.parts {
+		p.usage[part.Mountpoint] = &disk.UsageStat{Total: gb, Used: gb / 2}
+	}
+	got := names(linuxFixture(p).disks(context.Background()))
+	want := []string{"/data", "/mnt/a", "/mnt/b", "/mnt/c", "/mnt/d", "/srv/data", "/tank/data"}
+	if len(got) != len(want) {
+		t.Fatalf("disks = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("disk %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestLinuxDiskIO(t *testing.T) {
 	p := &fakePS{diskIO: []map[string]disk.IOCountersStat{{
 		"nvme0n1":   {ReadBytes: 1000, WriteBytes: 2000},

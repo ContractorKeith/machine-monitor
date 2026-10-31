@@ -1,6 +1,7 @@
 package collect
 
 import (
+	"cmp"
 	"context"
 	"log/slog"
 	"math"
@@ -57,12 +58,21 @@ type counters struct {
 	ifaces      []ifaceBytes
 }
 
+// Budgets for the core reads. A sample's reads share one deadline below the 2 s cadence,
+// so a stuck command or WMI query leaves its own fields nil instead of stalling the sample.
+// The static reads run once and include system_profiler, which can take a few seconds.
+const (
+	sampleTimeout = 1500 * time.Millisecond
+	staticTimeout = 10 * time.Second
+)
+
 // core is the Collector for every OS: the shared logic around a source, plus the probes.
 type core struct {
-	src    source
-	ps     ps
-	probes *probeRunner
-	now    func() time.Time
+	src     source
+	ps      ps
+	probes  *probeRunner
+	now     func() time.Time
+	timeout time.Duration // per-sample budget for the core reads; 0 = sampleTimeout
 
 	info    *staticInfo
 	threads *float64
@@ -71,11 +81,23 @@ type core struct {
 }
 
 func newCore(src source, p ps) *core {
-	return &core{src: src, ps: p, probes: newProbeRunner(Probes()), now: time.Now}
+	return &core{src: src, ps: p, probes: newProbeRunner(Probes()), now: time.Now, timeout: sampleTimeout}
 }
 
-// Collect samples the machine. Probes run concurrently with the core metrics and are
-// applied last.
+// cpuSample is one read of the CPU time counters.
+type cpuSample struct {
+	total *cpu.TimesStat
+	cores []cpu.TimesStat
+}
+
+// diskSample is one read of the cumulative disk I/O counters.
+type diskSample struct {
+	read, write uint64
+	ok          bool
+}
+
+// Collect samples the machine. The core reads run concurrently under one deadline; probes
+// run alongside them and are applied last.
 func (c *core) Collect(ctx context.Context) (*report.Report, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -83,12 +105,9 @@ func (c *core) Collect(ctx context.Context) (*report.Report, error) {
 	finish := c.probes.start(ctx)
 
 	if c.info == nil {
-		info := c.src.static(ctx)
-		c.info = &info
-		if n, err := c.ps.CPUCount(ctx); err == nil && n > 0 {
-			c.threads = report.Ptr(float64(n))
-		}
-		c.macs = c.readMACs(ctx)
+		sctx, cancel := context.WithTimeout(ctx, staticTimeout)
+		c.loadStatic(sctx)
+		cancel()
 	}
 	r := &report.Report{
 		ID:         c.info.id,
@@ -97,15 +116,29 @@ func (c *core) Collect(ctx context.Context) (*report.Report, error) {
 		OS:         c.info.os,
 		FormFactor: c.info.formFactor,
 		MACs:       c.macs,
+		CPU:        report.CPU{Name: c.info.cpuName, Threads: c.threads},
 	}
-	if up, err := c.ps.Uptime(ctx); err == nil && up > 0 {
-		r.Uptime = report.Ptr(float64(up))
-	}
-	r.CPU = report.CPU{Name: c.info.cpuName, Threads: c.threads, ClockMHz: c.src.clockMHz(ctx)}
-	r.Memory = c.src.memory(ctx)
-	r.Disks = c.src.disks(ctx)
 
-	cur := c.sample(ctx)
+	sctx, cancel := context.WithTimeout(ctx, cmp.Or(c.timeout, sampleTimeout))
+	defer cancel()
+	at := c.now()
+	uptime := async(sctx, c.uptime)
+	clock := async(sctx, c.src.clockMHz)
+	memory := async(sctx, c.src.memory)
+	disks := async(sctx, c.src.disks)
+	times := async(sctx, c.cpuTimes)
+	dio := async(sctx, func(ctx context.Context) diskSample {
+		rd, wr, ok := c.src.diskIO(ctx)
+		return diskSample{rd, wr, ok}
+	})
+	nets := async(sctx, c.src.netIO)
+
+	r.Uptime = await(sctx, uptime)
+	r.CPU.ClockMHz = await(sctx, clock)
+	r.Memory = await(sctx, memory)
+	r.Disks = await(sctx, disks)
+	t, d := await(sctx, times), await(sctx, dio)
+	cur := &counters{at: at, cpu: t.total, cores: t.cores, read: d.read, write: d.write, diskOK: d.ok, ifaces: await(sctx, nets)}
 	if c.prev != nil {
 		c.rates(r, c.prev, cur)
 	}
@@ -115,20 +148,68 @@ func (c *core) Collect(ctx context.Context) (*report.Report, error) {
 	return r, nil
 }
 
-// sample reads the cumulative counters.
-func (c *core) sample(ctx context.Context) *counters {
-	s := &counters{at: c.now()}
+// loadStatic reads what doesn't change while we run.
+func (c *core) loadStatic(ctx context.Context) {
+	info := c.src.static(ctx)
+	c.info = &info
+	if n, err := c.ps.CPUCount(ctx); err == nil && n > 0 {
+		c.threads = report.Ptr(float64(n))
+	}
+	c.macs = c.readMACs(ctx)
+}
+
+func (c *core) uptime(ctx context.Context) *float64 {
+	if up, err := c.ps.Uptime(ctx); err == nil && up > 0 {
+		return report.Ptr(float64(up))
+	}
+	return nil
+}
+
+// cpuTimes reads the total and per-core CPU time counters.
+func (c *core) cpuTimes(ctx context.Context) cpuSample {
+	var s cpuSample
 	if t, err := c.ps.CPUTimes(ctx, false); err == nil && len(t) > 0 {
-		s.cpu = &t[0]
+		s.total = &t[0]
 	} else if err != nil {
 		slog.Debug("collect: cpu times", "err", err)
 	}
 	if t, err := c.ps.CPUTimes(ctx, true); err == nil {
 		s.cores = t
 	}
-	s.read, s.write, s.diskOK = c.src.diskIO(ctx)
-	s.ifaces = c.src.netIO(ctx)
 	return s
+}
+
+// async runs f on its own goroutine, so a read that ignores ctx (a statfs on a hung NFS
+// mount) can't hold up the sample. A panic in f counts as unknown.
+func async[T any](ctx context.Context, f func(context.Context) T) <-chan T {
+	ch := make(chan T, 1)
+	go func() {
+		var v T
+		defer func() {
+			if p := recover(); p != nil {
+				slog.Debug("collect: core read panicked", "panic", p)
+			}
+			ch <- v
+		}()
+		v = f(ctx)
+	}()
+	return ch
+}
+
+// await returns a read's result, or the zero value (unknown) once ctx is done.
+func await[T any](ctx context.Context, ch <-chan T) T {
+	select {
+	case v := <-ch:
+		return v
+	case <-ctx.Done():
+		select {
+		case v := <-ch: // finished at the deadline
+			return v
+		default:
+			var zero T
+			return zero
+		}
+	}
 }
 
 // rates fills the fields computed from deltas between two samples.
