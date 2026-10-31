@@ -131,9 +131,10 @@ func wrong(code string) string {
 // fakeHub records every request and answers like a hub whose key is hubKey.
 type fakeHub struct {
 	t      *testing.T
-	hubKey string // the key this hub proves (and hands out when pairing)
-	procs  bool   // ask for processes in report replies
-	down   bool   // answer every request with 503
+	hubKey string    // the key this hub proves (and hands out when pairing)
+	procs  bool      // ask for processes in report replies
+	down   bool      // answer every request with 503
+	cmds   []Command // put in the next report reply, then cleared
 	mu     sync.Mutex
 	seen   []string // every request: "METHOD path auth body"
 	bodies [][]byte // report bodies
@@ -143,9 +144,10 @@ func (f *fakeHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	b, _ := io.ReadAll(r.Body)
 	f.mu.Lock()
 	f.seen = append(f.seen, r.Method+" "+r.URL.String()+" "+r.Header.Get("Authorization")+" "+string(b))
-	down, procs := f.down, f.procs
+	down, procs, cmds := f.down, f.procs, []Command(nil)
 	if r.URL.Path == "/api/report" {
 		f.bodies = append(f.bodies, b)
+		cmds, f.cmds = f.cmds, nil
 	}
 	f.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
@@ -160,7 +162,7 @@ func (f *fakeHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/api/pair":
 		json.NewEncoder(w).Encode(map[string]string{"token": f.hubKey})
 	case "/api/report":
-		json.NewEncoder(w).Encode(map[string]any{"ok": true, "procs": procs})
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "procs": procs, "commands": cmds})
 	default:
 		w.WriteHeader(404)
 	}

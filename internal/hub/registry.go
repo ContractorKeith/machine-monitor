@@ -67,8 +67,8 @@ type View struct {
 }
 
 // reportReply is the body of a successful POST /api/report: it tells the agent what clients
-// want from it. Procs (send the process list) and Commands (signed power actions) arrive
-// with M7; until then the reply is always {"ok":true}.
+// want from it. Procs asks for the process list (procs.go); Commands are signed power
+// actions (commands.go).
 type reportReply struct {
 	OK       bool      `json:"ok"`
 	Procs    bool      `json:"procs,omitempty"`
@@ -76,10 +76,12 @@ type reportReply struct {
 }
 
 // command is a queued remote action, HMAC-signed so an agent can tell it from one a LAN
-// MITM injected into the plain-HTTP reply (M7).
+// MITM injected into the plain-HTTP reply. T is when it was queued (Unix ms); see
+// SignCommand.
 type command struct {
 	ID     string `json:"id"`
 	Action string `json:"action"`
+	T      int64  `json:"t"`
 	Sig    string `json:"sig"`
 }
 
@@ -207,7 +209,8 @@ func (h *Hub) ingest(raw []byte) (reportReply, error) {
 	if err != nil {
 		return reportReply{}, err
 	}
-	r.Processes = nil // processes on demand arrive with M7; never stored with the report
+	procs := r.Processes
+	r.Processes = nil // processes on demand are kept apart (procs.go), never with the report
 
 	lk := h.deviceLock(r.ID)
 	if lk == nil {
@@ -260,7 +263,10 @@ func (h *Hub) ingest(raw []byte) (reportReply, error) {
 		h.broadcast(map[string]any{"type": "actionResult", "id": r.ID, "name": dev.Name, "result": r.ActionResult})
 	}
 	h.alerts.OnReport(r.ID, &r) // outside mu: the engine calls back into alertDevices
-	return reportReply{OK: true}, nil
+	if procs != nil {
+		h.storeProcs(r.ID, procs)
+	}
+	return h.replyFor(r.ID, r.Actions), nil
 }
 
 // sampleOf is the history sample for one report: main (first) GPU, memory as a percentage.
@@ -348,7 +354,7 @@ func (h *Hub) broadcastStatus() {
 func (h *Hub) collectLoop(ctx context.Context) {
 	t := time.NewTicker(h.opt.Interval)
 	defer t.Stop()
-	warned := false
+	warned, wantProcs := false, false
 	for {
 		select {
 		case <-ctx.Done():
@@ -357,6 +363,14 @@ func (h *Hub) collectLoop(ctx context.Context) {
 		}
 		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		r, err := h.opt.Collector.Collect(cctx)
+		if err == nil && r != nil && h.opt.Procs != nil {
+			r.Features = append(r.Features, "procs")
+			if wantProcs {
+				if list, perr := h.opt.Procs(cctx); perr == nil {
+					r.Processes = busiest(list, maxProcs)
+				}
+			}
+		}
 		cancel()
 		if err != nil || r == nil {
 			if err != nil && ctx.Err() == nil {
@@ -374,7 +388,9 @@ func (h *Hub) collectLoop(ctx context.Context) {
 		r.Token = ""
 		raw, err := json.Marshal(r)
 		if err == nil {
-			_, err = h.ingest(raw)
+			var rep reportReply
+			rep, err = h.ingest(raw)
+			wantProcs = rep.Procs
 		}
 		if err != nil {
 			h.logf("hub: own report: %v", err)

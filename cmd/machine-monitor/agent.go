@@ -18,13 +18,15 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/tui"
 )
 
-// runAgent is `machine-monitor agent [--hub URL] [--key KEY]`: report this machine to a hub.
+// runAgent is `machine-monitor agent [--hub URL] [--key KEY] [--allow-power-actions]`:
+// report this machine to a hub.
 // The hub and key default to client.json, written by connect.
 func runAgent(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("agent", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	hubFlag := fs.String("hub", "", "hub URL (default: the hub in client.json)")
 	keyFlag := fs.String("key", "", "hub key (default: the key in client.json)")
+	allowPower := fs.Bool("allow-power-actions", false, "let the hub sleep, restart or shut down this machine (signed commands)")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -64,17 +66,22 @@ func runAgent(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "machine-monitor agent: no hub or no valid key: run machine-monitor connect URL")
 		return 1
 	}
-	return startAgent(hubURL, key, stderr)
+	return startAgentWith(hubURL, key, *allowPower, stderr)
 }
 
-// startAgent runs the report loop until SIGINT or SIGTERM.
+// startAgent runs the report loop, power actions off, until SIGINT or SIGTERM.
 func startAgent(hubURL, key string, stderr io.Writer) int {
+	return startAgentWith(hubURL, key, false, stderr)
+}
+
+// startAgentWith runs the report loop until SIGINT or SIGTERM.
+func startAgentWith(hubURL, key string, allowPower bool, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	logger := log.New(stderr, "", log.LstdFlags)
 	procs := tui.SystemProcesses()
 	err := agent.Run(ctx, agent.Options{HubURL: hubURL, Key: key, Collector: collect.New(),
-		Procs: procs.Processes, Version: version, Logf: logger.Printf})
+		Procs: procs.Processes, AllowPowerActions: allowPower, Version: version, Logf: logger.Printf})
 	if err != nil {
 		fmt.Fprintf(stderr, "machine-monitor agent: %v\n", err)
 		return 1

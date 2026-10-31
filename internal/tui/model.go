@@ -74,6 +74,8 @@ type model struct {
 	notice    string // last action's error, until the next action or reconnect
 	orderGen  int    // counts order and snapshot events, so a late reorder failure can't undo them
 
+	act actState // remote processes, wake and the power menu (actions.go)
+
 	deviceScroll int
 
 	al alertsUI // the Alerts view and the banner (alerts.go)
@@ -110,7 +112,7 @@ func New(o Options) tea.Model {
 	rn.Prompt = ""
 	rn.CharLimit = 60 // the hub's limit
 	if o.Hub != nil {
-		o.Procs = nil // remote process lists arrive with actions (M7)
+		o.Procs = nil // the hub supplies process lists (actions.go)
 	}
 	if o.Now == nil {
 		o.Now = time.Now
@@ -164,7 +166,10 @@ func (m model) listProcs() tea.Cmd {
 
 // maybeProcs starts a process fetch when the Processes view is open and none is running.
 func (m *model) maybeProcs() tea.Cmd {
-	if m.view != viewProcesses || m.opts.Procs == nil || m.procsBusy || m.multi() {
+	if m.multi() {
+		return m.startRemoteProcs()
+	}
+	if m.view != viewProcesses || m.opts.Procs == nil || m.procsBusy {
 		return nil
 	}
 	m.procsBusy = true
@@ -225,6 +230,9 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.rename.Focused() || m.confirmID != "" {
 		return m.hubInputKey(msg)
+	}
+	if m.act.menu != "" {
+		return m.actionKey(msg)
 	}
 	if m.filter.Focused() {
 		switch msg.String() {
