@@ -131,6 +131,9 @@ type Options struct {
 	// BlockPrivate also refuses delivery to private (RFC 1918, fc00::/7) addresses. Upstream
 	// allows them so a self-hosted ntfy or chat bridge on the LAN works; so does the default.
 	BlockPrivate bool
+	// LocalAddrs lists this machine's own interface addresses, which delivery refuses;
+	// the real interfaces when nil.
+	LocalAddrs func() []netip.Addr
 	// Logf logs delivery failures and save errors; dropped when nil.
 	Logf func(format string, args ...any)
 }
@@ -183,7 +186,7 @@ func New(opt Options) *Engine {
 	}
 	e := &Engine{opt: opt, client: opt.HTTP, state: map[string]*state{}}
 	if e.client == nil {
-		e.client = newGuardedClient(opt.BlockPrivate)
+		e.client = newGuardedClient(e.blocked)
 	}
 
 	saved, haveSaved := e.load()

@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -45,6 +46,9 @@ type Delivery struct {
 // blockPrivate is set.
 func blockedAddr(a netip.Addr, blockPrivate bool) bool {
 	a = a.Unmap() // ::ffff:127.0.0.1 is 127.0.0.1
+	if b := a.As16(); a.Is6() && [12]byte(b[:12]) == [12]byte{} {
+		a = netip.AddrFrom4([4]byte(b[12:])) // ::127.0.0.1 (IPv4-compatible) too
+	}
 	if a.Is4() && a.As4()[0] == 0 {
 		return true
 	}
@@ -52,11 +56,38 @@ func blockedAddr(a netip.Addr, blockPrivate bool) bool {
 		(blockPrivate && a.IsPrivate())
 }
 
+// ownAddrs lists this machine's interface addresses (LAN, Tailscale, ...). A webhook to one
+// would reach the hub's own API from the hub's own address.
+func ownAddrs() []netip.Addr {
+	var out []netip.Addr
+	addrs, _ := net.InterfaceAddrs()
+	for _, a := range addrs {
+		if ipn, ok := a.(*net.IPNet); ok {
+			if ip, ok := netip.AddrFromSlice(ipn.IP); ok {
+				out = append(out, ip.Unmap())
+			}
+		}
+	}
+	return out
+}
+
+// blocked is blockedAddr plus the hub machine's own interface addresses.
+func (e *Engine) blocked(a netip.Addr) bool {
+	if blockedAddr(a, e.opt.BlockPrivate) {
+		return true
+	}
+	local := e.opt.LocalAddrs
+	if local == nil {
+		local = ownAddrs
+	}
+	return slices.Contains(local(), a.Unmap())
+}
+
 // checkHost refuses a URL whose host is, or resolves to, a blocked address. One blocked
 // address is enough to refuse, since the dialer may pick any of them.
 func (e *Engine) checkHost(ctx context.Context, host string) error {
 	if a, err := netip.ParseAddr(host); err == nil {
-		if blockedAddr(a, e.opt.BlockPrivate) {
+		if e.blocked(a) {
 			return errors.New("blocked: local address")
 		}
 		return nil
@@ -72,7 +103,7 @@ func (e *Engine) checkHost(ctx context.Context, host string) error {
 		return fmt.Errorf("lookup %s: %w", host, err)
 	}
 	for _, a := range addrs {
-		if blockedAddr(a, e.opt.BlockPrivate) {
+		if e.blocked(a) {
 			return errors.New("blocked: resolves to a local address")
 		}
 	}
@@ -118,12 +149,12 @@ func (e *Engine) post(ctx context.Context, rawURL string, body any) Result {
 // newGuardedClient is the default Doer: no redirects, no proxy (a proxy would hide where the
 // request really goes), and a dialer that re-checks the address it actually connects to, so a
 // DNS answer that changes between the check and the dial (rebinding) is refused too.
-func newGuardedClient(blockPrivate bool) *http.Client {
+func newGuardedClient(blocked func(netip.Addr) bool) *http.Client {
 	dialer := &net.Dialer{
 		Timeout: deliveryTimeout,
 		Control: func(_, address string, _ syscall.RawConn) error {
 			ap, err := netip.ParseAddrPort(address)
-			if err != nil || blockedAddr(ap.Addr(), blockPrivate) {
+			if err != nil || blocked(ap.Addr()) {
 				return fmt.Errorf("blocked: local address %s", address)
 			}
 			return nil

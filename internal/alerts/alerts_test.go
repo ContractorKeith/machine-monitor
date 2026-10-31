@@ -502,7 +502,7 @@ func TestPrivateAddresses(t *testing.T) {
 	if !blockedAddr(lan, true) || !blockedAddr(netip.MustParseAddr("fd00::1"), true) {
 		t.Fatal("BlockPrivate didn't block")
 	}
-	for _, a := range []string{"127.0.0.1", "0.1.2.3", "169.254.169.254", "::1", "::", "fe80::1", "::ffff:169.254.169.254"} {
+	for _, a := range []string{"127.0.0.1", "0.1.2.3", "169.254.169.254", "::1", "::", "fe80::1", "::ffff:169.254.169.254", "::127.0.0.1"} {
 		if !blockedAddr(netip.MustParseAddr(a), false) {
 			t.Errorf("%s not blocked", a)
 		}
@@ -521,8 +521,67 @@ func TestGuardedClientRefusesLoopbackDial(t *testing.T) {
 	}))
 	defer srv.Close()
 	req, _ := http.NewRequest(http.MethodPost, srv.URL, nil)
-	if _, err := newGuardedClient(false).Do(req); err == nil || !strings.Contains(err.Error(), "blocked") {
+	if _, err := newGuardedClient(func(a netip.Addr) bool { return blockedAddr(a, false) }).Do(req); err == nil || !strings.Contains(err.Error(), "blocked") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// The hub's own LAN and Tailscale addresses are refused, as a literal, behind a name, and by
+// the dial-time check.
+func TestWebhookToOwnAddressRefused(t *testing.T) {
+	h := newHarness(t, "")
+	h.e.opt.LocalAddrs = func() []netip.Addr {
+		return []netip.Addr{netip.MustParseAddr("192.168.0.105"), netip.MustParseAddr("100.127.35.0")}
+	}
+	for _, u := range []string{"http://192.168.0.105:17820/api/pair/code", "http://100.127.35.0:1/x", "http://[::ffff:192.168.0.105]/x"} {
+		if r := h.e.post(context.Background(), u, map[string]any{}); r.OK || !strings.HasPrefix(r.Error, "blocked") {
+			t.Errorf("%s: %+v", u, r)
+		}
+	}
+	h.e.opt.LookupIP = func(context.Context, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("100.127.35.0")}, nil
+	}
+	if r := h.e.post(context.Background(), "http://hub.tail.example/x", map[string]any{}); r.OK || !strings.HasPrefix(r.Error, "blocked") {
+		t.Errorf("name for own address: %+v", r)
+	}
+	if !h.e.blocked(netip.MustParseAddr("100.127.35.0")) || h.e.blocked(netip.MustParseAddr("192.168.0.77")) {
+		t.Error("dial-time check wrong: own address must be blocked, another LAN host not")
+	}
+	if n := len(h.doer.sent()); n != 0 {
+		t.Fatalf("%d requests sent", n)
+	}
+}
+
+// allowAll lets the guarded client reach httptest servers on loopback, so the tests below
+// exercise only its redirect and proxy rules.
+func allowAll(netip.Addr) bool { return false }
+
+// A redirect is reported, never followed.
+func TestGuardedClientDoesNotFollowRedirects(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("redirect target was requested")
+	}))
+	defer target.Close()
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	defer redirector.Close()
+	req, _ := http.NewRequest(http.MethodPost, redirector.URL, nil)
+	res, err := newGuardedClient(allowAll).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want the 302 itself", res.StatusCode)
+	}
+}
+
+// The client never uses a proxy: one would hide where the request really goes.
+func TestGuardedClientIgnoresProxyEnvironment(t *testing.T) {
+	tr := newGuardedClient(allowAll).Transport.(*http.Transport)
+	if tr.Proxy != nil {
+		t.Fatal("guarded client has a proxy function")
 	}
 }
 

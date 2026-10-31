@@ -21,7 +21,7 @@ fails. Fixes are tracked in #45–#49. No release is tagged yet. Last touched 20
 ```bash
 go build ./cmd/machine-monitor && ./machine-monitor --version
 go test ./...
-gofmt -l . && go vet ./... && staticcheck ./...    # staticcheck v0.8.2 (go install)
+test -z "$(gofmt -l .)" && go vet ./... && staticcheck ./...    # staticcheck v0.8.2 (go install)
 for os in linux darwin windows; do for a in amd64 arm64; do
   GOOS=$os GOARCH=$a CGO_ENABLED=0 go build ./... || echo "FAIL $os/$a"; done; done
 go run github.com/goreleaser/goreleaser/v2@v2.19.0 check
