@@ -46,7 +46,7 @@ var commands = map[string]func(args []string, stdout, stderr io.Writer) int{
 	"connect": stub("connect"),
 	"status":  runStatus,
 	"export":  runExport,
-	"service": stub("service"),
+	"service": runService,
 	"update":  stub("update"),
 }
 

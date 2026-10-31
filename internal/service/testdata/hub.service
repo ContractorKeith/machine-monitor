@@ -1,0 +1,11 @@
+# Written by `machine-monitor service install`; remove with `machine-monitor service uninstall`.
+[Unit]
+Description=machine-monitor hub
+
+[Service]
+ExecStart="/usr/local/bin/machine-monitor" "hub"
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
