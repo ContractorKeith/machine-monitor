@@ -31,6 +31,11 @@ jobs:
       - name: staticcheck
         run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
       - run: go test ./...
+      - name: race detector
+        if: runner.os == 'Linux'
+        env:
+          CGO_ENABLED: "1" # the race detector needs cgo; shipped binaries stay CGO_ENABLED=0
+        run: go test -race -count=1 ./...
       - name: fuzz Normalize
         if: runner.os == 'Linux'
         run: go test -run='^$' -fuzz=FuzzNormalize -fuzztime=30s ./internal/report

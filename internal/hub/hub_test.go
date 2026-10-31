@@ -323,10 +323,14 @@ func TestHubMonitorsItself(t *testing.T) {
 	for {
 		h.mu.Lock()
 		d := h.registry["hub-self"]
+		name := ""
+		if d != nil {
+			name = d.Name // read under the lock: ingest writes it
+		}
 		h.mu.Unlock()
 		if d != nil {
-			if d.Name != "hubhost" {
-				t.Errorf("name %q", d.Name)
+			if name != "hubhost" {
+				t.Errorf("name %q", name)
 			}
 			break
 		}
