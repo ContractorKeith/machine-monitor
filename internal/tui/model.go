@@ -9,9 +9,14 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
+	"github.com/ContractorKeith/machine-monitor/internal/client"
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
+
+// localID is the one device of local mode.
+const localID = "local"
 
 // view is one of the numbered screens.
 type view int
@@ -49,10 +54,20 @@ type model struct {
 	view          view
 	showHelp      bool
 
-	last       *report.Report
+	// devs are the devices the views show, in display order; sel is the selected one's id.
+	// Local mode has one device, hub mode one per device on the hub.
+	devs       []device
+	sel        string
 	collectErr error
-	cpu, mem   series
-	gpu        series
+
+	// Hub mode.
+	ctx       context.Context // ends the stream and requests; Run cancels it on quit
+	events    <-chan client.Event
+	conn      hubConn
+	rename    textinput.Model
+	renameID  string // device being renamed while rename is focused
+	confirmID string // device awaiting remove confirmation
+	notice    string // last action's error, until the next action
 
 	deviceScroll int
 
@@ -84,15 +99,36 @@ func New(o Options) tea.Model {
 	f := textinput.New()
 	f.Prompt = "/"
 	f.Placeholder = "name, user, pid or command"
+	rn := textinput.New()
+	rn.Prompt = ""
+	rn.CharLimit = 60 // the hub's limit
+	if o.Hub != nil {
+		o.Procs = nil // remote process lists arrive with actions (M7)
+	}
+	if o.Now == nil {
+		o.Now = time.Now
+	}
 	return model{
-		opts: o, theme: th, keys: newKeyMap(), help: h,
+		opts: o, theme: th, keys: newKeyMap(o.Hub != nil), help: h,
 		width: 80, height: 24,
 		procSort: sortCPU, filter: f,
+		ctx: context.Background(), rename: rn,
 	}
 }
 
-// Init starts the first sample right away.
-func (m model) Init() tea.Cmd { return m.collect() }
+// Init starts the feed: the first local sample, or the hub's stream.
+func (m model) Init() tea.Cmd {
+	if m.multi() {
+		return m.startStream()
+	}
+	return m.collect()
+}
+
+// multi reports whether the TUI follows a hub (many devices) rather than this machine.
+func (m model) multi() bool { return m.opts.Hub != nil }
+
+// now is the clock, for "last seen" times.
+func (m model) now() time.Time { return m.opts.Now() }
 
 // collect samples the machine off the UI goroutine.
 func (m model) collect() tea.Cmd {
@@ -121,7 +157,7 @@ func (m model) listProcs() tea.Cmd {
 
 // maybeProcs starts a process fetch when the Processes view is open and none is running.
 func (m *model) maybeProcs() tea.Cmd {
-	if m.view != viewProcesses || m.opts.Procs == nil || m.procsBusy {
+	if m.view != viewProcesses || m.opts.Procs == nil || m.procsBusy || m.multi() {
 		return nil
 	}
 	m.procsBusy = true
@@ -130,6 +166,9 @@ func (m *model) maybeProcs() tea.Cmd {
 
 // Update handles one message.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if next, cmd, ok := m.updateHub(msg); ok {
+		return next, cmd
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -140,14 +179,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case reportMsg:
 		m.collectErr = msg.err
 		if msg.r != nil {
-			m.last = msg.r
-			m.cpu.push(msg.r.CPU.Usage)
-			m.mem.push(pctOf(msg.r.Memory.Used, msg.r.Memory.Total))
-			var g *float64
-			if len(msg.r.GPUs) > 0 {
-				g = msg.r.GPUs[0].Usage
-			}
-			m.gpu.push(g)
+			r := msg.r
+			m.sel = localID
+			m.editDev(localID, func(d *device) {
+				d.name, d.online = str(r.Hostname), true
+				d.push(r)
+			})
 		}
 		interval := m.opts.Interval
 		return m, tea.Tick(interval, func(time.Time) tea.Msg { return tickMsg{} })
@@ -175,6 +212,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "ctrl+c" { // always quits; plain q is text while filtering
 		return m, tea.Quit
+	}
+	if m.rename.Focused() || m.confirmID != "" {
+		return m.hubInputKey(msg)
 	}
 	if m.filter.Focused() {
 		switch msg.String() {
@@ -222,6 +262,10 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch m.view {
+	case viewDashboard:
+		if m.multi() {
+			return m.gridKey(msg)
+		}
 	case viewDevice:
 		m.scrollDevice(msg)
 	case viewProcesses:
@@ -294,6 +338,8 @@ func (m model) render() string {
 	switch {
 	case m.showHelp:
 		body, foot = m.help.FullHelpView(m.keys.FullHelp()), "esc or ? to close"
+	case m.view == viewDashboard && m.multi():
+		body, foot = m.hubDashboard(), m.hubStatus()
 	case m.view == viewDashboard:
 		body, foot = m.dashboard(), m.statusLine()
 	case m.view == viewDevice:
@@ -313,8 +359,13 @@ func (m model) render() string {
 func (m model) header() string {
 	t := m.theme
 	left := t.title.Render("machine-monitor")
-	if m.last != nil && m.last.Hostname != nil {
-		left += " " + t.dim.Render("·") + " " + *m.last.Hostname
+	switch {
+	case m.multi() && (m.view == viewDashboard || m.cur() == nil):
+		left += " " + t.dim.Render("·") + " hub " + m.hubHost()
+	case m.multi():
+		left += " " + t.dim.Render("·") + " " + m.cur().name
+	case m.report() != nil && m.report().Hostname != nil:
+		left += " " + t.dim.Render("·") + " " + *m.report().Hostname
 	}
 	tabs := make([]string, viewCount)
 	for i := range viewCount {
@@ -325,7 +376,12 @@ func (m model) header() string {
 			tabs[i] = t.tabOff.Render(label)
 		}
 	}
-	return spread(left+"  "+strings.Join(tabs, ""), t.dim.Render("? help  q quit"), m.width)
+	left += "  " + strings.Join(tabs, "")
+	right := t.dim.Render("? help  q quit")
+	if m.multi() && lipgloss.Width(left)+1+lipgloss.Width(right) > m.width { // a long hub address
+		right = ""
+	}
+	return spread(left, right, m.width)
 }
 
 // statusLine is the footer for views without their own: collection state.
@@ -333,7 +389,7 @@ func (m model) statusLine() string {
 	switch {
 	case m.collectErr != nil:
 		return "collect error: " + m.collectErr.Error()
-	case m.last == nil:
+	case m.report() == nil:
 		return "collecting…"
 	default:
 		return "local · every " + m.opts.Interval.String() + " · tab next view · ? help"

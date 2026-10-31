@@ -7,7 +7,6 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/ContractorKeith/machine-monitor/internal/power"
-	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
 // maxCardWidth caps the card so it stays readable on a wide terminal.
@@ -15,25 +14,41 @@ const maxCardWidth = 100
 
 // dashboard is view 1: a summary line and this machine's card.
 func (m model) dashboard() string {
-	r := m.last
-	if r == nil {
+	d := m.cur()
+	if d == nil || d.last == nil {
 		return m.theme.dim.Render("Collecting the first sample…")
 	}
+	r := d.last
 	watts := none
 	if b := power.Estimate(r); b != nil {
 		watts = "~" + fmtWatts(&b.Watts)
 	}
 	summary := fmt.Sprintf("1 device · 1 online · %s at the wall", watts)
-	return m.theme.dim.Render(summary) + "\n" + m.card(r, min(m.width, maxCardWidth))
+	return m.theme.dim.Render(summary) + "\n" + m.card(*d, min(m.width, maxCardWidth), false)
 }
 
-// card draws one device: identity, gauges, temperatures, sparklines and I/O rates.
-func (m model) card(r *report.Report, w int) string {
+// card draws one device: identity, gauges, temperatures, sparklines and I/O rates. A
+// selected card (hub mode) gets a heavier border and a marker before its name.
+func (m model) card(d device, w int, selected bool) string {
 	t := m.theme
 	iw := max(10, w-4) // inside the border and one space of padding each side
 	var lines []string
-
-	name := t.title.Render(str(r.Hostname))
+	box := lipgloss.NewStyle().Border(t.border).BorderForeground(t.borderStyle.GetForeground()).Padding(0, 1)
+	name := t.title.Render(d.name)
+	if selected {
+		marker := "▶ "
+		if t.ascii {
+			marker = "> "
+		} else {
+			box = box.Border(lipgloss.ThickBorder()).BorderForeground(t.title.GetForeground())
+		}
+		name = t.title.Render(marker + d.name)
+	}
+	r := d.last
+	if r == nil { // on the hub's list, but no report since the hub started
+		lines = append(lines, pad(name, iw), pad(t.dim.Render("no report yet"), iw))
+		return box.Render(strings.Join(lines, "\n"))
+	}
 	lines = append(lines, spread(name, t.dim.Render(orNone(r.Platform)), iw))
 	lines = append(lines, spread(t.dim.Render(str(r.OS)), t.dim.Render("up "+fmtUptime(r.Uptime)), iw))
 
@@ -51,11 +66,11 @@ func (m model) card(r *report.Report, w int) string {
 	memRight := cols(fmtPct(memPct), 5, fmtUsedTotal(r.Memory.Used, r.Memory.Total), 21)
 	lines = append(lines, m.gauge("MEM", memPct, memRight, iw))
 
-	lines = append(lines, m.sparkRow("cpu", m.cpu, iw)...)
+	lines = append(lines, m.sparkRow("cpu", d.cpu, iw)...)
 	if len(r.GPUs) > 0 {
-		lines = append(lines, m.sparkRow("gpu", m.gpu, iw)...)
+		lines = append(lines, m.sparkRow("gpu", d.gpu, iw)...)
 	} else {
-		lines = append(lines, m.sparkRow("mem", m.mem, iw)...)
+		lines = append(lines, m.sparkRow("mem", d.mem, iw)...)
 	}
 
 	var rx, tx, rd, wr *float64
@@ -68,7 +83,6 @@ func (m model) card(r *report.Report, w int) string {
 	lines = append(lines, pad(fmt.Sprintf("%s ↓ %-11s ↑ %-11s  %s r %-11s w %s",
 		t.label.Render("NET"), fmtRate(rx), fmtRate(tx), t.label.Render("DISK"), fmtRate(rd), fmtRate(wr)), iw))
 
-	box := lipgloss.NewStyle().Border(t.border).BorderForeground(t.borderStyle.GetForeground()).Padding(0, 1)
 	return box.Render(strings.Join(lines, "\n"))
 }
 

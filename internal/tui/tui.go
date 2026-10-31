@@ -1,8 +1,11 @@
-// Package tui is the terminal UI (PLAN §7). This milestone (M2) has the local views:
-// 1 Dashboard (a single device card), 2 Device and 3 Processes, plus ? help and q quit.
+// Package tui is the terminal UI (PLAN §7): 1 Dashboard, 2 Device and 3 Processes, plus
+// ? help and q quit.
 //
-// The model reads metrics through collect.Collector and processes through ProcessLister, so
-// tests drive it with fakes. Run starts the real program; New builds the model for tests.
+// It has two sources of devices. Local mode samples this machine through collect.Collector
+// (and its processes through ProcessLister); hub mode (Options.Hub) follows every device on
+// a hub through its event stream, and the dashboard becomes a grid of cards. Both feed the
+// same device list, which is all the views read, so tests drive either with fakes. Run
+// starts the real program; New builds the model for tests.
 package tui
 
 import (
@@ -26,9 +29,14 @@ type ProcessLister interface {
 type Options struct {
 	Collector collect.Collector
 	Procs     ProcessLister // nil: the Processes view says the list is unavailable
-	Interval  time.Duration // sample period; 0 = DefaultInterval
-	ASCII     bool          // ASCII bars, sparklines and borders instead of block and braille glyphs
-	NoColor   bool          // monochrome theme (attributes only)
+	// Hub switches to hub mode: every device on the hub instead of this machine. Collector
+	// and Procs are then unused.
+	Hub Hub
+	// Now is the clock for "last seen" times; time.Now when nil.
+	Now      func() time.Time
+	Interval time.Duration // sample period; 0 = DefaultInterval
+	ASCII    bool          // ASCII bars, sparklines and borders instead of block and braille glyphs
+	NoColor  bool          // monochrome theme (attributes only)
 }
 
 // DefaultInterval is the sample period, matching upstream's agents.
@@ -54,6 +62,10 @@ func OptionsFromEnv(o Options) Options {
 
 // Run opens the TUI full screen and blocks until the user quits.
 func Run(o Options) error {
-	_, err := tea.NewProgram(New(o)).Run()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // ends the hub stream and any request still running
+	m := New(o).(model)
+	m.ctx = ctx
+	_, err := tea.NewProgram(m).Run()
 	return err
 }

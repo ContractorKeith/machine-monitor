@@ -211,6 +211,8 @@ func procColumns(w int) []procColumn {
 func (m model) processes() string {
 	t := m.theme
 	switch {
+	case m.multi():
+		return t.dim.Render("Process lists for devices on a hub are not available yet.")
 	case m.opts.Procs == nil:
 		return t.dim.Render("The process list is not available on this build.")
 	case m.procs == nil && m.procsErr != nil:

@@ -34,6 +34,7 @@ Usage:
 Flags:
   --version   print the version
   --hub URL   hub to connect the TUI to
+  --key KEY   the hub's key (default: the one client.json holds for that hub)
   --ascii     ASCII bars and charts instead of braille (also MACHINE_MONITOR_ASCII=1)
 
 The TUI respects NO_COLOR.
@@ -61,6 +62,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.Usage = func() { fmt.Fprint(stderr, usage) }
 	showVersion := fs.Bool("version", false, "print the version")
 	hub := fs.String("hub", "", "hub to connect the TUI to")
+	key := fs.String("key", "", "the hub's key")
 	ascii := fs.Bool("ascii", false, "ASCII bars and charts instead of braille")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -76,7 +78,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	rest := fs.Args()
 	if len(rest) == 0 {
 		if *hub != "" {
-			return stub("--hub")(nil, stdout, stderr) // connected TUI is M4
+			return runConnected(*hub, *key, tui.OptionsFromEnv(tui.Options{ASCII: *ascii}), stderr)
 		}
 		return runTUI(tui.OptionsFromEnv(tui.Options{ASCII: *ascii}), stderr)
 	}
