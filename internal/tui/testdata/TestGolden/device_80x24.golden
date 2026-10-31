@@ -1,4 +1,4 @@
-machine-monitor · ws-01   1 Dashboard  2 Device  3 Processes  6 Alerts       ?/q
+machine-monitor · ws-01   1  2 Device  3  4  5  6                            ?/q
 System                                                                          
   Host          ws-01                                                           
   OS            Ubuntu 24.04.1 LTS · Precision 7960                             

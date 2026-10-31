@@ -1,0 +1,24 @@
+machine-monitor · ws-01   1  2  3  4  5 Energy  6                            ?/q
+Energy per day                                       ■ ws-01  ■ studio  ■ nas-02
+   25 kWh                                                                       
+                 ▂  ▄ ▄ ▇  ▄ ▆        ▂  ▄ ▄ ▇  ▄ ▆        ▂  ▄ ▄ ▇  ▄ ▆        
+ 12.5 kWh ▃  ▅ ▇ █  █ █ █  █ █ ▃  ▅ ▇ █  █ █ █  █ █ ▃  ▅ ▇ █  █ █ █  █ █ ▃  ▅ ▇ 
+          █  █ █ █  █ █ █  █ █ █  █ █ █  █ █ █  █ █ █  █ █ █  █ █ █  █ █ █  █ █ 
+    0 kWh █  █ █ █  █ █ █  █ █ █  █ █ █  █ █ █  █ █ █  █ █ █  █ █ █  █ █ █  █ █ 
+          Oct 2  Oct 5  Oct 8  Oct 11 Oct 14 Oct 17 Oct 20 Oct 23 Oct 26 Oct 29 
+                                                                                
+Device                        Now  Average     Peak     Energy      Cost  Share 
+■ ws-01                     484 W    420 W    610 W    323 kWh    $53.22    68% 
+■ studio                     88 W    147 W    214 W    115 kWh    $18.96    24% 
+■ nas-02                  offline     50 W     73 W   40.1 kWh     $6.61     8% 
+All devices                 572 W                      478 kWh    $78.80        
+                                                                                
+Usage                                                                           
+Device                  Online CPU avg/pk GPU avg/pk  Mem Temp CPU/GPU      Down
+■ ws-01             706 h 100%    41%/98%    55%/99%  37%    88° / 91°   5.0 TiB
+■ studio             432 h 61%    31%/78%    15%/49%  49%    79° / 61°   1.7 TiB
+■ nas-02             288 h 41%    21%/58%        —/—  61%      70° / —   608 GiB
+                                                                                
+Power is estimated "at the wall"; expect totals within about 20% of a plug-in m…
+Energy is only counted while the device is reporting.                           
+[ ] range · ↑/↓ scroll · 8–29 of 29                                             

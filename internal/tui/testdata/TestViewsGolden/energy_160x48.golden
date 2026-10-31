@@ -1,0 +1,48 @@
+machine-monitor · ws-01   1 Dashboard  2 Device  3 Processes  4 History  5 Energy  6 Alerts                                                       ? help  q quit
+Electricity                                                                                                                               24 h  7 days  30 days 
+Drawing now  572 W      $2.26 a day at this rate                                                                                                                
+Energy used  110 kWh    last 7 days                                                                                                                             
+Cost         $18.08     at $0.165/kWh                                                                                                                           
+Per month    $84.67     ≈ 513 kWh at the recent average                                                                                                         
+Electricity price $0.165/kWh · Typical home rate for United States (average).                                                                                   
+                                                                                                                                                                
+Energy per day                                                                                                                       ■ ws-01  ■ studio  ■ nas-02
+   25 kWh                                                                                                                                                       
+                                                                                                                                                                
+                                                                                                                                                   ▃▃▃▃         
+                                                                                  ▁▁▁▁                  ▅▅▅▅                 ▆▆▆▆                  ████         
+                                                             ▃▃▃▃                 ████                  ████                 ████                  ████         
+ 12.5 kWh         ▁▁▁▁                  ▆▆▆▆                 ████                 ████                  ████                 ████                  ████         
+                  ████                  ████                 ████                 ████                  ████                 ████                  ████         
+                  ████                  ████                 ████                 ████                  ████                 ████                  ████         
+                  ████                  ████                 ████                 ████                  ████                 ████                  ████         
+                  ████                  ████                 ████                 ████                  ████                 ████                  ████         
+    0 kWh         ████                  ████                 ████                 ████                  ████                 ████                  ████         
+          Sun 25               Mon 26               Tue 27                Wed 28               Thu 29                Fri 30               Sat 31                
+                                                                                                                                                                
+Device                        Now  Average     Peak     Energy      Cost  Share Power reading                                                                   
+■ ws-01                     484 W    420 W    610 W   70.6 kWh    $11.64    64% CPU and GPU measured                                                            
+■ studio                     88 W    147 W    214 W   29.4 kWh     $4.85    27% Estimated from load                                                             
+■ nas-02                  offline     50 W     73 W   9.62 kWh     $1.59     9% CPU measured, rest estimated                                                    
+All devices                 572 W                      110 kWh    $18.08                                                                                        
+                                                                                                                                                                
+Usage                                                                                                                                                           
+Device                        Online CPU avg/pk GPU avg/pk  Mem Temp CPU/GPU      Down        Up      Read   Written                                            
+■ ws-01                   165 h 100%    41%/98%    55%/99%  37%    88° / 91°   1.2 TiB  78.9 GiB   3.0 TiB   186 GiB                                            
+■ studio                   101 h 65%    31%/78%    15%/49%  49%    79° / 61°   414 GiB  27.6 GiB   1.1 TiB  65.1 GiB                                            
+■ nas-02                    67 h 43%    21%/58%        —/—  61%      70° / —   142 GiB   9.5 GiB   372 GiB  22.3 GiB                                            
+                                                                                                                                                                
+Power is estimated "at the wall"; expect totals within about 20% of a plug-in meter.                                                                            
+Energy is only counted while the device is reporting.                                                                                                           
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+[ ] range · ↑/↓ scroll                                                                                                                                          

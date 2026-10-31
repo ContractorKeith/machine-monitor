@@ -1,13 +1,13 @@
-machine-monitor · ws-01   1 Dashboard  2 Device  3 Processes  6 Alerts       ?/q
+machine-monitor · ws-01   1  2  3  4  5  6                                   ?/q
 1   dashboard    ↑/k  up           /   filter processes                         
 2   device       ↓/j  down         s   sort column                              
 3   processes    pgup page up      r   reverse sort                             
-6   alerts       pgdn page down    esc clear filter / close help                
-tab next view    g    top                                                       
-?   help         G    bottom                                                    
+4   history      pgdn page down    esc clear filter / close help                
+5   energy       g    top                                                       
+6   alerts       G    bottom                                                    
+tab next view                                                                   
+?   help                                                                        
 q   quit                                                                        
-                                                                                
-                                                                                
                                                                                 
                                                                                 
                                                                                 

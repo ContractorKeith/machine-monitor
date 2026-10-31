@@ -1,13 +1,13 @@
-machine-monitor · hub hub.lan:7777   1  2  3  6                              ?/q
+machine-monitor · hub hub.lan:7777   1  2  3  4  5  6                        ?/q
 1   dashboard    ↑/k  up           ←/h previous device     …                    
 2   device       ↓/j  down         →/l next device                              
 3   processes    pgup page up      K   move card earlier                        
-6   alerts       pgdn page down    J   move card later                          
-tab next view    g    top          R   rename device                            
-?   help         G    bottom       D   remove device                            
-q   quit                           w   wake offline device                      
-                                   P   power menu                               
-                                                                                
+4   history      pgdn page down    J   move card later                          
+5   energy       g    top          R   rename device                            
+6   alerts       G    bottom       D   remove device                            
+tab next view                      w   wake offline device                      
+?   help                           P   power menu                               
+q   quit                                                                        
                                                                                 
                                                                                 
                                                                                 

@@ -1,4 +1,4 @@
-machine-monitor · hub hub.lan:7777   1 Dashboard  2 Device  3 Processes  6 Alerts                                                                 ? help  q quit
+machine-monitor · hub hub.lan:7777   1 Dashboard  2 Device  3 Processes  4 History  5 Energy  6 Alerts                                            ? help  q quit
 3 devices · 2 online · 1 offline · ~572 W at the wall                                                                                                           
 ╭──────────────────────────────────────────────────────────────────────────────╮╭──────────────────────────────────────────────────────────────────────────────╮
 │ ws-01                                                                  linux ││ studio                                                                 macos │
