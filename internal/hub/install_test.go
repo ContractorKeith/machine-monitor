@@ -24,7 +24,7 @@ import (
 const fakeBinary = "#!/bin/sh\necho \"$*\" >> \"$HOME/calls.log\"\n" +
 	"if [ \"$1\" = connect ]; then cat >> \"$HOME/stdin.log\"; fi\n" +
 	"if [ \"$1\" = \"${FAKE_FAIL:-}\" ]; then exit 3; fi\n" +
-	"if [ \"$1\" = connect ]; then mkdir -p \"$HOME/.config/machine-monitor\"; echo '{}' > \"$HOME/.config/machine-monitor/client.json\"; fi\n"
+	"if [ \"$1\" = connect ]; then mkdir -p \"${MACHINE_MONITOR_DIR:-$HOME/cfg}\"; echo '{}' > \"${MACHINE_MONITOR_DIR:-$HOME/cfg}/client.json\"; fi\n"
 
 // withRelease points the installers at a fake release of version.
 func withRelease(t *testing.T, version string) *updatetest.Release {
@@ -459,14 +459,17 @@ func TestInstallPs1DownloadsAndVerifies(t *testing.T) {
 	}
 }
 
+// cfgDir points the data dir inside the fake home on every OS.
+const cfgDir = `export MACHINE_MONITOR_DIR="$HOME/cfg"; `
+
 // A failure after the binary is installed rolls the install back: a fresh install leaves no
 // binary or client.json behind, and a replaced binary is put back (skeptic pass 2).
 func TestInstallShRollsBack(t *testing.T) {
 	withRelease(t, "1.2.3")
 	th := newTestHub(t)
-	home, _, out, err := installRunWith(t, th, th.Token(), oneLiner, "FAKE_FAIL=service")
+	home, _, out, err := installRunWith(t, th, th.Token(), cfgDir+oneLiner, "FAKE_FAIL=service")
 	wantFailure(t, "service install fails", home, out, err, "service install failed")
-	for _, f := range []string{".local/bin/machine-monitor", ".config/machine-monitor/client.json"} {
+	for _, f := range []string{".local/bin/machine-monitor", "cfg/client.json"} {
 		if _, err := os.Stat(filepath.Join(home, f)); err == nil {
 			t.Errorf("%s left behind after a failed install", f)
 		}
@@ -478,14 +481,14 @@ func TestInstallShRollbackRestoresReplacedBinary(t *testing.T) {
 	th := newTestHub(t)
 	const old = "#!/bin/sh\n# the old binary\n"
 	// The home directory is made by installRunWith, so seed it through the command.
-	seed := `mkdir -p "$HOME/.local/bin" "$HOME/.config/machine-monitor" && printf '%s' "$OLD" > "$HOME/.local/bin/machine-monitor" && ` +
-		`chmod 755 "$HOME/.local/bin/machine-monitor" && echo '{"old":1}' > "$HOME/.config/machine-monitor/client.json" && `
-	home, _, out, err := installRunWith(t, th, th.Token(), seed+oneLiner, "FAKE_FAIL=service", "OLD="+old)
+	seed := `mkdir -p "$HOME/.local/bin" "$MACHINE_MONITOR_DIR" && printf '%s' "$OLD" > "$HOME/.local/bin/machine-monitor" && ` +
+		`chmod 755 "$HOME/.local/bin/machine-monitor" && echo '{"old":1}' > "$MACHINE_MONITOR_DIR/client.json" && `
+	home, _, out, err := installRunWith(t, th, th.Token(), cfgDir+seed+oneLiner, "FAKE_FAIL=service", "OLD="+old)
 	wantFailure(t, "service install fails", home, out, err, "service install failed")
 	if b, _ := os.ReadFile(filepath.Join(home, ".local", "bin", "machine-monitor")); string(b) != old {
 		t.Errorf("binary after rollback = %q, want the old one", b)
 	}
-	if b, _ := os.ReadFile(filepath.Join(home, ".config", "machine-monitor", "client.json")); string(b) != "{\"old\":1}\n" {
+	if b, _ := os.ReadFile(filepath.Join(home, "cfg", "client.json")); string(b) != "{\"old\":1}\n" {
 		t.Errorf("an existing client.json was touched: %q", b)
 	}
 }

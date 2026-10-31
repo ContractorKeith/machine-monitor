@@ -325,13 +325,17 @@ func (s *Store) rewrite(id string) error {
 // the file is opened 0600. A failed or short write is truncated back to the size before it;
 // if that fails too, the next append starts on a fresh line, and load re-syncs there.
 func (s *Store) appendLine(id string, p Point) error {
-	f, err := os.OpenFile(s.file(id), os.O_RDWR|os.O_APPEND|os.O_CREATE, 0o600)
+	f, err := os.OpenFile(s.file(id), os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 	fi, err := f.Stat()
 	if err != nil {
+		return err
+	}
+	// No O_APPEND: on Windows it forbids the truncate below. mu makes this the only writer.
+	if _, err := f.Seek(0, io.SeekEnd); err != nil {
 		return err
 	}
 	b := encodeLine(id, p)
