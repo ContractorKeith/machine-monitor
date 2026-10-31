@@ -1,0 +1,3 @@
+#!/bin/sh
+# Never finishes in time, to check command honours the deadline.
+sleep 10
