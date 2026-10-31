@@ -6,6 +6,7 @@ package hub
 // (MIT, © 2026 Matt): https://github.com/Forward-Future/device-monitor
 
 import (
+	"errors"
 	"math"
 	"strconv"
 	"strings"
@@ -203,4 +204,22 @@ func (e energySource) CostToday(device string) (alerts.Cost, bool) {
 		}
 	}
 	return alerts.Cost{Amount: cost, Currency: price.Currency}, true
+}
+
+// settingsRefusal is the sentence PUT /api/energy/settings answers a refused price with.
+func settingsRefusal(err error) string {
+	if errors.Is(err, power.ErrOverlappingPeriods) {
+		return "The time-of-use periods overlap. Give each hour of the day to one period."
+	}
+	return "invalid settings"
+}
+
+// alertsRefusal is the reason PUT /api/alerts answers a refused setting with. The alerts
+// package words its errors without the values given (never a webhook URL), so they are safe
+// to pass on.
+func alertsRefusal(err error) string {
+	if msg := strings.TrimSpace(err.Error()); msg != "" {
+		return "invalid alert settings: " + msg
+	}
+	return "invalid alert settings"
 }

@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 	"syscall"
@@ -119,6 +120,32 @@ func (e *Engine) checkHost(ctx context.Context, host string) error {
 	return nil
 }
 
+// redactErr words a delivery error without the URL's userinfo, path, query or fragment: webhook
+// URLs carry their secret there, and the error reaches the log and POST /api/alerts/test. It is
+// rebuilt from the *url.Error's op and inner error, and any URL the inner error quotes (a bad
+// redirect Location, say) is cut down to scheme://host as well.
+func redactErr(err error, u *url.URL) string {
+	short := url.URL{Scheme: u.Scheme, Host: u.Host}
+	op, inner := "Post", err
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		op, inner = ue.Op, ue.Err
+	}
+	return fmt.Sprintf("%s %q: %s", op, short.Redacted(), scrubURLs(inner.Error()))
+}
+
+var urlInText = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s"'<>]+`)
+
+// scrubURLs cuts every URL in msg down to scheme://host; one that won't parse becomes [url].
+func scrubURLs(msg string) string {
+	return urlInText.ReplaceAllStringFunc(msg, func(raw string) string {
+		if u, err := url.Parse(raw); err == nil && u.Host != "" {
+			return (&url.URL{Scheme: u.Scheme, Host: u.Host}).String()
+		}
+		return "[url]"
+	})
+}
+
 // post sends body as JSON to rawURL after the SSRF check. It never returns an error, only a
 // Result, since delivery is best effort.
 func (e *Engine) post(ctx context.Context, rawURL string, body any) Result {
@@ -139,7 +166,7 @@ func (e *Engine) post(ctx context.Context, rawURL string, body any) Result {
 	req.Header.Set("Content-Type", "application/json")
 	res, err := e.client.Do(req)
 	if err != nil {
-		return Result{Error: err.Error()}
+		return Result{Error: redactErr(err, u)}
 	}
 	defer res.Body.Close()
 	if res.StatusCode >= 200 && res.StatusCode < 300 {

@@ -50,10 +50,10 @@ func readAMD(sys string) []report.GPU {
 			// An APU's amdgpu hwmon labels its power PPT: the whole package, CPU cores
 			// included. That is CPU power (the sensors probe reports it), not GPU power, and
 			// upstream's agent.sh reads only power1_average, so it reports null here too.
-			// The name marks the GPU integrated so the hub adds no discrete-GPU estimate
-			// on top of the package power (power.IntegratedName).
+			// The PPT label is the sign of an APU, so the GPU is flagged integrated and the hub
+			// adds no discrete-GPU estimate on top of the package power.
 			if readText(filepath.Join(h, "power1_label")) == "PPT" {
-				g.Name = report.Ptr("AMD Integrated GPU")
+				g.Integrated = true
 				continue
 			}
 			// power1_average on older kernels, power1_input on newer ones; microwatts.

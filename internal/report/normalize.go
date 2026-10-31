@@ -150,6 +150,7 @@ func normalizeReport(id string, b map[string]any) Report {
 			MemUsed: num(g["memUsed"], 0, 1e18), MemTotal: num(g["memTotal"], 0, 1e18),
 			Power: num(g["power"], 0, 1e5), PowerLimit: num(g["powerLimit"], 0, 1e5),
 			Fan: num(g["fan"], 0, 100), ClockMHz: num(g["clockMHz"], 0, 1e5),
+			Integrated: g["integrated"] == true,
 		})
 	}
 	for _, d := range objs(b["disks"], 64) {

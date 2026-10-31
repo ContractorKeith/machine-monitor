@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io/fs"
 	"net/netip"
-	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -228,7 +227,8 @@ func New(opt Options) *Engine {
 			continue
 		}
 		for _, d := range e.targets(r) {
-			if !d.Online && !d.LastSeen.IsZero() {
+			// One already in saved.Firing was announced before the restart, so its return is too.
+			if _, saved := e.state[key(r.ID, d.ID)]; !saved && !d.Online && !d.LastSeen.IsZero() {
 				e.state[key(r.ID, d.ID)] = &state{since: d.LastSeen, firing: true, firedAt: d.LastSeen, carried: true}
 			}
 		}
@@ -716,7 +716,7 @@ func (e *Engine) deliver(ctx context.Context, ch Channels, link string, ev Event
 		if ch.Ntfy.Email != "" {
 			body["email"] = ch.Ntfy.Email
 		}
-		d.Ntfy = ptr(e.postRedacted(ctx, ch.Ntfy.Server, body))
+		d.Ntfy = ptr(e.post(ctx, ch.Ntfy.Server, body))
 	}
 	if ch.Webhook.Enabled {
 		icon := "✅"
@@ -728,29 +728,11 @@ func (e *Engine) deliver(ctx context.Context, ch Channels, link string, ev Event
 		body := map[string]any{"content": line, "text": line, "title": ev.Title, "message": ev.Message,
 			"device": ev.DeviceName, "state": ev.State,
 			"time": time.UnixMilli(ev.T).UTC().Format("2006-01-02T15:04:05.000Z"), "link": link}
-		d.Webhook = ptr(e.postRedacted(ctx, ch.Webhook.URL, body))
+		d.Webhook = ptr(e.post(ctx, ch.Webhook.URL, body))
 	}
 	if (d.Ntfy != nil && !d.Ntfy.OK) || (d.Webhook != nil && !d.Webhook.OK) {
 		b, _ := json.Marshal(d)
 		e.logf("alert delivery failed: %s", b)
 	}
 	return d
-}
-
-// postRedacted is post with the URL's path and query taken out of any error: webhook URLs
-// carry their secret there, and delivery errors reach the log and the test API.
-func (e *Engine) postRedacted(ctx context.Context, rawURL string, body any) Result {
-	r := e.post(ctx, rawURL, body)
-	if r.Error == "" {
-		return r
-	}
-	u, err := url.Parse(rawURL)
-	if err != nil || u.Host == "" {
-		return r
-	}
-	short := u.Scheme + "://" + u.Host
-	for _, full := range []string{rawURL, u.String()} {
-		r.Error = strings.ReplaceAll(r.Error, full, short)
-	}
-	return r
 }

@@ -110,6 +110,10 @@ type GPU struct {
 	PowerLimit *float64 `json:"powerLimit"`
 	Fan        *float64 `json:"fan"` // percent
 	ClockMHz   *float64 `json:"clockMHz"`
+	// Integrated is set by the agent when the GPU shares the CPU package's power (an APU whose
+	// power sensor covers the whole package), so the hub adds no GPU estimate on top. Reports
+	// from upstream agents never carry it.
+	Integrated bool `json:"integrated,omitempty"`
 }
 
 // Disk is one mounted volume.

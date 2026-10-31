@@ -811,11 +811,19 @@ func TestNoBackOnlineForDevicesNeverSeenOffline(t *testing.T) {
 // A failed delivery logs and reports the host, never the path or query that holds the secret.
 func TestDeliveryErrorsHideWebhookSecret(t *testing.T) {
 	h := newHarness(t, "")
-	const full = "https://hooks.example/api/webhooks/123456/SECRET-TOKEN?k=SECRET2"
 	h.e.client = errDoer{}
-	r := h.e.postRedacted(context.Background(), full, map[string]any{})
-	if r.OK || strings.Contains(r.Error, "SECRET") || !strings.Contains(r.Error, "https://hooks.example") {
-		t.Fatalf("error = %q", r.Error)
+	for _, full := range []string{
+		"https://hooks.example/api/webhooks/123456/SECRET-TOKEN?k=SECRET2",
+		"https://user:PASSWD@hooks.example/x/SECRET2#SECRET3",
+		"https://SECRET-USER@hooks.example/x",
+	} {
+		t.Run(full, func(t *testing.T) {
+			r := h.e.post(context.Background(), full, map[string]any{})
+			if r.OK || strings.Contains(r.Error, "SECRET") || strings.Contains(r.Error, "PASSWD") ||
+				!strings.Contains(r.Error, "https://hooks.example") {
+				t.Fatalf("error = %q", r.Error)
+			}
+		})
 	}
 }
 
@@ -824,3 +832,49 @@ type errDoer struct{}
 func (errDoer) Do(r *http.Request) (*http.Response, error) {
 	return nil, &url.Error{Op: "Post", URL: r.URL.String(), Err: errors.New("connection refused")}
 }
+
+// An offline alert announced before a hub restart still gets "back online" when the device
+// returns afterwards (skeptic pass 3, N10).
+func TestBackOnlineAfterRestartForAnnouncedOffline(t *testing.T) {
+	paths := config.At(t.TempDir())
+	clock := newClock()
+	dev := []Device{{ID: "pc1", Name: "Box", Online: false, LastSeen: clock.t.Add(-time.Hour)}}
+	opts := Options{Paths: paths, Devices: func() []Device { return dev }, Now: clock.now, HTTP: &fakeDoer{}}
+
+	e := New(opts)
+	if _, err := e.Update([]byte(rule(TypeOffline, 0, 5))); err != nil {
+		t.Fatal(err)
+	}
+	e.Tick()
+	e.Wait()
+	if a := e.Active(); len(a) != 1 {
+		t.Fatalf("offline alert not announced: %+v", a)
+	}
+
+	e2 := New(opts) // the hub restarts; the device is still offline
+	var got []Message
+	e2.opt.Broadcast = func(m Message) { got = append(got, m) }
+	dev[0].Online = true
+	e2.OnReport("pc1", &report.Report{})
+	e2.Wait()
+	if len(got) != 1 || got[0].Event == nil || got[0].Event.State != Resolved {
+		t.Fatalf("no back-online after restart: %+v", got)
+	}
+}
+
+// A URL quoted inside the inner error (a bad redirect Location) is cut down too.
+func TestDeliveryErrorsScrubInnerURLs(t *testing.T) {
+	h := newHarness(t, "")
+	h.e.client = doerFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, &url.Error{Op: "Post", URL: r.URL.String(),
+			Err: errors.New(`failed to parse Location header "https://u:PASSWD@evil.example/SECRET?k=SECRET2": bad`)}
+	})
+	r := h.e.post(context.Background(), "https://hooks.example/x/SECRET", map[string]any{})
+	if strings.Contains(r.Error, "SECRET") || strings.Contains(r.Error, "PASSWD") || !strings.Contains(r.Error, "https://evil.example") {
+		t.Fatalf("error = %q", r.Error)
+	}
+}
+
+type doerFunc func(*http.Request) (*http.Response, error)
+
+func (f doerFunc) Do(r *http.Request) (*http.Response, error) { return f(r) }

@@ -21,6 +21,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ContractorKeith/machine-monitor/internal/config"
 )
@@ -229,22 +230,67 @@ func (m *Manager) run(ctx context.Context, name string, args ...string) (string,
 	return s, nil
 }
 
+// backup is what a service file held before an install rewrote it.
+type backup struct {
+	data  []byte
+	mode  os.FileMode
+	mtime time.Time
+	link  string // the target, when the file was a symlink
+}
+
 // writeIfChanged writes data to path with config.WriteFile0600 unless it already holds
 // exactly data. It reports whether the file existed before and whether it changed.
-// old is the previous content, for restoreFile when a later install step fails.
-func writeIfChanged(path string, data []byte) (old []byte, existed, changed bool, err error) {
-	old, err = os.ReadFile(path)
-	if err == nil && string(old) == string(data) {
-		return old, true, false, nil
+// old is the previous file, for restoreFile when a later install step fails.
+func writeIfChanged(path string, data []byte) (old backup, existed, changed bool, err error) {
+	b, err := os.ReadFile(path)
+	if err == nil && string(b) == string(data) {
+		return backup{}, true, false, nil
 	}
 	existed = err == nil
+	if existed {
+		old.data = b
+		if fi, err := os.Stat(path); err == nil {
+			old.mode, old.mtime = fi.Mode().Perm(), fi.ModTime()
+		}
+		if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			old.link, _ = os.Readlink(path)
+		}
+	}
 	return old, existed, true, config.WriteFile0600(path, data)
 }
 
 // restoreFile puts an overwritten service file back after a failed install, so a failed
-// update leaves the old install byte-identical. Best effort: the install error is the one
-// worth reporting.
-func restoreFile(path string, old []byte) { _ = config.WriteFile0600(path, old) }
+// update leaves the old install as it was: same bytes, mode and mtime (systemd compares the
+// mtime to decide whether the unit changed), written in place so the owner stays. A symlink
+// comes back as the link. The caller reports the error next to the install's own.
+func restoreFile(path string, old backup) error {
+	if old.link != "" {
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+		return os.Symlink(old.link, path)
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(old.data)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	if old.mode != 0 {
+		if err := os.Chmod(path, old.mode); err != nil {
+			return err
+		}
+	}
+	if !old.mtime.IsZero() {
+		return os.Chtimes(path, old.mtime, old.mtime)
+	}
+	return nil
+}
 
 // fileExists reports whether path is a regular file.
 func fileExists(path string) bool {

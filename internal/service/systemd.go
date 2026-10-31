@@ -52,6 +52,13 @@ func systemdEnvQuote(s string) string {
 
 func (m *Manager) installSystemd(ctx context.Context, s Spec, out io.Writer) error {
 	path, name := m.unitPath(s.Role), unitName(s.Role)
+	// is-enabled prints "disabled" and exits non-zero, so only its output matters. A unit the
+	// user left disabled must not end up enabled by a failed install.
+	wasDisabled := false
+	if fileExists(path) {
+		state, _ := m.run(ctx, "systemctl", "--user", "is-enabled", name)
+		wasDisabled = firstLine(state, "") == "disabled"
+	}
 	old, existed, changed, err := writeIfChanged(path, []byte(m.SystemdUnit(s)))
 	if err != nil {
 		return err
@@ -71,8 +78,13 @@ func (m *Manager) installSystemd(ctx context.Context, s Spec, out io.Writer) err
 	for _, args := range steps {
 		if _, err := m.run(ctx, "systemctl", args...); err != nil {
 			if existed && changed { // keep the old unit, and tell systemd it is current again
-				restoreFile(path, old)
+				if rerr := restoreFile(path, old); rerr != nil {
+					return fmt.Errorf("%w (and the old unit could not be put back: %v)", err, rerr)
+				}
 				_, _ = m.run(ctx, "systemctl", "--user", "daemon-reload")
+			}
+			if wasDisabled {
+				_, _ = m.run(ctx, "systemctl", "--user", "disable", "--now", name)
 			}
 			return err
 		}

@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"sync"
@@ -85,6 +86,7 @@ type Hub struct {
 	now     func() time.Time
 	history *history.Store
 	alerts  *alerts.Engine
+	lock    io.Closer    // the data directory's lock file, held until Close
 	rate    *rateLimiter // requests to open paths
 	// failed reports per address (handleReport); counted with allow, checked with over
 	reportFails *rateLimiter
@@ -127,11 +129,29 @@ type Hub struct {
 }
 
 // New loads (or creates) config.json with the hub key, devices.json and history, and wires
-// alerts. It starts nothing; call Run.
+// alerts. It starts nothing; call Run. It holds an exclusive lock on the data directory until
+// Close, so a second hub on the same directory is refused instead of interleaving history.
 func New(opt Options) (*Hub, error) {
 	if opt.Paths.Dir == "" {
 		return nil, errors.New("hub: no data directory")
 	}
+	if err := os.MkdirAll(opt.Paths.Dir, 0o700); err != nil {
+		return nil, err
+	}
+	lock, err := lockDir(opt.Paths.Dir)
+	if err != nil {
+		return nil, err
+	}
+	h, err := newHub(opt)
+	if err != nil {
+		lock.Close()
+		return nil, err
+	}
+	h.lock = lock
+	return h, nil
+}
+
+func newHub(opt Options) (*Hub, error) {
 	if opt.Port == 0 {
 		opt.Port = DefaultPort
 	}
@@ -157,6 +177,9 @@ func New(opt Options) (*Hub, error) {
 	var err error
 	if h.cfg, err = loadConfig(opt.Paths.Config); err != nil {
 		return nil, err
+	}
+	for _, n := range h.cfg.notes {
+		h.logf("%s", n)
 	}
 	if h.cfg.Token == "" {
 		if h.cfg.Token, err = newToken(); err != nil {
@@ -264,6 +287,9 @@ func (h *Hub) Close() error {
 	}
 	h.alerts.Wait()
 	errs = append(errs, h.history.Close())
+	if h.lock != nil {
+		errs = append(errs, h.lock.Close())
+	}
 	return errors.Join(errs...)
 }
 
@@ -291,6 +317,7 @@ type hubConfig struct {
 	Energy       *power.Settings `json:"energy,omitempty"` // nil until the user sets a price
 	AllowedHosts []string        `json:"allowedHosts,omitempty"`
 	extra        map[string]json.RawMessage
+	notes        []string // load-time problems for the hub to log once
 }
 
 // loadConfig reads config.json. A missing file is an empty config; a damaged one is an error,
@@ -312,10 +339,17 @@ func loadConfig(path string) (hubConfig, error) {
 	}
 	if c.Energy != nil { // re-validate: the file may be hand-edited
 		raw, _ := json.Marshal(c.Energy)
-		if s, err := power.ParseSettings(raw); err == nil {
+		s, err := power.LoadSettings(raw)
+		switch {
+		case err == nil:
 			c.Energy = &s
-		} else {
+		case errors.Is(err, power.ErrOverlappingPeriods):
+			// Keep the flat rate rather than wiping the whole price; the user fixes the periods.
+			c.Energy = &s
+			c.notes = append(c.notes, "hub: config.json: the electricity price's time-of-use periods overlap, so only the flat rate is used; set the periods again in Settings")
+		default:
 			c.Energy = nil
+			c.notes = append(c.notes, "hub: config.json: the electricity price is invalid and was ignored")
 		}
 	}
 	delete(c.extra, "token")

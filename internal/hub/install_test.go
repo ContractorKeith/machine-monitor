@@ -492,3 +492,29 @@ func TestInstallShRollbackRestoresReplacedBinary(t *testing.T) {
 		t.Errorf("an existing client.json was touched: %q", b)
 	}
 }
+
+// A symlinked binary and client.json come back as symlinks after a failed install, and a
+// dangling link is not deleted (skeptic pass 3, N11).
+func TestInstallShRollbackRestoresSymlinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("install.sh is for Unix")
+	}
+	withRelease(t, "1.2.3")
+	th := newTestHub(t)
+	seed := `mkdir -p "$HOME/.local/bin" "$MACHINE_MONITOR_DIR" "$HOME/real" && ` +
+		`printf old > "$HOME/real/mm" && ln -s ../../real/mm "$HOME/.local/bin/machine-monitor" && ` +
+		`ln -s "$HOME/real/nowhere.json" "$MACHINE_MONITOR_DIR/client.json" && `
+	home, _, out, err := installRunWith(t, th, th.Token(), cfgDir+seed+oneLiner, "FAKE_FAIL=service")
+	wantFailure(t, "service install fails", home, out, err, "service install failed")
+	for f, want := range map[string]string{
+		".local/bin/machine-monitor": "../../real/mm",
+		"cfg/client.json":            filepath.Join(home, "real", "nowhere.json"),
+	} {
+		if got, err := os.Readlink(filepath.Join(home, f)); err != nil || got != want {
+			t.Errorf("%s = %q, %v; want a link to %q", f, got, err, want)
+		}
+	}
+	if b, _ := os.ReadFile(filepath.Join(home, "real", "mm")); string(b) != "old" {
+		t.Errorf("the link's target was changed: %q", b)
+	}
+}
