@@ -1,0 +1,24 @@
+machine-monitor · ws-01   1 Dashboard  2 Device  3 Processes      ? help  q quit
+System                                                                          
+  Host          ws-01                                                           
+  OS            Ubuntu 24.04.1 LTS · Precision 7960                             
+  Platform      linux                                                           
+  Form factor   desktop                                                         
+  Uptime        3d 4h 12m                                                       
+  ID            4c4c4544-0042-3510-8051-b2c04f4e3732                            
+                                                                                
+CPU                                                                             
+  Model         AMD Ryzen Threadripper PRO 7975WX                               
+  Usage         50%   threads 16   clock 4.35 GHz                               
+  Temp          72°C                                                            
+   0 █░░░░░░░░░  11%   6 ███░░░░░░░  31%  12 █████░░░░░  51%                    
+   1 █████░░░░░  48%   7 ███████░░░  68%  13 █████████░  88%                    
+   2 █████████░  85%   8 ░░░░░░░░░░   4%  14 ██░░░░░░░░  24%                    
+   3 ██░░░░░░░░  21%   9 ████░░░░░░  41%  15 ██████░░░░  61%                    
+   4 ██████░░░░  58%  10 ████████░░  78%                                        
+   5 ██████████  95%  11 █░░░░░░░░░  14%                                        
+                                                                                
+Memory                                                                          
+  RAM           ████████████░░░░░░░░░░░░░░░░░░░░   37%  47.3 GiB / 128 GiB      
+                                                                                
+lines 1–22 of 54 · ↑/↓ pgup/pgdn scroll · ? help                                
