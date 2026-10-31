@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -22,9 +23,10 @@ func (m *Manager) plistPath(r Role) string {
 	return filepath.Join(m.Home, "Library", "LaunchAgents", launchdLabel(r)+".plist")
 }
 
-// logPath is where launchd sends the service's stdout and stderr.
+// logPath is where launchd sends the service's stdout and stderr. path.Join, not
+// filepath: it's a macOS path even when the plist is rendered elsewhere (tests).
 func (m *Manager) logPath(r Role) string {
-	return filepath.Join(m.DataDir, "logs", string(r)+".log")
+	return path.Join(m.DataDir, "logs", string(r)+".log")
 }
 
 // domain is launchctl's per-user GUI domain.
