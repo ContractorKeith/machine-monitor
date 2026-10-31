@@ -1,6 +1,6 @@
 # machine-monitor — Build Plan
 
-Status: M0–M8 packages merged (2026-10-31); the skeptic pass-1 gaps (#45–#49) are fixed, and pass-2 fixes are tracked in #56–#59. Written 2026-10-31 from a full read of
+Status: M0–M8 built and three review fix rounds merged (2026-10-31); remaining items are GitHub issues. Written 2026-10-31 from a full read of
 [Forward-Future/device-monitor](https://github.com/Forward-Future/device-monitor) at commit
 `c3a4c41` (v1.2.29).
 
