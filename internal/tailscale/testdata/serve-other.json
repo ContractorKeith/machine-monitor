@@ -1,0 +1,7 @@
+{
+  "Web": {
+    "studio.tail0000.ts.net:8443": {
+      "Handlers": {"/": {"Proxy": "http://127.0.0.1:3000"}}
+    }
+  }
+}

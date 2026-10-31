@@ -1,0 +1,12 @@
+{
+  "Version": "1.104.2",
+  "BackendState": "Stopped",
+  "Self": {
+    "HostName": "studio",
+    "DNSName": "studio.tail0000.ts.net.",
+    "TailscaleIPs": ["100.101.102.103"],
+    "Online": false
+  },
+  "CurrentTailnet": {"Name": "example.com"},
+  "Peer": {}
+}
