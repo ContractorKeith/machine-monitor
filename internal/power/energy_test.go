@@ -1,6 +1,7 @@
 package power
 
 import (
+	"math"
 	"reflect"
 	"testing"
 	"time"
@@ -93,5 +94,40 @@ func TestAccumulateNoBounds(t *testing.T) {
 	u := Accumulate(minutes(at(1, 0), 5, 50), []time.Time{at(0, 0)}, HW{}, nil, est)
 	if u.Minutes != 0 || u.Wh != 0 || u.FirstData != nil {
 		t.Fatalf("got %+v", u)
+	}
+}
+
+// Expected values come from upstream's runtime (node): [v, +v.toFixed(1), +v.toFixed(4)].
+func TestToFixedMatchesNode(t *testing.T) {
+	for _, c := range [][3]float64{
+		{0.15, 0.1, 0.15}, {0.25, 0.3, 0.25}, {0.35, 0.3, 0.35}, {0.45, 0.5, 0.45},
+		{1.005, 1, 1.005}, {2.5, 2.5, 2.5}, {0.00005, 0, 0.0001}, {0.00015, 0, 0.0001},
+		{0.00025, 0, 0.0003}, {0.00035, 0, 0.0003}, {0.0005, 0, 0.0005}, {0.12345, 0.1, 0.1235},
+		{0.00045, 0, 0.0004}, {1.45, 1.4, 1.45}, {8.345, 8.3, 8.345}, {1.0000500000000001, 1, 1.0001},
+		{0.0625, 0.1, 0.0625}, {0.03125, 0, 0.0313}, {0.5, 0.5, 0.5}, {1.5, 1.5, 1.5},
+		{-0.25, -0.3, -0.25}, {-0.15, -0.1, -0.15}, {1e21, 1e21, 1e21},
+		{123456.78905, 123456.8, 123456.7891}, {0.00075, 0, 0.0008}, {0.0004999999999999999, 0, 0.0005},
+	} {
+		if got := ToFixed(c[0], 1); got != c[1] {
+			t.Errorf("ToFixed(%v, 1) = %v, want %v", c[0], got, c[1])
+		}
+		if got := ToFixed(c[0], 4); got != c[2] {
+			t.Errorf("ToFixed(%v, 4) = %v, want %v", c[0], got, c[2])
+		}
+	}
+	if z := ToFixed(math.Copysign(0, -1), 2); math.Signbit(z) {
+		t.Error("ToFixed(-0) is negative zero")
+	}
+	if !math.IsNaN(ToFixed(math.NaN(), 1)) || !math.IsInf(ToFixed(math.Inf(1), 1), 1) {
+		t.Error("non-finite values must pass through")
+	}
+}
+
+// One minute at 27 W and a flat 1.0 rate is 0.00045: upstream's toFixed(4) gives 0.0004.
+func TestAccumulateCostTie(t *testing.T) {
+	price := &Settings{Region: "US-FL", Rate: 1, Currency: "USD"}
+	u := Accumulate(minutes(at(10, 0), 1, 27), []time.Time{at(0, 0), at(24, 0)}, HW{}, price, est)
+	if *u.Cost != 0.0004 || u.CostBuckets[0] != 0.0004 {
+		t.Errorf("cost = %v %v, want 0.0004 (node: +(27/60/1000).toFixed(4))", *u.Cost, u.CostBuckets)
 	}
 }

@@ -684,3 +684,17 @@ func checkLimits(t *testing.T, r Report) {
 		t.Fatal("number out of range")
 	}
 }
+
+// U+202E and the other bidi controls are stripped; upstream's cleanText keeps them.
+func TestCleanTextStripsBidi(t *testing.T) {
+	in := "a\u202ecod.exe\u200e\u200f\u202a\u202b\u202c\u202d\u2066\u2067\u2068\u2069b"
+	if got := CleanText(in, 60); got == nil || *got != "acod.exeb" {
+		t.Errorf("CleanText = %v, want acod.exeb", got)
+	}
+	if got := CleanText("\u202e\u2069", 60); got != nil {
+		t.Errorf("only bidi controls = %q, want nil", *got)
+	}
+	if got := CleanText("\u2065\u202f\u200d", 60); got == nil || *got != "\u2065\u202f\u200d" {
+		t.Errorf("neighbouring code points must stay, got %v", got)
+	}
+}

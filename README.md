@@ -124,6 +124,11 @@ Other commands: `machine-monitor status --json` prints one report, `machine-moni
 
 ## Network and security
 
+The network total adds up every interface except loopback, as upstream device-monitor does.
+Virtual interfaces such as `tailscale0` or `docker0` are included, so traffic that crosses a
+VPN or bridge is counted on both the virtual and the physical link and the total can read
+higher than the physical NIC alone. The per-interface rates are in `status --json`.
+
 | Port | Protocol | Used for |
 |---|---|---|
 | 7777 | TCP | Hub HTTP API: agent reports, TUI connections, installers |

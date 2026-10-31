@@ -47,6 +47,12 @@ func readAMD(sys string) []report.GPU {
 			if t := scale(readNum(filepath.Join(h, "temp1_input")), 1e-3); t != nil {
 				g.Temp = t
 			}
+			// An APU's amdgpu hwmon labels its power PPT: the whole package, CPU cores
+			// included. That is CPU power (the sensors probe reports it), not GPU power, and
+			// upstream's agent.sh reads only power1_average, so it reports null here too.
+			if readText(filepath.Join(h, "power1_label")) == "PPT" {
+				continue
+			}
 			// power1_average on older kernels, power1_input on newer ones; microwatts.
 			p := readNum(filepath.Join(h, "power1_average"))
 			if p == nil {

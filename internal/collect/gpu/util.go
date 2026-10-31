@@ -65,6 +65,15 @@ func readNum(path string) *float64 {
 	return num(string(b))
 }
 
+// readText reads a short sysfs text file, trimmed; "" when missing.
+func readText(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
 // scale returns v*f rounded to one decimal, or nil when v is nil.
 func scale(v *float64, f float64) *float64 {
 	if v == nil {

@@ -223,7 +223,7 @@ func normalizeProcesses(v any) []Process {
 }
 
 // CleanText is upstream's cleanText: v as JS String() renders it, without control
-// characters, trimmed, cut to limit UTF-16 code units. nil for null or an empty result.
+// characters (and, beyond upstream, bidi override and format characters), trimmed, cut to limit UTF-16 code units. nil for null or an empty result.
 // v is a value from encoding/json (decoded with or without UseNumber).
 func CleanText(v any, limit int) *string { return str(v, limit) }
 
@@ -261,7 +261,7 @@ func str(v any, limit int) *string {
 		return nil
 	}
 	s := strings.Map(func(r rune) rune {
-		if r <= 0x1f || r == 0x7f {
+		if r <= 0x1f || r == 0x7f || isBidiFormat(r) {
 			return -1
 		}
 		return r
@@ -271,6 +271,14 @@ func str(v any, limit int) *string {
 		return nil
 	}
 	return Ptr(cutUTF16(s, limit))
+}
+
+// isBidiFormat reports the invisible direction controls: LRM/RLM (U+200E, U+200F), the
+// embeddings and overrides (U+202A–U+202E) and the isolates (U+2066–U+2069). Unlike the
+// rest of cleanText this goes beyond upstream, which keeps them: a U+202E in a hostname
+// or process name reverses the text after it on screen and can disguise one name as another.
+func isBidiFormat(r rune) bool {
+	return r == 0x200e || r == 0x200f || (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069)
 }
 
 // cutUTF16 keeps the first limit UTF-16 code units of s, never splitting a surrogate pair.

@@ -166,7 +166,10 @@ func (s linuxSource) diskIO(ctx context.Context) (read, write uint64, ok bool) {
 
 func (s linuxSource) netIO(ctx context.Context) []ifaceBytes { return psNetIO(ctx, s.ps) }
 
-// inNetTotal: upstream sums every interface but lo.
+// inNetTotal: upstream sums every interface but lo. That includes tailscale0, docker0 and
+// other virtual links, so traffic through a VPN or bridge is counted on both the virtual
+// and the physical interface. Kept for parity with upstream; the per-interface rates in
+// the report show each link on its own.
 func (linuxSource) inNetTotal(string) bool { return true }
 
 func (s linuxSource) read(name string) []byte {
