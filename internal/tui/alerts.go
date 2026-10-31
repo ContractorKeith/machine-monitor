@@ -402,9 +402,9 @@ func (m model) saveAlerts(s alerts.Settings) (model, tea.Cmd) {
 	parsed, err := alerts.ParseSettings(b)
 	if err != nil {
 		if m.al.form.open {
-			m.al.form.err = err.Error()
+			m.al.form.err = clean(err.Error())
 		} else {
-			m.al.notice = "not saved: " + err.Error()
+			m.al.notice = "not saved: " + clean(err.Error())
 		}
 		return m, nil
 	}
@@ -846,7 +846,7 @@ func (m model) alertsView() string {
 	case m.al.form.open:
 		return m.formView()
 	case !m.al.loaded && m.al.err != nil:
-		return t.err.Render("Could not load alerts: "+m.al.err.Error()) + "\n" + t.dim.Render("r retries")
+		return t.err.Render("Could not load alerts: "+hubErr(m.al.err)) + "\n" + t.dim.Render("r retries")
 	case !m.al.loaded:
 		return t.dim.Render("Loading alerts from " + m.hubHost() + "…")
 	}

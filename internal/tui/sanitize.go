@@ -7,81 +7,15 @@ package tui
 
 import (
 	"reflect"
-	"strings"
-	"unicode"
-	"unicode/utf8"
 
-	"github.com/charmbracelet/x/ansi"
+	"github.com/ContractorKeith/machine-monitor/internal/textclean"
 )
 
-// clean removes terminal escape sequences (CSI, OSC, DCS and the like), C0/C1 control
-// characters and bidi/zero-width format characters from s. Tabs and line breaks become
-// spaces so a field stays on one row. Plain text comes back unchanged and uncopied.
-func clean(s string) string {
-	if !needsClean(s) {
-		return s
-	}
-	rs := []rune(ansi.Strip(s))
-	var b strings.Builder
-	b.Grow(len(s))
-	var prev rune // the last rune written
-	for i, r := range rs {
-		switch {
-		case r == '\t' || r == '\n' || r == '\r':
-			r = ' '
-		case r == utf8.RuneError, unicode.IsControl(r), hiddenFormat(r):
-			continue
-		case isJoiner(r) && !joinerBetween(prev, rs, i):
-			continue
-		}
-		b.WriteRune(r)
-		prev = r
-	}
-	return b.String()
-}
+// clean applies the shared textclean policy to s.
+func clean(s string) string { return textclean.Clean(s) }
 
-// isJoiner is the zero-width (non-)joiner. Emoji sequences and Indic and Persian words need
-// it, so it stays between two visible characters and goes when it leads, trails or repeats.
-func isJoiner(r rune) bool { return r == 0x200c || r == 0x200d }
-
-// joinerBetween reports whether the joiner at rs[i] sits between the visible rune prev
-// (already written) and a visible rune after it.
-func joinerBetween(prev rune, rs []rune, i int) bool {
-	visible := func(r rune) bool {
-		return !unicode.IsSpace(r) && !unicode.IsControl(r) && !hiddenFormat(r) && !isJoiner(r) && r != utf8.RuneError
-	}
-	return visible(prev) && !(i > 0 && isJoiner(rs[i-1])) && i+1 < len(rs) && visible(rs[i+1])
-}
-
-// needsClean is the fast path: true when s holds anything clean would change.
-func needsClean(s string) bool {
-	if !utf8.ValidString(s) {
-		return true
-	}
-	rs := []rune(s)
-	var prev rune
-	for i, r := range rs {
-		if unicode.IsControl(r) || hiddenFormat(r) || isJoiner(r) && !joinerBetween(prev, rs, i) {
-			return true
-		}
-		prev = r
-	}
-	return false
-}
-
-// hiddenFormat reports invisible format characters: bidi marks and overrides, zero-width
-// characters, the word joiner and the byte order mark.
-func hiddenFormat(r rune) bool {
-	switch {
-	case r == 0x061c, r == 0xfeff, r == 0x180e:
-		return true
-	case r == 0x200b, r == 0x200e, r == 0x200f, r >= 0x202a && r <= 0x202e:
-		return true
-	case r >= 0x2060 && r <= 0x2064, r >= 0x2066 && r <= 0x2069:
-		return true
-	}
-	return false
-}
+// needsClean is the fast path: true when clean might change s.
+func needsClean(s string) bool { return textclean.Needs(s) }
 
 // cleanAll cleans every string reachable from v, which must be a pointer: strings, *string,
 // and those inside structs, slices, arrays and maps' values. It edits in place, which is

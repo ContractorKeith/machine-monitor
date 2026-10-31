@@ -132,7 +132,7 @@ func TestUpdateLeavesPackageManagersAlone(t *testing.T) {
 }
 
 func TestPrintableStripsEscapes(t *testing.T) {
-	if got := printable("a\x1b[31mred\x07\u009b"); got != "a[31mred" {
+	if got := printable("a\x1b[31mred\x07\u009b"); got != "ared" { // the whole CSI sequence goes, not just the ESC byte
 		t.Fatalf("printable = %q", got)
 	}
 }

@@ -222,7 +222,7 @@ func (m model) updateHub(msg tea.Msg) (model, tea.Cmd, bool) {
 	case renameMsg:
 		if msg.err != nil {
 			m.notice = "rename failed: " + hubErr(msg.err)
-		} else if msg.dev != nil && m.hasDev(msg.dev.ID) { // not one removed meanwhile
+		} else if cleanAll(msg.dev); msg.dev != nil && m.hasDev(msg.dev.ID) { // not one removed meanwhile
 			m.editDev(msg.dev.ID, func(d *device) { d.setRegistry(msg.dev) })
 		}
 		return m, nil, true
