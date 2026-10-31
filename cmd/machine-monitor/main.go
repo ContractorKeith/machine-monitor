@@ -41,7 +41,7 @@ The TUI respects NO_COLOR.
 
 // commands lists every subcommand. Each later milestone replaces its stub.
 var commands = map[string]func(args []string, stdout, stderr io.Writer) int{
-	"hub":     stub("hub"),
+	"hub":     runHub,
 	"agent":   stub("agent"),
 	"connect": stub("connect"),
 	"status":  runStatus,
