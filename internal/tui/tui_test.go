@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -308,5 +309,166 @@ func TestFormat(t *testing.T) {
 		if c.got != c.want {
 			t.Errorf("got %q, want %q", c.got, c.want)
 		}
+	}
+}
+
+// loadedModel is a model at w×h holding one workstation sample and the process list.
+func loadedModel(t *testing.T, o Options, w, h int) model {
+	t.Helper()
+	m := New(o).(model)
+	for _, msg := range []tea.Msg{
+		tea.WindowSizeMsg{Width: w, Height: h},
+		reportMsg{r: workstation(16)},
+		procsMsg{p: procList(40)},
+	} {
+		next, _ := m.Update(msg)
+		m = next.(model)
+	}
+	return m
+}
+
+// press sends key presses to m; "ctrl+c" and "enter" are named keys.
+func press(m model, keys ...string) (model, tea.Cmd) {
+	var cmd tea.Cmd
+	for _, k := range keys {
+		var msg tea.KeyPressMsg
+		switch k {
+		case "ctrl+c":
+			msg = tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
+		case "enter":
+			msg = tea.KeyPressMsg{Code: tea.KeyEnter}
+		default:
+			msg = tea.KeyPressMsg{Code: []rune(k)[0], Text: k}
+		}
+		var next tea.Model
+		next, cmd = m.Update(msg)
+		m = next.(model)
+	}
+	return m, cmd
+}
+
+func TestBarNaN(t *testing.T) {
+	th := newTheme(true, true)
+	for _, v := range []*float64{nil, p(math.NaN()), p(math.Inf(1)), p(math.Inf(-1)), p(-5), p(250)} {
+		got := ansi.Strip(th.bar(v, 10))
+		if len(got) != 10 {
+			t.Errorf("bar(%v) = %q, want 10 cells", v, got)
+		}
+	}
+	if got := ansi.Strip(th.bar(p(math.NaN()), 4)); got != "...." {
+		t.Errorf("bar(NaN) = %q, want an empty track", got)
+	}
+}
+
+// TestTinyTerminal checks a 1- or 2-row window gets only the body, never overflowing.
+func TestTinyTerminal(t *testing.T) {
+	for _, h := range []int{1, 2} {
+		m := loadedModel(t, testOptions(), 80, h)
+		for v := range viewCount {
+			m.view = v
+			checkFrame(t, m, 80, h)
+			if strings.Contains(m.render(), "q quit") {
+				t.Errorf("%s at h=%d still draws the header", viewNames[v], h)
+			}
+		}
+	}
+}
+
+func TestCtrlCWhileFiltering(t *testing.T) {
+	m := loadedModel(t, testOptions(), 80, 24)
+	m, _ = press(m, "3", "/", "q")
+	if !m.filter.Focused() || m.filter.Value() != "q" {
+		t.Fatalf("filter focused %v, value %q; want focused with q typed", m.filter.Focused(), m.filter.Value())
+	}
+	if _, cmd := press(m, "ctrl+c"); cmd == nil || cmd() != tea.Quit() {
+		t.Error("ctrl+c while filtering does not quit")
+	}
+}
+
+func TestHelpSwallowsViewKeys(t *testing.T) {
+	m := loadedModel(t, testOptions(), 80, 24)
+	m, _ = press(m, "3", "?", "/", "s", "j")
+	if m.filter.Focused() || m.procSort != sortCPU || m.procCursor != 0 {
+		t.Errorf("keys under help reached the view: filter %v, sort %v, cursor %d",
+			m.filter.Focused(), m.procSort, m.procCursor)
+	}
+}
+
+// TestFilterSortCache checks the cached visible list follows every change.
+func TestFilterSortCache(t *testing.T) {
+	m := loadedModel(t, testOptions(), 80, 24)
+	m, _ = press(m, "3", "/", "o", "l", "l", "a", "m", "a", "enter")
+	if n := len(m.visibleProcs()); n != 5 {
+		t.Fatalf("filter ollama: %d visible, want 5", n)
+	}
+	m, _ = press(m, "r")
+	if v := m.visibleProcs(); *v[0].CPU > *v[len(v)-1].CPU {
+		t.Error("reverse did not reorder the visible list")
+	}
+	next, _ := m.Update(procsMsg{p: procList(80)})
+	if n := len(next.(model).visibleProcs()); n != 10 {
+		t.Errorf("new list, same filter: %d visible, want 10", n)
+	}
+	m, _ = press(next.(model), "esc")
+	if n := len(m.visibleProcs()); n != 80 {
+		t.Errorf("esc: %d visible, want 80", n)
+	}
+}
+
+// TestSparkGaps checks unknown samples leave gaps and an all-unknown row is dropped.
+func TestSparkGaps(t *testing.T) {
+	var s series
+	for range 3 {
+		s.push(p(100))
+	}
+	s.push(nil)
+	s.push(p(100))
+	if got := asciiSpark(s.v, 5); got != "### #\n### #" {
+		t.Errorf("ASCII spark with a gap = %q", got)
+	}
+	full := series{v: []float64{100, 100, 100, 100, 100}}
+	th := newTheme(true, false)
+	if gap, solid := th.spark(s, 5), th.spark(full, 5); gap == solid {
+		t.Errorf("braille spark draws the unknown sample as a line: %q", ansi.Strip(gap))
+	}
+
+	o := testOptions()
+	r := workstation(16)
+	r.GPUs[0].Usage = nil
+	o.Collector = fakeCollector{r}
+	m := New(o).(model)
+	next, _ := m.Update(reportMsg{r: r})
+	if frame := ansi.Strip(next.(model).render()); strings.Contains(frame, "gpu ") {
+		t.Errorf("GPU sparkline drawn with no known sample:\n%s", frame)
+	}
+}
+
+func TestDeviceEmptyStrings(t *testing.T) {
+	o := testOptions()
+	r := workstation(4)
+	r.Platform, r.ID = "", ""
+	m := New(o).(model)
+	next, _ := m.Update(reportMsg{r: r})
+	m = next.(model)
+	for _, l := range m.deviceLines() {
+		l = ansi.Strip(l)
+		for _, k := range []string{"Platform", "ID"} {
+			if strings.HasPrefix(strings.TrimSpace(l), k+" ") && !strings.HasSuffix(strings.TrimSpace(l), none) {
+				t.Errorf("empty %s renders as %q", k, l)
+			}
+		}
+	}
+}
+
+// TestCardHotTemp checks the band colour reaches the card: the goldens are ANSI-stripped.
+func TestCardHotTemp(t *testing.T) {
+	m := loadedModel(t, testOptions(), 80, 24)
+	m.view = viewDashboard
+	hot := m.theme.hot.Render("86°C")
+	if !strings.Contains(hot, "\x1b[") {
+		t.Fatalf("hot style emits no SGR: %q", hot)
+	}
+	if !strings.Contains(m.render(), hot) {
+		t.Error("the card's 86 °C GPU temperature is not in the hot style")
 	}
 }

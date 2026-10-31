@@ -57,6 +57,7 @@ type model struct {
 	deviceScroll int
 
 	procs       []report.Process
+	visible     []report.Process // procs filtered and sorted; refreshProcs keeps it current
 	procsErr    error
 	procsBusy   bool
 	procSort    sortCol
@@ -159,6 +160,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.procsErr = msg.err
 		if msg.err == nil {
 			m.procs = msg.p
+			m.refreshProcs()
 		}
 		m.clampScroll()
 		return m, nil
@@ -171,6 +173,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handleKey routes a key press: filter input first, then global keys, then the view's keys.
 func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if msg.String() == "ctrl+c" { // always quits; plain q is text while filtering
+		return m, tea.Quit
+	}
 	if m.filter.Focused() {
 		switch msg.String() {
 		case "enter":
@@ -185,9 +190,11 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.filter, cmd = m.filter.Update(msg)
 			m.filterValue = strings.TrimSpace(m.filter.Value())
 			m.procCursor, m.procOffset = 0, 0
+			m.refreshProcs()
 			return m, cmd
 		}
 		m.procCursor, m.procOffset = 0, 0
+		m.refreshProcs()
 		return m, nil
 	}
 
@@ -211,6 +218,9 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.switchTo((m.view + 1) % viewCount)
 	}
 
+	if m.showHelp { // view keys would act on a view that isn't shown
+		return m, nil
+	}
 	switch m.view {
 	case viewDevice:
 		m.scrollDevice(msg)
@@ -293,7 +303,10 @@ func (m model) render() string {
 	case m.view == viewProcesses:
 		body, foot = m.processes(), m.procFooter()
 	}
-	return fit(m.header(), w, 1) + "\n" + fit(body, w, m.bodyHeight()) + "\n" + fit(m.theme.dim.Render(foot), w, 1)
+	if h < 3 { // no room for the header and footer: the body alone
+		return fit(body, w, h)
+	}
+	return fit(m.header(), w, 1) + "\n" + fit(body, w, h-2) + "\n" + fit(m.theme.dim.Render(foot), w, 1)
 }
 
 // header shows the app, the machine, the view tabs and the help hint.

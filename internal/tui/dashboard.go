@@ -34,7 +34,7 @@ func (m model) card(r *report.Report, w int) string {
 	var lines []string
 
 	name := t.title.Render(str(r.Hostname))
-	lines = append(lines, spread(name, t.dim.Render(r.Platform), iw))
+	lines = append(lines, spread(name, t.dim.Render(orNone(r.Platform)), iw))
 	lines = append(lines, spread(t.dim.Render(str(r.OS)), t.dim.Render("up "+fmtUptime(r.Uptime)), iw))
 
 	cpuRight := cols(fmtPct(r.CPU.Usage), 5, fmtClock(r.CPU.ClockMHz), 9, t.fmtTemp(r.CPU.Temp), 5)
@@ -79,8 +79,11 @@ func (m model) gauge(label string, p *float64, right string, w int) string {
 	return pad(m.theme.label.Render(pad(label, labelW))+m.theme.bar(p, bw)+" "+right, w)
 }
 
-// sparkRow is a labelled sparkline sparkHeight rows tall.
+// sparkRow is a labelled sparkline sparkHeight rows tall, or nothing when no sample is known.
 func (m model) sparkRow(label string, s series, w int) []string {
+	if !s.known() {
+		return nil
+	}
 	const labelW = 5
 	chart := strings.Split(m.theme.spark(s, w-labelW), "\n")
 	out := make([]string, len(chart))

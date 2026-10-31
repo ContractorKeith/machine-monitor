@@ -100,6 +100,14 @@ func str(s *string) string {
 	return *s
 }
 
+// orNone is s, or none when it is empty.
+func orNone(s string) string {
+	if s == "" {
+		return none
+	}
+	return s
+}
+
 // pctOf returns used/total as a percentage, or nil when either is unknown or total is 0.
 func pctOf(used, total *float64) *float64 {
 	if used == nil || total == nil || *total <= 0 {
@@ -124,9 +132,9 @@ func (t theme) bar(p *float64, w int) string {
 	}
 	n := 0
 	style := t.barFill
-	if p != nil {
+	if p != nil && !math.IsNaN(*p) { // NaN is unknown, like nil
 		v := math.Max(0, math.Min(100, *p))
-		n = int(math.Round(v / 100 * float64(w)))
+		n = max(0, min(w, int(math.Round(v/100*float64(w)))))
 		style = t.loadStyle(v)
 	}
 	return style.Render(strings.Repeat(string(t.fill), n)) +

@@ -45,11 +45,14 @@ func (m model) procKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, k.Clear):
 		m.filter.SetValue("")
 		m.filterValue = ""
+		m.refreshProcs()
 	case key.Matches(msg, k.Sort):
 		m.procSort = (m.procSort + 1) % sortCount
 		m.procRev = false
+		m.refreshProcs()
 	case key.Matches(msg, k.Reverse):
 		m.procRev = !m.procRev
+		m.refreshProcs()
 	case key.Matches(msg, k.Up):
 		m.procCursor--
 	case key.Matches(msg, k.Down):
@@ -71,7 +74,13 @@ func (m model) procKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m model) procRows() int { return max(1, m.bodyHeight()-1) }
 
 // visibleProcs is the process list filtered and sorted for display.
-func (m model) visibleProcs() []report.Process {
+func (m model) visibleProcs() []report.Process { return m.visible }
+
+// refreshProcs recomputes the visible list; call it after the list, filter or sort changes.
+func (m *model) refreshProcs() { m.visible = m.filterSort() }
+
+// filterSort filters and sorts the process list.
+func (m model) filterSort() []report.Process {
 	q := strings.ToLower(m.filterValue)
 	out := make([]report.Process, 0, len(m.procs))
 	for _, p := range m.procs {

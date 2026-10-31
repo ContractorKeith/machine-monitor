@@ -28,10 +28,10 @@ func (m model) deviceLines() []string {
 	section("System")
 	kv("Host", str(r.Hostname))
 	kv("OS", str(r.OS))
-	kv("Platform", r.Platform)
+	kv("Platform", orNone(r.Platform))
 	kv("Form factor", str(r.FormFactor))
 	kv("Uptime", fmtUptime(r.Uptime))
-	kv("ID", r.ID)
+	kv("ID", orNone(r.ID))
 
 	section("CPU")
 	kv("Model", str(r.CPU.Name))
