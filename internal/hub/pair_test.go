@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http/httptest"
 	"regexp"
@@ -30,7 +31,13 @@ func (th *testHub) newCode() string {
 
 func (th *testHub) pair(code string) (int, map[string]any) {
 	th.t.Helper()
-	w := th.req("POST", "/api/pair", "", fmt.Sprintf(`{"code":%q}`, code))
+	return th.pairFrom("127.0.0.1:50000", code)
+}
+
+// pairFrom tries code from the address remote.
+func (th *testHub) pairFrom(remote, code string) (int, map[string]any) {
+	th.t.Helper()
+	w := th.req("POST", "/api/pair", "", fmt.Sprintf(`{"code":%q}`, code), "RemoteAddr", remote)
 	return w.Code, decode[map[string]any](th.t, w)
 }
 
@@ -99,6 +106,10 @@ func TestPairCodeDiesAfterFiveTries(t *testing.T) {
 	if code, body := th.pair(c); code != 403 || body["token"] != nil {
 		t.Fatalf("right code after %d wrong tries: %d %v", PairTries, code, body)
 	}
+	// The tries are this source's: another machine can still use the code.
+	if code, body := th.pairFrom("192.168.1.9:4000", c); code != 200 || body["token"] != th.Token() {
+		t.Fatalf("another source after one burned its tries: %d %v", code, body)
+	}
 
 	// A new code resets the count; four wrong tries still leave it alive.
 	c = th.newCode()
@@ -155,4 +166,55 @@ func TestPairBroadcastsPaired(t *testing.T) {
 		t.Fatal("pair failed")
 	}
 	s.next("paired")
+}
+
+// An IPv6 source is its /64, since a machine can use any address in it.
+func TestPairTriesPerIPv6Prefix(t *testing.T) {
+	th := newTestHub(t)
+	c := th.newCode()
+	for i := range PairTries {
+		th.pairFrom(fmt.Sprintf("[fd12:3456::%x]:4000", i+1), wrongCode(c))
+	}
+	if code, _ := th.pairFrom("[fd12:3456::99]:4000", c); code != 403 {
+		t.Fatalf("same /64 after %d wrong tries: %d", PairTries, code)
+	}
+	if code, _ := th.pairFrom("[fd12:3457::1]:4000", c); code != 200 {
+		t.Fatalf("another /64: %d", code)
+	}
+}
+
+// Many sources together still kill the code after pairMaxWrong wrong guesses.
+func TestPairCodeDiesAfterMaxWrong(t *testing.T) {
+	th := newTestHub(t)
+	c := th.newCode()
+	for i := range pairMaxWrong {
+		code, _ := th.pairFrom(fmt.Sprintf("10.0.%d.%d:4000", i/PairTries/250, i/PairTries%250+1), wrongCode(c))
+		if code != 403 {
+			t.Fatalf("guess %d: %d", i+1, code)
+		}
+	}
+	if code, body := th.pairFrom("192.168.7.7:4000", c); code != 403 || body["token"] != nil {
+		t.Fatalf("right code after %d wrong guesses in all: %d %v", pairMaxWrong, code, body)
+	}
+}
+
+// Through a trusted proxy (tailscale serve) each forwarded client has its own tries.
+func TestPairTriesUseForwardedClient(t *testing.T) {
+	th := newTestHub(t)
+	th.mu.Lock()
+	th.cfg.extra = map[string]json.RawMessage{"trustedProxies": json.RawMessage(`["127.0.0.1"]`)}
+	th.mu.Unlock()
+	c := th.newCode()
+	try := func(fwd, code string) int {
+		return th.req("POST", "/api/pair", "", fmt.Sprintf(`{"code":%q}`, code), "X-Forwarded-For", fwd).Code
+	}
+	for i := range PairTries { // a spoofed leftmost entry doesn't buy fresh tries
+		try(fmt.Sprintf("10.0.0.%d, 100.64.0.7", i+1), wrongCode(c))
+	}
+	if code := try("10.0.0.99, 100.64.0.7", c); code != 403 {
+		t.Fatalf("same client behind a new spoofed entry: %d", code)
+	}
+	if code := try("100.64.0.8", c); code != 200 {
+		t.Fatalf("another tailnet client: %d", code)
+	}
 }

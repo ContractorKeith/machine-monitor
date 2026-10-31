@@ -28,7 +28,8 @@ Windows PowerShell 5.1 or 7 (installs to `%LOCALAPPDATA%\Programs\machine-monito
 irm -Headers @{Authorization='Bearer HUB_KEY'} http://HUB:7777/install.ps1 | iex
 ```
 
-`HUB_KEY` is the key the hub prints when it starts. The hub must be a release build, not one
+`HUB_KEY` is the hub's key: `machine-monitor hub --show-key` on the hub prints it. The hub
+shows it in full when it starts in a terminal, and masked when its output goes to a log. The hub must be a release build, not one
 you built yourself.
 
 Keep `--fail-with-body` and don't add `-f`: macOS curl refuses the two together. With it,
@@ -94,17 +95,20 @@ machine-monitor
 ```
 
 **A hub** that collects every machine, keeps 30 days of history and evaluates alerts. It
-monitors its own machine too and prints its key and addresses:
+monitors its own machine too and prints its addresses and key (masked unless it is running in
+a terminal):
 
 ```sh
 machine-monitor hub                         # in the foreground
 machine-monitor service install --role hub  # or start it at login
+machine-monitor hub --show-key              # print the key
+machine-monitor pair                        # a one-time pairing code for connect, valid 10 minutes
 ```
 
 **An agent** on each other machine. The one-line installer above does all of this; by hand:
 
 ```sh
-machine-monitor connect --no-tui http://HUB:7777                   # asks for a pairing code
+machine-monitor connect --no-tui http://HUB:7777                   # asks for a code from `pair`
 echo HUB_KEY | machine-monitor connect --no-tui --key-stdin http://HUB:7777  # or the key
 machine-monitor service install --role agent      # reports to the hub you paired with
 ```

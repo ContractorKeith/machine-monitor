@@ -1,13 +1,13 @@
 package hub
 
-// HTTP routes (PLAN §6). Pairing is in pair.go, processes on demand in procs.go and remote
-// actions in commands.go. Installers and the remote (Tailscale) endpoints arrive in later
-// milestones.
+// HTTP routes (PLAN §6). Pairing is in pair.go, processes on demand in procs.go, remote
+// actions in commands.go, installers in install.go and Tailscale status in remote.go.
 //
 // Ported from Forward-Future/device-monitor server.js @ c3a4c41
 // (MIT, © 2026 Matt): https://github.com/Forward-Future/device-monitor
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,6 +51,7 @@ func (h *Hub) Handler() http.Handler {
 	key("DELETE /api/devices/{id}", h.handleRemove)
 	key("GET /api/devices/{id}/processes", h.handleProcesses)
 	key("POST /api/devices/{id}/action", h.handleAction)
+	key("GET /api/remote", h.handleRemote)
 	// Everything else, including a known path with the wrong method, is a JSON 404, as upstream.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusNotFound, errorBody("not found"))
@@ -66,7 +67,7 @@ func (h *Hub) guard(next http.Handler) http.Handler {
 			w.Header().Set(k, v)
 		}
 		h.mu.Lock()
-		extra := h.cfg.AllowedHosts
+		extra := append(h.remoteHosts(), h.cfg.AllowedHosts...)
 		h.mu.Unlock()
 		if !hostAllowed(r.Host, h.opt.Hostname, extra) {
 			sendText(w, http.StatusMisdirectedRequest, "This hub only answers requests addressed to it by IP address or its own name.")
@@ -80,9 +81,11 @@ func (h *Hub) guard(next http.Handler) http.Handler {
 			sendJSON(w, http.StatusForbidden, errorBody("cross-site request refused"))
 			return
 		}
-		if openPaths[r.URL.Path] && !h.authorized(r) && !h.rate.allow(r) {
-			sendJSON(w, http.StatusTooManyRequests, errorBody("too many requests"))
-			return
+		if openPaths[r.URL.Path] && !h.authorized(r) {
+			if client, socket := h.clientAddr(r); !h.rate.allow(client, socket, RateMax) {
+				sendJSON(w, http.StatusTooManyRequests, errorBody("too many requests"))
+				return
+			}
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -172,9 +175,35 @@ func (h *Hub) deviceFromPath(r *http.Request) string {
 
 // ---- report and info ---------------------------------------------------------------------
 
+// Failed-report budget. The key is in a report's body, so it is checked only after the body
+// (up to maxBody) is read. An address that has sent reportFailMax failed reports (bad body
+// or key) in a RateWindow gets only reportPeek bytes read: a report whose key is in them
+// goes on as usual, anything else is refused. Every agent puts "token" near the start of
+// its report. An agent left with an old key posts about 30 a minute, so it keeps getting the
+// clearer 401.
+const (
+	reportFailMax = 60
+	reportPeek    = 64 << 10
+)
+
+// reportTokenRE finds the token field in the start of a report.
+var reportTokenRE = regexp.MustCompile(`"token"\s*:\s*"([^"\\]{1,128})"`)
+
 func (h *Hub) handleReport(w http.ResponseWriter, r *http.Request) {
+	client, socket := h.clientAddr(r)
+	fail := func() { h.reportFails.allow(client, socket, reportFailMax) }
+	if !h.authorized(r) && h.reportFails.over(client, reportFailMax) {
+		peek, _ := io.ReadAll(io.LimitReader(r.Body, reportPeek))
+		m := reportTokenRE.FindSubmatch(peek)
+		if m == nil || !h.keyOK(string(m[1])) {
+			sendJSON(w, http.StatusTooManyRequests, errorBody("too many failed reports"))
+			return
+		}
+		r.Body = readCloser{io.MultiReader(bytes.NewReader(peek), r.Body), r.Body}
+	}
 	raw, err := readBody(w, r)
 	if err != nil {
+		fail()
 		sendJSON(w, http.StatusBadRequest, errorBody(err.Error()))
 		return
 	}
@@ -182,15 +211,23 @@ func (h *Hub) handleReport(w http.ResponseWriter, r *http.Request) {
 		Token string `json:"token"`
 	}
 	if json.Unmarshal(raw, &tok) != nil || !h.keyOK(tok.Token) {
+		fail()
 		sendJSON(w, http.StatusUnauthorized, errorBody("bad token"))
 		return
 	}
+	h.reportFails.forget(client) // a keyed agent behind this address clears it
 	reply, err := h.ingest(raw)
 	if err != nil {
 		sendJSON(w, http.StatusBadRequest, errorBody(err.Error()))
 		return
 	}
 	sendJSON(w, http.StatusOK, reply)
+}
+
+// readCloser reads from Reader and closes Closer.
+type readCloser struct {
+	io.Reader
+	io.Closer
 }
 
 // handleInfo is the hub's identity. Without the key it only proves it knows the key: a
@@ -206,7 +243,7 @@ func (h *Hub) handleInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sendJSON(w, http.StatusOK, map[string]any{"token": h.Token(), "port": h.opt.Port, "addresses": lanAddresses(),
-		"hostname": h.opt.Hostname, "remote": map[string]any{"urls": []string{}}})
+		"hostname": h.opt.Hostname, "remote": map[string]any{"urls": h.remoteStatus().URLs}})
 }
 
 // ---- devices -----------------------------------------------------------------------------
@@ -416,8 +453,12 @@ func LANAddresses() []Address { return lanAddresses() }
 
 var virtualIfaceRE = regexp.MustCompile(`(?i)vEthernet|WSL|VirtualBox|VMware|Tailscale`)
 
-// preferredURL is the hub link put in alert notifications: the first real LAN address.
+// preferredURL is the hub link put in alert notifications: the tailscale serve HTTPS address
+// when there is one (it works away from home), else the first real LAN address.
 func (h *Hub) preferredURL() string {
+	if st := h.remoteStatus(); st.HTTPSURL != nil {
+		return *st.HTTPSURL
+	}
 	for _, a := range lanAddresses() {
 		if !virtualIfaceRE.MatchString(a.Name) && !strings.HasPrefix(a.Address, "100.") {
 			return fmt.Sprintf("http://%s:%d", a.Address, h.opt.Port)

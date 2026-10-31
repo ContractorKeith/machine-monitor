@@ -120,6 +120,30 @@ func remoteIP(remoteAddr string) (netip.Addr, bool) {
 	return netip.Addr{}, false
 }
 
+// clientAddr is the address a request comes from, for rate limits and pairing tries: the
+// socket's address, or the last X-Forwarded-For address when the socket is a proxy listed
+// in config.json "trustedProxies" (tailscale serve hands tailnet clients over from
+// loopback). Proxies append the address they saw, so only the last entry is the trusted
+// proxy's; everything before it is whatever the client sent. Anyone else's X-Forwarded-For is whatever they typed, so it is ignored, also
+// from loopback: any local process could otherwise dodge the limits by rotating it.
+// (Upstream honours it from every loopback peer.)
+func (h *Hub) clientAddr(r *http.Request) (client, socket netip.Addr) {
+	socket, _ = remoteIP(r.RemoteAddr)
+	client = socket
+	if h.trustedProxy(r.RemoteAddr) {
+		hops := r.Header.Values("X-Forwarded-For")
+		last := ""
+		if len(hops) > 0 {
+			list := strings.Split(hops[len(hops)-1], ",")
+			last = list[len(list)-1]
+		}
+		if a, err := netip.ParseAddr(strings.TrimSpace(last)); err == nil {
+			client = a.Unmap().WithZone("")
+		}
+	}
+	return client, socket
+}
+
 // sameOrigin refuses cross-site requests: browsers send Origin on cross-site POST, PUT,
 // PATCH and DELETE (including pages that target 127.0.0.1). Agents and the TUI send none.
 func sameOrigin(r *http.Request) bool {
@@ -190,27 +214,18 @@ func newRateLimiter(now func() time.Time) *rateLimiter {
 	return &rateLimiter{now: now, rates: map[string]*rateEntry{}}
 }
 
-// allow counts one request from r and reports whether it is within the limit.
-//
-// tailscale serve hands every tailnet client over from loopback with X-Forwarded-For, so on
-// a loopback connection the forwarded address is the real client. From anywhere else the
-// header is whatever the peer typed: honouring it would let a LAN client dodge the limit
-// (and grow the table without bound) just by rotating it, so those are keyed on the socket.
-func (l *rateLimiter) allow(r *http.Request) bool {
-	addr, _ := remoteIP(r.RemoteAddr)
-	ip := addr.String()
-	if addr.IsLoopback() {
-		fwd, _, _ := strings.Cut(r.Header.Get("X-Forwarded-For"), ",")
-		if a, err := netip.ParseAddr(strings.TrimSpace(fwd)); err == nil {
-			ip = a.Unmap().String()
-		}
-	}
+// allow counts one request from client (see Hub.clientAddr) and reports whether it is
+// within max per RateWindow. socket is the connection's own address: when the table is
+// full, new clients share its allowance, so rotating forwarded addresses can't grow the
+// table without bound.
+func (l *rateLimiter) allow(client, socket netip.Addr, max int) bool {
+	ip := client.String()
 	now := l.now()
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	e := l.rates[ip]
 	if e == nil && len(l.rates) >= rateMaxKeys { // table full: share the socket's allowance
-		ip = addr.String()
+		ip = socket.String()
 		e = l.rates[ip]
 	}
 	if e == nil || now.Sub(e.at) > RateWindow {
@@ -218,7 +233,24 @@ func (l *rateLimiter) allow(r *http.Request) bool {
 		l.rates[ip] = e
 	}
 	e.n++
-	return e.n <= RateMax
+	return e.n <= max
+}
+
+// over reports whether client has already used up max in the current window, without
+// counting a request.
+func (l *rateLimiter) over(client netip.Addr, max int) bool {
+	now := l.now()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e := l.rates[client.String()]
+	return e != nil && now.Sub(e.at) <= RateWindow && e.n >= max
+}
+
+// forget drops client's count.
+func (l *rateLimiter) forget(client netip.Addr) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.rates, client.String())
 }
 
 // prune forgets windows that have ended.

@@ -6,6 +6,7 @@ package hub
 // (MIT, © 2026 Matt): https://github.com/Forward-Future/device-monitor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -109,7 +110,7 @@ func (h *Hub) loadRegistry() error {
 	return nil
 }
 
-// saveRegistry writes devices.json now.
+// saveRegistry writes devices.json now, unless it would write what the last save did.
 func (h *Hub) saveRegistry() error {
 	h.saveMu.Lock()
 	defer h.saveMu.Unlock()
@@ -119,24 +120,58 @@ func (h *Hub) saveRegistry() error {
 	if err != nil {
 		return err
 	}
-	return config.WriteFile0600(h.opt.Paths.Devices, b)
+	if bytes.Equal(b, h.lastSaved) {
+		return nil
+	}
+	if err := config.WriteFile0600(h.opt.Paths.Devices, b); err != nil {
+		return err
+	}
+	h.lastSaved = b
+	return nil
 }
 
-// scheduleSave writes devices.json within saveDelay, coalescing bursts. Caller holds mu.
+// Retry delays for devices.json after a failed write (a read-only or full disk).
+const (
+	saveRetryMin = 5 * time.Second
+	saveRetryMax = 5 * time.Minute
+)
+
+// scheduleSave writes devices.json within saveDelay, coalescing bursts. While writes fail,
+// the delay grows from saveRetryMin to saveRetryMax and the failure is logged only once,
+// so a read-only data directory doesn't fill the log. Caller holds mu.
 func (h *Hub) scheduleSave() {
 	if h.saveT != nil || h.stopped {
 		return
 	}
+	delay := saveDelay
+	if h.saveFailing {
+		delay = h.saveBackoff
+	}
 	h.saveWG.Add(1)
-	h.saveT = time.AfterFunc(saveDelay, func() {
+	h.saveT = time.AfterFunc(delay, func() {
 		defer h.saveWG.Done()
 		h.mu.Lock()
 		h.saveT = nil
 		h.mu.Unlock()
-		if err := h.saveRegistry(); err != nil {
-			h.logf("hub: save devices: %v", err)
-		}
+		h.saved(h.saveRegistry())
 	})
+}
+
+// saved records how a delayed save went: the first failure is logged and starts the
+// backoff, later ones double it, and the first success after them is logged.
+func (h *Hub) saved(err error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	switch {
+	case err != nil && !h.saveFailing:
+		h.logf("hub: save devices: %v (retrying less often until it works)", err)
+		h.saveFailing, h.saveBackoff = true, saveRetryMin
+	case err != nil:
+		h.saveBackoff = min(2*h.saveBackoff, saveRetryMax)
+	case h.saveFailing:
+		h.logf("hub: saved devices again")
+		h.saveFailing = false
+	}
 }
 
 func (h *Hub) nowMS() int64 { return h.now().UnixMilli() }
@@ -337,16 +372,51 @@ func (h *Hub) alertDevices() []alerts.Device {
 	return out
 }
 
-// broadcastStatus sends every device's online flag: the heartbeat that lets clients notice
-// devices that went offline.
-func (h *Hub) broadcastStatus() {
+// onlineFlags is every device's online flag.
+func (h *Hub) onlineFlags() map[string]bool {
 	h.mu.Lock()
+	defer h.mu.Unlock()
 	online := make(map[string]bool, len(h.registry))
 	for id, d := range h.registry {
 		online[id] = h.online(d)
 	}
+	return online
+}
+
+// broadcastStatus sends every device's online flag: the heartbeat that lets clients notice
+// devices that went offline. Called from Run's goroutine only.
+func (h *Hub) broadcastStatus() {
+	h.sentOnline = h.onlineFlags()
+	h.broadcast(map[string]any{"type": "status", "online": h.sentOnline})
+}
+
+// checkOnline sends a "status" event at once when a device has gone offline since the last
+// one sent, so clients see a device go offline when it crosses OfflineAfter rather
+// than at the next heartbeat. It returns how long until the next check: the soonest
+// moment an online device would cross, at most a second (a new device may report in the
+// meantime). Called from Run's goroutine only.
+func (h *Hub) checkOnline() time.Duration {
+	online := h.onlineFlags()
+	changed := false
+	for id, on := range online {
+		if prev, ok := h.sentOnline[id]; !on && (prev || !ok) { // a report says it came back
+			changed = true
+		}
+	}
+	if changed {
+		h.sentOnline = online
+		h.broadcast(map[string]any{"type": "status", "online": online})
+	}
+	next := time.Second
+	h.mu.Lock()
+	now := h.nowMS()
+	for _, d := range h.registry {
+		if left := time.Duration(d.LastSeen+OfflineAfter.Milliseconds()-now) * time.Millisecond; left > 0 && left < next {
+			next = left
+		}
+	}
 	h.mu.Unlock()
-	h.broadcast(map[string]any{"type": "status", "online": online})
+	return max(next, 10*time.Millisecond)
 }
 
 // collectLoop samples this machine every Interval and ingests it like any agent's report.

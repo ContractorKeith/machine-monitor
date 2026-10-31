@@ -25,9 +25,11 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/alerts"
 	"github.com/ContractorKeith/machine-monitor/internal/collect"
 	"github.com/ContractorKeith/machine-monitor/internal/config"
+	"github.com/ContractorKeith/machine-monitor/internal/discovery"
 	"github.com/ContractorKeith/machine-monitor/internal/history"
 	"github.com/ContractorKeith/machine-monitor/internal/power"
 	"github.com/ContractorKeith/machine-monitor/internal/report"
+	"github.com/ContractorKeith/machine-monitor/internal/tailscale"
 )
 
 // Limits and timings, as upstream.
@@ -69,6 +71,12 @@ type Options struct {
 	Location *time.Location
 	// Logf logs problems that don't fail a request; dropped when nil.
 	Logf func(format string, args ...any)
+	// Discovery is the UDP address Run answers LAN discovery probes on, e.g. ":7778"
+	// (discovery.Port). "" answers none.
+	Discovery string
+	// Tailscale reads this machine's Tailscale status for GET /api/remote, /api/info and
+	// the Host check, e.g. tailscale.Read. nil reports Tailscale as not installed.
+	Tailscale func(ctx context.Context, hubPort int) tailscale.Status
 }
 
 // Hub is a running hub. Create one with New, serve Handler, call Run, then Close.
@@ -77,9 +85,11 @@ type Hub struct {
 	now     func() time.Time
 	history *history.Store
 	alerts  *alerts.Engine
-	rate    *rateLimiter
-	pair    pairState   // the active pairing code (pair.go)
-	act     actionState // command queue and processes on demand (commands.go, procs.go)
+	rate    *rateLimiter // requests to open paths
+	// failed reports per address (handleReport); counted with allow, checked with over
+	reportFails *rateLimiter
+	pair        pairState   // the active pairing code (pair.go)
+	act         actionState // command queue and processes on demand (commands.go, procs.go)
 
 	mu       sync.Mutex
 	cfg      hubConfig
@@ -99,6 +109,21 @@ type Hub struct {
 	closed        bool
 
 	streamWriteTimeout time.Duration // tests shorten StreamWriteTimeout
+	statusInterval     time.Duration // tests lengthen StatusInterval
+
+	sentOnline map[string]bool // online flags in the last "status" event; Run's goroutine only
+
+	rmu      sync.Mutex
+	remote   tailscale.Status // last Tailscale status (remote.go)
+	remoteAt time.Time        // when remote was read; zero before the first read
+	// remoteReads serializes Tailscale reads, so a burst of ?fresh requests runs one CLI at
+	// a time. It is not rmu: the guard reads the cached status on every request and must
+	// never wait on a CLI.
+	remoteReads sync.Mutex
+
+	saveFailing bool          // the last devices.json write failed; guarded by mu
+	saveBackoff time.Duration // delay before retrying a failed write; guarded by mu
+	lastSaved   []byte        // devices.json as last written; guarded by saveMu
 }
 
 // New loads (or creates) config.json with the hub key, devices.json and history, and wires
@@ -125,7 +150,7 @@ func New(opt Options) (*Hub, error) {
 	if err := os.MkdirAll(opt.Paths.Dir, 0o700); err != nil {
 		return nil, err
 	}
-	h := &Hub{opt: opt, now: opt.Now, rate: newRateLimiter(opt.Now),
+	h := &Hub{opt: opt, now: opt.Now, rate: newRateLimiter(opt.Now), reportFails: newRateLimiter(opt.Now),
 		registry: map[string]*Device{}, latest: map[string]*Latest{}, ingestLocks: map[string]*sync.Mutex{},
 		streams: map[*stream]struct{}{}}
 
@@ -144,9 +169,14 @@ func New(opt Options) (*Hub, error) {
 	if err := h.loadRegistry(); err != nil {
 		return nil, err
 	}
-	if h.history, err = history.Open(opt.Paths.History, opt.Now); err != nil {
+	// An unreadable or damaged history file loses that device's history, not the hub:
+	// Open skips it and still returns the store.
+	if h.history, err = history.Open(opt.Paths.History, opt.Now); h.history == nil {
 		return nil, err
+	} else if err != nil {
+		h.logf("hub: history: %v (skipped)", err)
 	}
+	h.remote = tailscale.Status{URLs: []string{}}
 	h.alerts = alerts.New(alerts.Options{
 		Paths:     opt.Paths,
 		Devices:   h.alertDevices,
@@ -166,8 +196,9 @@ func (h *Hub) Token() string {
 	return h.cfg.Token
 }
 
-// Run runs the hub's timers until ctx is done: the SSE status heartbeat (which is also how
-// clients see devices go offline), alert checks, self-monitoring and rate-limit cleanup.
+// Run runs the hub's timers until ctx is done: the SSE status heartbeat, a quicker check
+// that tells clients the moment a device goes offline, alert checks, self-monitoring,
+// rate-limit cleanup, the Tailscale refresh and the LAN discovery responder.
 // When it returns, every SSE stream has ended, so http.Server.Shutdown won't wait on them.
 func (h *Hub) Run(ctx context.Context) {
 	var wg sync.WaitGroup
@@ -175,10 +206,28 @@ func (h *Hub) Run(ctx context.Context) {
 	if h.opt.Collector != nil {
 		wg.Go(func() { h.collectLoop(ctx) })
 	}
-	status := time.NewTicker(StatusInterval)
+	if h.opt.Tailscale != nil {
+		wg.Go(func() { h.remoteLoop(ctx) })
+	}
+	if h.opt.Discovery != "" {
+		// Fail soft, as upstream: the hub works without discovery (the port may be taken
+		// by a hub that doesn't share it, or blocked).
+		if r, err := discovery.Respond(h.opt.Discovery, h.opt.Hostname, h.opt.Port); err != nil {
+			h.logf("hub: LAN discovery off: %v", err)
+		} else {
+			defer r.Close()
+		}
+	}
+	every := StatusInterval
+	if h.statusInterval != 0 {
+		every = h.statusInterval
+	}
+	status := time.NewTicker(every)
 	prune := time.NewTicker(RateWindow)
+	offline := time.NewTimer(h.checkOnline())
 	defer status.Stop()
 	defer prune.Stop()
+	defer offline.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -187,8 +236,11 @@ func (h *Hub) Run(ctx context.Context) {
 			return
 		case <-status.C:
 			h.broadcastStatus()
+		case <-offline.C:
+			offline.Reset(h.checkOnline())
 		case <-prune.C:
 			h.rate.prune()
+			h.reportFails.prune()
 		}
 	}
 }
@@ -270,6 +322,20 @@ func loadConfig(path string) (hubConfig, error) {
 	delete(c.extra, "energy")
 	delete(c.extra, "allowedHosts")
 	return c, nil
+}
+
+// LocalKey is the hub key in this machine's config.json, for commands that talk to the hub
+// running here (machine-monitor pair, hub --show-key). It is an error when no hub has run
+// with this data directory yet.
+func LocalKey(paths config.Paths) (string, error) {
+	c, err := loadConfig(paths.Config)
+	if err != nil {
+		return "", err
+	}
+	if c.Token == "" {
+		return "", fmt.Errorf("no hub key in %s: start the hub on this machine first (machine-monitor hub)", paths.Dir)
+	}
+	return c.Token, nil
 }
 
 // saveConfig writes config.json. Caller holds mu, or is New.
