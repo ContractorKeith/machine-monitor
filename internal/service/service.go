@@ -142,8 +142,15 @@ func Default() (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The service starts from another directory, so a relative override must be made absolute now.
+	dirEnv := os.Getenv(config.DirEnv)
+	if dirEnv != "" {
+		if dirEnv, err = filepath.Abs(dirEnv); err != nil {
+			return nil, err
+		}
+	}
 	m := &Manager{OS: runtime.GOOS, Home: home, ConfigHome: cfgHome, DataDir: paths.Dir,
-		DataDirEnv: os.Getenv(config.DirEnv), UID: os.Getuid(), Run: ExecRunner}
+		DataDirEnv: dirEnv, UID: os.Getuid(), Run: ExecRunner}
 	if u, err := user.Current(); err == nil {
 		m.User = u.Username
 	}

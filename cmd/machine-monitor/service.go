@@ -13,13 +13,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ContractorKeith/machine-monitor/internal/agent"
 	"github.com/ContractorKeith/machine-monitor/internal/config"
 	"github.com/ContractorKeith/machine-monitor/internal/service"
 )
 
 const serviceUsage = `Usage:
   machine-monitor service install [--role hub] [--port 7777]   start the hub at login
-  machine-monitor service install --hub URL                    start an agent at login
+  machine-monitor service install --role agent [--hub URL]     start an agent at login
+                                                               (the hub in client.json by default; run connect first)
   machine-monitor service uninstall [--role hub|agent]         stop and remove (both roles by default)
   machine-monitor service status [--role hub|agent]            show the install state
   machine-monitor service run -- hub|agent [flags]             run a role detached, logging to a file
@@ -113,7 +115,7 @@ func runService(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, serviceUsage) }
 	roleFlag := fs.String("role", "", "hub or agent")
-	hubURL := fs.String("hub", "", "hub URL the agent reports to (install --role agent)")
+	hubURL := fs.String("hub", "", "hub URL the agent reports to (install --role agent; default: the hub in client.json)")
 	port := fs.Int("port", 0, "hub port (install --role hub); default 7777")
 	if err := fs.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -159,7 +161,14 @@ func runService(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "machine-monitor service: can't find this binary: %v\n", err)
 			return 1
 		}
-		spec := service.Spec{Role: role, Exe: exe, Port: *port, HubURL: *hubURL}
+		hub := *hubURL
+		if role == service.RoleAgent {
+			var code int
+			if hub, code = pairedHub(hub, stderr); code != 0 {
+				return code
+			}
+		}
+		spec := service.Spec{Role: role, Exe: exe, Port: *port, HubURL: hub}
 		if err := spec.Validate(); err != nil {
 			fmt.Fprintf(stderr, "machine-monitor service install: %v\n", err)
 			return 2
@@ -170,8 +179,18 @@ func runService(args []string, stdout, stderr io.Writer) int {
 		if inTempDir(exe) {
 			fmt.Fprintf(stderr, "warning: %s is in a temp directory (go run?); the service will break when it's cleaned up\n", exe)
 		}
+		// A role that wasn't installed before and fails halfway is removed again; one that was
+		// installed is left as it is, since its old definition can't be put back.
+		before, _ := m.Status(ctx, role)
 		if err := m.Install(ctx, spec, stdout); err != nil {
 			fmt.Fprintf(stderr, "machine-monitor service install: %v\n", err)
+			if !before.Installed {
+				if m.Uninstall(ctx, role, io.Discard) == nil {
+					fmt.Fprintf(stderr, "Rolled back: the %s service is not installed.\n", role)
+				} else {
+					fmt.Fprintf(stderr, "The %s service may be partly installed; remove it with: machine-monitor service uninstall --role %s\n", role, role)
+				}
+			}
 			return 1
 		}
 	case "uninstall":
@@ -201,6 +220,46 @@ func runService(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	return 0
+}
+
+// pairedHub is the hub an agent service will report to: --hub, or the hub in client.json when
+// that is empty. The agent crash-loops without a pairing, so a machine that isn't paired with
+// that hub is refused (exit code 1) with what to do. A ?key= in --hub is refused too (2).
+func pairedHub(hubFlag string, stderr io.Writer) (string, int) {
+	fail := func(code int, format string, a ...any) (string, int) {
+		fmt.Fprintf(stderr, "machine-monitor service install: "+format+"\n", a...)
+		return "", code
+	}
+	want := ""
+	if hubFlag != "" {
+		u, key, err := agent.NormalizeURL(hubFlag)
+		if err != nil {
+			return fail(2, "%v", err)
+		}
+		if key != "" {
+			return fail(2, "%v", agent.ErrKeyInURL)
+		}
+		want = u
+	}
+	paths, err := config.Default()
+	if err != nil {
+		return fail(1, "%v", err)
+	}
+	cl, err := agent.LoadClient(paths.Client)
+	if err == nil && (cl.HubURL == "" || !agent.ValidKey(cl.Key)) {
+		err = agent.ErrNotPaired
+	}
+	if err != nil {
+		return fail(1, "%v (the agent service reports with the pairing's key, so it can't start without one)", err)
+	}
+	saved, _, err := agent.NormalizeURL(cl.HubURL)
+	if err != nil {
+		return fail(1, "the hub in %s (%q) is not usable: %v", paths.Client, cl.HubURL, err)
+	}
+	if want != "" && want != saved {
+		return fail(1, "this machine is paired with %s, not %s. Pair with that hub first: machine-monitor connect --no-agent %s", saved, want, want)
+	}
+	return saved, 0
 }
 
 // inTempDir reports whether path is under the OS temp directory.

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf16"
+
+	"github.com/ContractorKeith/machine-monitor/internal/config"
 )
 
 var update = flag.Bool("update", false, "rewrite golden files")
@@ -416,5 +418,18 @@ func TestStrippedEnv(t *testing.T) {
 func TestExecRunnerUnknownTool(t *testing.T) {
 	if _, err := ExecRunner(context.Background(), "rm", "-rf", "/"); err == nil {
 		t.Error("ExecRunner ran a tool outside the allow list")
+	}
+}
+
+// A relative MACHINE_MONITOR_DIR is made absolute at install time, since the service runs
+// from another directory (skeptic L5).
+func TestDefaultMakesDataDirEnvAbsolute(t *testing.T) {
+	t.Setenv(config.DirEnv, "rel")
+	m, err := Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(m.DataDirEnv) || filepath.Base(m.DataDirEnv) != "rel" {
+		t.Errorf("DataDirEnv = %q, want an absolute path ending in rel", m.DataDirEnv)
 	}
 }

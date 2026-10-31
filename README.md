@@ -104,14 +104,16 @@ machine-monitor service install --role hub  # or start it at login
 **An agent** on each other machine. The one-line installer above does all of this; by hand:
 
 ```sh
-machine-monitor connect --no-agent http://HUB:7777                 # asks for a pairing code
-echo HUB_KEY | machine-monitor connect --no-agent --key-stdin http://HUB:7777  # or the key
-machine-monitor service install --role agent --hub http://HUB:7777
+machine-monitor connect --no-tui http://HUB:7777                   # asks for a pairing code
+echo HUB_KEY | machine-monitor connect --no-tui --key-stdin http://HUB:7777  # or the key
+machine-monitor service install --role agent      # reports to the hub you paired with
 ```
 
-Without `--no-agent`, `connect` starts reporting in the foreground right away. It checks
-that the hub really holds the key (an HMAC challenge) before it saves or
-sends it.
+`connect` with no URL looks for hubs on the LAN and lets you pick one. After pairing it opens
+the TUI on the hub when stdout is a terminal (`--no-tui` skips that); to report this machine,
+run `machine-monitor agent` or install the service as above. It checks that the hub really
+holds the key (an HMAC challenge) before it saves or sends it. Keys never go in a URL you
+give to `agent` or `service install`; pair with `connect --key-stdin` instead.
 
 **The TUI against a hub**, from any terminal, including over SSH:
 
@@ -119,7 +121,7 @@ sends it.
 machine-monitor --hub http://HUB:7777
 ```
 
-Other commands: `machine-monitor status --json` prints one report, `machine-monitor export ID
+Other commands: `machine-monitor status --json` prints one report, `machine-monitor export ID|NAME
 --range 7d` exports a device's history, `machine-monitor help` lists everything.
 
 ## Network and security

@@ -56,6 +56,11 @@ func runUpdate(args []string, stdout, stderr io.Writer) int {
 	defer cancel()
 	src := updateSource()
 	rel, err := src.Latest(ctx)
+	if err != nil && strings.HasSuffix(err.Error(), "HTTP 404") { // update.Source.Fetch's wording
+		// GitHub answers 404 for "releases/latest" until the first release is published.
+		fmt.Fprintf(stdout, "This is machine-monitor %s. No release has been published yet, so there is nothing to update to.\n", version)
+		return 0
+	}
 	if err != nil {
 		return fail("can't check for updates: %v", err)
 	}

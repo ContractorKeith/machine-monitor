@@ -5,15 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"io/fs"
 	"math"
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/ContractorKeith/machine-monitor/internal/client"
 	"github.com/ContractorKeith/machine-monitor/internal/history"
 )
 
@@ -28,8 +29,9 @@ func unixMS(t time.Time) float64 { return float64(t.UnixMilli()) }
 // Local reads the history directory a hub on this machine keeps (config.Paths.History). It
 // only reads, so it is safe beside a running hub.
 type Local struct {
-	Dir string
-	Now func() time.Time // clock for the 30-day cutoff; nil means time.Now
+	Dir         string
+	DevicesFile string           // devices.json, for looking a device up by name; may be ""
+	Now         func() time.Time // clock for the 30-day cutoff; nil means time.Now
 }
 
 // Points reads the directory and returns id's stored minutes in [from, to].
@@ -154,25 +156,111 @@ func HubURL(s string) (string, error) {
 
 // KeyFor returns the hub key saved in client.json (PLAN §5) for hubURL, or "" when the file
 // is missing or was saved for another hub. The key is only ever sent back to the hub it came
-// from.
+// from. It reads the file through client.LoadConfig, as the TUI does, so it accepts every
+// spelling of the fields that connect and upstream write.
 func KeyFor(clientPath, hubURL string) (string, error) {
-	data, err := os.ReadFile(clientPath)
-	if errors.Is(err, fs.ErrNotExist) {
-		return "", nil
-	}
+	cfg, err := client.LoadConfig(clientPath)
 	if err != nil {
 		return "", sentence("Could not read %s: %v.", clientPath, err)
 	}
-	var c struct {
-		Hub string `json:"hub"`
-		Key string `json:"key"`
-	}
-	if err := json.Unmarshal(data, &c); err != nil {
-		return "", sentence("%s is not valid JSON: %v.", clientPath, err)
-	}
-	saved, err := HubURL(c.Hub)
+	saved, err := HubURL(cfg.Hub)
 	if err != nil || saved != hubURL {
 		return "", nil
 	}
-	return c.Key, nil
+	return cfg.Key, nil
+}
+
+// NamedDevice is a device a source can list: its id and the name people know it by.
+type NamedDevice struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// Lister is a Source that can also list its devices, so a name can stand in for an id.
+type Lister interface {
+	Devices(ctx context.Context) ([]NamedDevice, error)
+}
+
+// Devices lists the devices in the registry file a hub on this machine keeps
+// (config.Paths.Devices), a JSON object keyed by id. It returns nil when the file is not set
+// or can't be read: names are a convenience, and the id route still works.
+func (l Local) Devices(_ context.Context) ([]NamedDevice, error) {
+	if l.DevicesFile == "" {
+		return nil, nil
+	}
+	b, err := os.ReadFile(l.DevicesFile)
+	if err != nil {
+		return nil, nil
+	}
+	var saved map[string]struct {
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(b, &saved) != nil {
+		return nil, nil
+	}
+	out := make([]NamedDevice, 0, len(saved))
+	for id, d := range saved {
+		out = append(out, NamedDevice{ID: id, Name: d.Name})
+	}
+	return out, nil
+}
+
+// Devices asks the hub for its devices (GET /api/devices).
+func (h Hub) Devices(ctx context.Context) ([]NamedDevice, error) {
+	client := h.Client
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Second}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(h.URL, "/")+"/api/devices", nil)
+	if err != nil {
+		return nil, err
+	}
+	if h.Key != "" {
+		req.Header.Set("Authorization", "Bearer "+h.Key)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.New(resp.Status)
+	}
+	var out []NamedDevice
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxBody)).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ResolveDevice turns what the user typed into a device id. An exact id wins; otherwise a
+// name matches without regard to case. When src can't list devices, or nothing matches,
+// the argument is used as the id as typed, so the usual "no such device" error still
+// applies. Two devices with one name is an error that lists their ids.
+func ResolveDevice(ctx context.Context, src Source, arg string) (string, error) {
+	l, ok := src.(Lister)
+	if !ok {
+		return arg, nil
+	}
+	devs, err := l.Devices(ctx)
+	if err != nil {
+		return arg, nil
+	}
+	var ids []string
+	for _, d := range devs {
+		if d.ID == arg {
+			return arg, nil
+		}
+		if strings.EqualFold(d.Name, arg) {
+			ids = append(ids, d.ID)
+		}
+	}
+	switch len(ids) {
+	case 0:
+		return arg, nil
+	case 1:
+		return ids[0], nil
+	}
+	sort.Strings(ids)
+	return "", sentence("More than one device is named %q; use an id: %s.", arg, strings.Join(ids, ", "))
 }
