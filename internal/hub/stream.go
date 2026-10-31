@@ -22,12 +22,16 @@ package hub
 // slower than a few MB/s it never finished before the stream was dropped.
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
+	"net/http/httputil"
 	"slices"
 	"strings"
 	"time"
@@ -92,6 +96,7 @@ type pending struct {
 	order   []byte         // the newest "order" event
 	resync  bool           // backlog overflowed: send a fresh snapshot first
 	kept    []entry        // with resync: events the snapshot doesn't cover, oldest first
+	lean    bool           // the link is slower than the stream: merged reports carry no samples
 	wake    chan struct{}  // signalled (cap 1) when something is added
 }
 
@@ -224,6 +229,8 @@ func (p *pending) reset() {
 
 // take returns what is waiting, in the order to send it, and whether a snapshot must go
 // first (the batch then starts with what was kept across the resync); it leaves p empty.
+// With lean, a merged report goes as its newest report alone: on a link slower than the
+// stream, the samples would take most of each batch and keep the state behind.
 func (p *pending) take() (batch [][]byte, resync bool) {
 	resync = p.resync
 	for _, e := range p.kept {
@@ -233,7 +240,7 @@ func (p *pending) take() (batch [][]byte, resync bool) {
 	for _, e := range p.queue {
 		switch {
 		case e.typ == "":
-		case e.rep != nil && len(e.rep.samples) > 1:
+		case e.rep != nil && len(e.rep.samples) > 1 && !p.lean:
 			b, err := json.Marshal(compactReport{e.rep.ev, e.rep.samples})
 			if err != nil {
 				b = bytes.TrimSuffix(bytes.TrimPrefix(e.data, []byte("data: ")), []byte("\n\n"))
@@ -372,31 +379,43 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
-	rc := http.NewResponseController(w)
 	timeout := h.streamWriteTimeout
 	if timeout == 0 {
 		timeout = StreamWriteTimeout
 	}
-	var out io.Writer = w
-	var gz *gzip.Writer
-	defer func() {
-		if gz != nil { // finish the gzip stream, so the client sees a clean end, not a cut-off one
-			gz.Close()
-		}
-	}()
+	gzipped := compact && acceptsGzip(r)
 	if compact {
 		w.Header().Set(CompactHeader, "compact")
 		w.Header().Add("Vary", "Accept-Encoding")
-		if acceptsGzip(r) {
+		if gzipped {
 			w.Header().Set("Content-Encoding", "gzip")
-			gz, _ = gzip.NewWriterLevel(w, gzip.BestSpeed)
-			out = gz
 		}
+	}
+	ctx := r.Context()
+	rc := http.NewResponseController(w)
+	var base io.Writer = w
+	setDeadline, flushBase := rc.SetWriteDeadline, rc.Flush
+	if compact {
+		if hc := hijackStream(w, r); hc != nil {
+			defer hc.close(timeout)
+			ctx, base, setDeadline, flushBase = hc.ctx, hc, hc.conn.SetWriteDeadline, hc.bw.Flush
+		} else {
+			w.WriteHeader(http.StatusOK)
+		}
+	} else {
+		w.WriteHeader(http.StatusOK)
+	}
+	out := base
+	var gz *gzip.Writer
+	if gzipped {
+		gz, _ = gzip.NewWriterLevel(base, gzip.BestSpeed)
+		out = gz
+		defer gz.Close() // before hc.close: the client sees a clean end, not a cut-off one
 	}
 	// write writes one message under a fresh deadline. Deadlines are wall-clock time, so
 	// they use time.Now, not the hub's (possibly injected) clock.
 	deadline := func() bool {
-		err := rc.SetWriteDeadline(time.Now().Add(timeout))
+		err := setDeadline(time.Now().Add(timeout))
 		return err == nil || errors.Is(err, http.ErrNotSupported)
 	}
 	write := func(data []byte) bool {
@@ -413,22 +432,21 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 		if gz != nil && gz.Flush() != nil {
 			return false
 		}
-		return rc.Flush() == nil
+		return flushBase() == nil
 	}
 
 	// Registered before the snapshot is built, so no event between the two is lost. Events
 	// that arrive while it is written wait in s (coalesced, in compact mode).
-	w.WriteHeader(http.StatusOK)
 	if !write(h.snapshotEvent(compact)) || !flush() {
 		return
 	}
 	if compact {
-		h.serveCompact(r, s, write, flush)
+		h.serveCompact(ctx, s, write, flush)
 		return
 	}
 	for {
 		select {
-		case <-r.Context().Done():
+		case <-ctx.Done():
 			return
 		case <-s.done:
 			return
@@ -446,12 +464,14 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 }
 
 // serveCompact sends a compact stream's batches: whatever is waiting, at most once every
-// compactFlush. A slow client spends longer writing each batch, so more coalesces into the
-// next one; it always receives the newest state.
-func (h *Hub) serveCompact(r *http.Request, s *stream, write func([]byte) bool, flush func() bool) {
+// compactFlush. Each batch is built only once the previous one has been written; on a
+// hijacked connection that means the link has carried all but streamUnsent bytes of it
+// (boundSendQueue), so a slow client spends longer on each batch, more coalesces into the
+// next one (lean: without samples), and it always receives the newest state.
+func (h *Hub) serveCompact(ctx context.Context, s *stream, write func([]byte) bool, flush func() bool) {
 	for {
 		select {
-		case <-r.Context().Done():
+		case <-ctx.Done():
 			return
 		case <-s.done:
 			return
@@ -460,6 +480,7 @@ func (h *Hub) serveCompact(r *http.Request, s *stream, write func([]byte) bool, 
 		h.smu.Lock()
 		batch, resync := s.pend.take()
 		h.smu.Unlock()
+		began := time.Now()
 		if resync && !write(h.snapshotEvent(true)) {
 			return
 		}
@@ -471,9 +492,14 @@ func (h *Hub) serveCompact(r *http.Request, s *stream, write func([]byte) bool, 
 		if !flush() {
 			return
 		}
+		// A batch that took longer to send than the time between batches means the link
+		// is slower than the stream: send the next one lean, until one goes quickly again.
+		h.smu.Lock()
+		s.pend.lean = time.Since(began) > compactFlush
+		h.smu.Unlock()
 		t := time.NewTimer(compactFlush)
 		select {
-		case <-r.Context().Done():
+		case <-ctx.Done():
 			t.Stop()
 			return
 		case <-s.done:
@@ -482,6 +508,61 @@ func (h *Hub) serveCompact(r *http.Request, s *stream, write func([]byte) bool, 
 		case <-t.C:
 		}
 	}
+}
+
+// hijacked is a compact stream's connection, taken over from net/http (hijackStream). It
+// writes the response body chunked.
+type hijacked struct {
+	conn   net.Conn
+	bw     *bufio.Writer
+	body   io.WriteCloser // chunked, into bw
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+func (c *hijacked) Write(b []byte) (int, error) { return c.body.Write(b) }
+
+// close ends the chunked body and the connection.
+func (c *hijacked) close(timeout time.Duration) {
+	c.conn.SetWriteDeadline(time.Now().Add(timeout))
+	if c.body.Close() == nil {
+		c.bw.WriteString("\r\n")
+		c.bw.Flush()
+	}
+	c.conn.Close()
+	c.cancel()
+}
+
+// hijackStream takes a compact stream's connection over from net/http and writes the
+// response head (w's headers), so the stream can bound the connection's kernel send queue
+// (boundSendQueue). Through net/http a write returns as soon as the kernel takes the bytes,
+// and Linux takes megabytes: over a link slower than the stream, batches queued there for
+// minutes, so nothing ever coalesced and the TUI showed data minutes old (skeptic report
+// N1). Bounded, a write returns only once the link has carried most of it. It returns nil
+// when the connection can't be taken over (HTTP/2, a test recorder); the stream then goes
+// through w, unbounded.
+func hijackStream(w http.ResponseWriter, r *http.Request) *hijacked {
+	if r.ProtoMajor != 1 || r.ProtoMinor < 1 {
+		return nil // chunked needs HTTP/1.1
+	}
+	conn, brw, err := http.NewResponseController(w).Hijack()
+	if err != nil {
+		return nil
+	}
+	boundSendQueue(conn)
+	ctx, cancel := context.WithCancel(r.Context())
+	c := &hijacked{conn: conn, bw: brw.Writer, body: httputil.NewChunkedWriter(brw.Writer), ctx: ctx, cancel: cancel}
+	// net/http no longer watches the connection, so notice the client leaving here. The
+	// server's read deadline (ReadTimeout) would end the stream: clear it.
+	conn.SetReadDeadline(time.Time{})
+	go func() {
+		io.Copy(io.Discard, brw.Reader)
+		cancel()
+	}()
+	brw.WriteString("HTTP/1.1 200 OK\r\n")
+	w.Header().Write(brw)
+	brw.WriteString("Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n")
+	return c
 }
 
 // acceptsGzip reports whether the request's Accept-Encoding allows gzip.

@@ -107,6 +107,45 @@ func TestStaleStream(t *testing.T) {
 	}
 }
 
+// TestLaggingStream is skeptic report N1: over a link slower than the stream, reports kept
+// arriving, later and later, while every device read online. Reports that arrive staleAfter
+// late (by the hub's own clock, so a clock difference doesn't count) mark the data stale,
+// as silence does; reports on time again clear it.
+func TestLaggingStream(t *testing.T) {
+	m, now := clockModel(t, newFakeHub(nil), 120, 40)
+	hubClock := now.Add(-3 * time.Hour) // the hub's clock is far off; only the lag counts
+	report := func(at time.Time) tea.Msg {
+		d := threeDevices()[0]
+		d.LastSeen = at.UnixMilli()
+		return hubMsg{client.Event{Type: client.EventReport, ID: d.ID, Device: &d}}
+	}
+	m = feed(t, m, report(hubClock))
+	// 30 s on, a report the hub took 18 s after the first: 12 s late, though the stream
+	// was never silent.
+	for i := 1; i <= 6; i++ {
+		*now = now.Add(5 * time.Second)
+		m = feed(t, m, hubMsg{client.Event{Type: client.EventStatus, Online: map[string]bool{"mac-0001": true}}})
+	}
+	m = feed(t, m, report(hubClock.Add(18*time.Second)))
+	if !m.conn.stale || len(m.online()) != 0 {
+		t.Fatalf("not stale with reports 12 s late: stale=%v lag=%v online=%d", m.conn.stale, m.conn.lag, len(m.online()))
+	}
+	m = feed(t, m, hubMsg{client.Event{Type: client.EventStatus, Online: map[string]bool{"mac-0001": true}}})
+	if !m.conn.stale {
+		t.Fatal("a status event cleared the lag")
+	}
+	f := frameText(m)
+	for _, want := range []string{"the hub's data is 12s behind", "the link is too slow to keep up"} {
+		if !strings.Contains(f, want) {
+			t.Errorf("frame lacks %q:\n%s", want, f)
+		}
+	}
+	m = feed(t, m, report(hubClock.Add(29*time.Second))) // 1 s late: caught up
+	if m.conn.stale || len(m.online()) != 2 {
+		t.Errorf("still stale once reports are on time: lag=%v online=%d", m.conn.lag, len(m.online()))
+	}
+}
+
 // TestTemperatureUnit: °F applies to cards, the Device view and History, and is saved on
 // this machine for the next start.
 func TestTemperatureUnit(t *testing.T) {
