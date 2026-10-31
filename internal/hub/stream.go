@@ -559,6 +559,7 @@ func hijackStream(w http.ResponseWriter, r *http.Request) *hijacked {
 		io.Copy(io.Discard, brw.Reader)
 		cancel()
 	}()
+	w.Header().Set("Date", time.Now().UTC().Format(http.TimeFormat)) // as net/http would
 	brw.WriteString("HTTP/1.1 200 OK\r\n")
 	w.Header().Write(brw)
 	brw.WriteString("Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n")

@@ -273,6 +273,10 @@ func TestCompactStream(t *testing.T) {
 		if resp.Header.Get(CompactHeader) != "compact" || resp.Header.Get("Content-Encoding") != "gzip" {
 			t.Errorf("%s %q: headers %v", c.path, c.header, resp.Header)
 		}
+		// The hijacked response writes its own head; it carries a Date as net/http's does.
+		if d, err := http.ParseTime(resp.Header.Get("Date")); err != nil || time.Since(d).Abs() > time.Minute {
+			t.Errorf("%s %q: Date %q", c.path, c.header, resp.Header.Get("Date"))
+		}
 		d := device(next(sc))
 		if _, ok := d["history"]; ok || d["latest"] == nil || d["id"] != "dev-1" {
 			t.Errorf("compact snapshot device: history %v, latest %v", d["history"], d["latest"] != nil)
