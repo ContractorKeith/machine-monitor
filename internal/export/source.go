@@ -211,7 +211,7 @@ func (h Hub) Devices(ctx context.Context) ([]NamedDevice, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(h.URL, "/")+"/api/devices", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(h.URL, "/")+"/api/devices?compact=1", nil) // names only: skip the history (upstream ignores it)
 	if err != nil {
 		return nil, err
 	}

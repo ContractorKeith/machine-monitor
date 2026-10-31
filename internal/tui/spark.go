@@ -2,6 +2,7 @@ package tui
 
 import (
 	"math"
+	"slices"
 	"strings"
 
 	"github.com/NimbleMarkets/ntcharts/v2/canvas"
@@ -26,6 +27,12 @@ func (s *series) push(p *float64) {
 	if len(s.v) > historyLen {
 		s.v = s.v[len(s.v)-historyLen:]
 	}
+}
+
+// then is s followed by later, cut to historyLen.
+func (s series) then(later series) series {
+	v := append(slices.Clone(s.v), later.v...)
+	return series{v[max(0, len(v)-historyLen):]}
 }
 
 // known reports whether the series has any known sample.

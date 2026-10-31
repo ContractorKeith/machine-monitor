@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/ContractorKeith/machine-monitor/internal/history"
+	"github.com/ContractorKeith/machine-monitor/internal/hub"
 )
 
 // Event types. The hub's own types arrive as it names them; Connected and Disconnected are
@@ -66,16 +67,18 @@ const (
 	// Past that the client drops the connection rather than block reading it, then
 	// reconnects for a fresh snapshot.
 	streamBuffer = 256
-	// maxLine caps one SSE line, and maxEvent the data of one event. A snapshot of
-	// MaxDevices with ten minutes of history each is the largest legitimate event: about
-	// 20 MB from 250 busy devices, so the cap leaves room for bigger reports.
+	// maxLine caps one SSE line, and maxEvent the data of one event. An upstream hub's
+	// snapshot of MaxDevices with ten minutes of history each is the largest legitimate
+	// event: about 20 MB from 250 busy devices, so the cap leaves room for bigger reports.
+	// (Our hub's compact snapshot of the same devices is under 1 MB.)
 	maxLine  = maxResponse
 	maxEvent = maxResponse
 	// maxSamples caps the samples one merged report keeps: a consumer that is busy for
 	// longer than this many report intervals loses the oldest sparkline points, not memory.
 	maxSamples = 64
-	// idleTimeout drops a stream that has sent nothing for this long: the hub sends a status
-	// event every 3 s, so silence means the network or the hub is gone.
+	// idleTimeout drops a stream that has sent no bytes for this long: the hub sends a
+	// status event every 3 s, so silence means the network or the hub is gone. It counts
+	// bytes, not lines, so a big snapshot arriving slowly isn't mistaken for silence.
 	idleTimeout = 20 * time.Second
 	// Reconnect backoff: starts at the hub's "retry:" (or retryMin) and doubles to retryMax.
 	retryMin = time.Second
@@ -89,9 +92,10 @@ type streamConfig struct {
 	maxEvent           int
 	idle               time.Duration
 	retryMin, retryMax time.Duration
+	queued             func(Event) // tests: called after the reader queues each hub event
 }
 
-var defaultStreamConfig = streamConfig{streamBuffer, maxLine, maxEvent, idleTimeout, retryMin, retryMax}
+var defaultStreamConfig = streamConfig{streamBuffer, maxLine, maxEvent, idleTimeout, retryMin, retryMax, nil}
 
 var (
 	errOverflow = errors.New("events arrived faster than they were read; reconnecting for a fresh snapshot")
@@ -185,11 +189,14 @@ func (c *Client) streamOnce(ctx context.Context, st *streamState) error {
 	c.vmu.Unlock()
 	cctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
-	req, err := http.NewRequestWithContext(cctx, "GET", c.base.String()+"/api/stream", nil)
+	// compact=1 asks our hub for the compact stream (no history in the snapshot, coalesced
+	// batches; see hub/stream.go). Upstream hubs route by path and ignore it.
+	req, err := http.NewRequestWithContext(cctx, "GET", c.base.String()+"/api/stream?compact=1", nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.key)
+	req.Header.Set(hub.CompactHeader, "compact")
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Cache-Control", "no-cache")
 	if st.lastID != "" {
@@ -211,10 +218,11 @@ func (c *Client) streamOnce(ctx context.Context, st *streamState) error {
 		return ctx.Err()
 	}
 
-	// The watchdog ends a connection that goes quiet; every line read pushes it back.
+	// The watchdog ends a connection that goes quiet; every byte read pushes it back.
 	idle := time.AfterFunc(st.cfg.idle, func() { cancel(errIdle) })
 	defer idle.Stop()
-	r := newSSEReader(resp.Body, st.cfg.maxLine, st.cfg.maxEvent, func() { idle.Reset(st.cfg.idle) })
+	body := activityReader{resp.Body, func() { idle.Reset(st.cfg.idle) }}
+	r := newSSEReader(body, st.cfg.maxLine, st.cfg.maxEvent, nil)
 	for {
 		ev, err := r.next()
 		if r.retry > 0 {
@@ -237,10 +245,28 @@ func (c *Client) streamOnce(ctx context.Context, st *streamState) error {
 			st.gotSnapshot = true
 			st.devices = len(e.Devices)
 		}
-		if !st.q.push(e, st.cfg.buffer+2*st.devices) { // a reconnect may queue a second round
+		ok = st.q.push(e, st.cfg.buffer+2*st.devices) // a reconnect may queue a second round
+		if st.cfg.queued != nil {
+			st.cfg.queued(e)
+		}
+		if !ok {
 			return errOverflow
 		}
 	}
+}
+
+// activityReader calls onRead after every read that returns bytes.
+type activityReader struct {
+	r      io.Reader
+	onRead func()
+}
+
+func (a activityReader) Read(p []byte) (int, error) {
+	n, err := a.r.Read(p)
+	if n > 0 {
+		a.onRead()
+	}
+	return n, err
 }
 
 // wireEvent is every field any hub event carries.
@@ -250,6 +276,7 @@ type wireEvent struct {
 	ID      string          `json:"id"`
 	Device  *Device         `json:"device"`
 	Sample  *history.Point  `json:"sample"`
+	Samples []history.Point `json:"samples"` // our hub's merged reports: every sample, oldest first
 	Online  map[string]bool `json:"online"`
 	Order   map[string]int  `json:"order"`
 }
@@ -277,7 +304,11 @@ func decodeEvent(ev sseEvent) (Event, bool) {
 	}
 	e := Event{Type: typ, Devices: w.Devices, ID: w.ID, Device: w.Device, Sample: w.Sample,
 		Online: w.Online, Order: w.Order, Raw: raw}
-	if e.Sample != nil {
+	switch {
+	case len(w.Samples) > 0: // a report the hub merged while this client was behind
+		e.Samples = w.Samples
+		e.Sample = &e.Samples[len(e.Samples)-1]
+	case e.Sample != nil:
 		e.Samples = []history.Point{*e.Sample}
 	}
 	return e, true

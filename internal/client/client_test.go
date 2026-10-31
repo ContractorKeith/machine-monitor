@@ -424,6 +424,20 @@ func TestCoalesce(t *testing.T) {
 	})
 	cfg := fastConfig()
 	cfg.buffer = 8 // far below the 2000 reports: only merging keeps the stream up
+	// The consumer starts reading only once the reader has queued the hub's last event, so
+	// what merges doesn't depend on how fast either goroutine runs (it used to sleep 200 ms
+	// and hope, which flaked under -race).
+	last := fmt.Sprintf("d%02d", (rounds-1)%devices)
+	allQueued := make(chan struct{})
+	cfg.queued = func(e Event) {
+		if e.Type == EventStatus && len(e.Online) == 2 && e.Online[last] {
+			select {
+			case <-allQueued:
+			default:
+				close(allQueued)
+			}
+		}
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ch := c.streamWith(ctx, cfg)
@@ -432,7 +446,11 @@ func TestCoalesce(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the server's writes blocked on a slow consumer")
 	}
-	time.Sleep(200 * time.Millisecond) // let the reader queue everything
+	select {
+	case <-allQueued:
+	case <-time.After(30 * time.Second): // a failure guard only; nothing waits on it to pass
+		t.Fatal("the reader never queued the last event")
+	}
 
 	samples := map[string][]float64{}
 	names := map[string]string{}
