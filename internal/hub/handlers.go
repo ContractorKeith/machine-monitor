@@ -289,6 +289,7 @@ func (h *Hub) handleRemove(w http.ResponseWriter, r *http.Request) {
 	h.mu.Lock()
 	delete(h.registry, id)
 	delete(h.latest, id)
+	delete(h.ingestLocks, id)
 	h.scheduleSave()
 	h.mu.Unlock()
 	if err := h.history.Remove(id); err != nil {

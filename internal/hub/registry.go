@@ -13,6 +13,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/ContractorKeith/machine-monitor/internal/alerts"
@@ -27,7 +28,7 @@ type Device struct {
 	ID        string   `json:"id"`
 	Name      string   `json:"name"`
 	Hostname  *string  `json:"hostname"`
-	Platform  string   `json:"platform,omitempty"`
+	Platform  string   `json:"platform"`
 	OS        *string  `json:"os"`
 	FirstSeen int64    `json:"firstSeen"`
 	LastSeen  int64    `json:"lastSeen"`
@@ -179,8 +180,25 @@ func (h *Hub) views() []View {
 	return out
 }
 
+// deviceLock returns id's ingest lock, creating it unless id is new and the registry is full
+// (then nil). Locks of removed devices are dropped by handleRemove.
+func (h *Hub) deviceLock(id string) *sync.Mutex {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if l := h.ingestLocks[id]; l != nil {
+		return l
+	}
+	if h.registry[id] == nil && len(h.registry) >= MaxDevices {
+		return nil
+	}
+	l := &sync.Mutex{}
+	h.ingestLocks[id] = l
+	return l
+}
+
 // ingest takes one raw report body (already authenticated) through Normalize into the
-// registry, history, power estimate, SSE and alerts.
+// registry, history, power estimate, SSE and alerts. Reports for one device are applied one
+// at a time, in full, so LastSeen, history samples and "report" events stay in order.
 func (h *Hub) ingest(raw []byte) (reportReply, error) {
 	r, err := report.Normalize(raw)
 	if errors.Is(err, report.ErrInvalidID) {
@@ -191,6 +209,12 @@ func (h *Hub) ingest(raw []byte) (reportReply, error) {
 	}
 	r.Processes = nil // processes on demand arrive with M7; never stored with the report
 
+	lk := h.deviceLock(r.ID)
+	if lk == nil {
+		return reportReply{}, errTooManyDevices
+	}
+	lk.Lock()
+	defer lk.Unlock()
 	now := h.nowMS()
 	est := power.Estimate(&r)
 	// Biggest GPU first, so the main gauge shows e.g. the GB300 rather than a small display card.

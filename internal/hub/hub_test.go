@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -837,11 +838,132 @@ func TestSlowStreamDropped(t *testing.T) {
 	for range streamBuffer + 1 {
 		th.broadcast(map[string]string{"type": "status"})
 	}
-	n := 0
-	for range s.ch { // closed once it overflowed
-		n++
+	select {
+	case <-s.done:
+	default:
+		t.Fatal("stream not dropped after overflowing its buffer")
 	}
-	if n != streamBuffer {
+	if n := len(s.ch); n != streamBuffer {
 		t.Errorf("got %d buffered messages, want %d", n, streamBuffer)
+	}
+	// The slot stays taken until the handler finishes.
+	th.smu.Lock()
+	active := th.activeStreams
+	th.smu.Unlock()
+	if active != 1 {
+		t.Errorf("activeStreams = %d after drop, want 1 until release", active)
+	}
+	th.releaseStream(s)
+	th.releaseStream(th.addStream())
+	if th.activeStreams != 0 {
+		t.Errorf("activeStreams = %d after release, want 0", th.activeStreams)
+	}
+}
+
+// TestStreamClientStopsReading: a keyed client that opens the stream and never reads must not
+// pin its handler and connection forever. The write deadline ends the handler.
+func TestStreamClientStopsReading(t *testing.T) {
+	th := newTestHub(t)
+	th.streamWriteTimeout = 200 * time.Millisecond
+	srv := httptest.NewServer(th.h)
+	defer srv.Close()
+
+	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprintf(conn, "GET /api/stream HTTP/1.1\r\nHost: %s\r\nAuthorization: Bearer %s\r\n\r\n",
+		srv.Listener.Addr(), th.Token())
+	active := func() int {
+		th.smu.Lock()
+		defer th.smu.Unlock()
+		return th.activeStreams
+	}
+	for deadline := time.Now().Add(5 * time.Second); active() == 0; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("stream never opened")
+		}
+	}
+	// Never read from conn. Big messages fill the socket buffers, so the handler blocks in a
+	// write; without a deadline it would stay there for good.
+	pad := strings.Repeat("x", 256<<10)
+	for deadline := time.Now().Add(15 * time.Second); active() != 0; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("handler still running for a client that stopped reading")
+		}
+		th.broadcast(map[string]string{"type": "status", "pad": pad})
+	}
+}
+
+// TestConcurrentReportsStayOrdered: reports for one device racing each other are applied one
+// at a time: LastSeen never goes backwards, history and "report" events stay in time order.
+func TestConcurrentReportsStayOrdered(t *testing.T) {
+	th := newTestHub(t)
+	s := th.addStream()
+	raw := []byte(th.agentReport("dev-1", nil))
+	const workers, each = 8, 25 // 200 events fit in streamBuffer
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Go(func() {
+			for range each {
+				th.clk.Add(time.Millisecond)
+				if _, err := th.ingest(raw); err != nil {
+					t.Error(err)
+				}
+			}
+		})
+	}
+	wg.Wait()
+
+	last := 0.0
+	for range workers * each {
+		var ev struct{ Sample struct{ T float64 } }
+		data := <-s.ch
+		if err := json.Unmarshal(data[len("data: "):], &ev); err != nil {
+			t.Fatal(err)
+		}
+		if ev.Sample.T < last {
+			t.Fatalf("report events out of order: %v after %v", ev.Sample.T, last)
+		}
+		last = ev.Sample.T
+	}
+	hist := th.history.Recent("dev-1", LiveHistory)
+	if len(hist) != workers*each {
+		t.Fatalf("%d history samples, want %d", len(hist), workers*each)
+	}
+	for i := 1; i < len(hist); i++ {
+		if hist[i].T < hist[i-1].T {
+			t.Fatalf("history out of order at %d: %v after %v", i, hist[i].T, hist[i-1].T)
+		}
+	}
+	th.mu.Lock()
+	seen := th.registry["dev-1"].LastSeen
+	th.mu.Unlock()
+	if float64(seen) != last || seen != th.clk.Now().UnixMilli() {
+		t.Errorf("LastSeen %d, last event %v, clock %d", seen, last, th.clk.Now().UnixMilli())
+	}
+}
+
+func TestParseBoundsLimit(t *testing.T) {
+	if _, ok := parseBounds("8999999999999,9000000000000"); ok {
+		t.Error("bound at 9e12 ms accepted")
+	}
+	b, ok := parseBounds("8999999999998,8999999999999")
+	if !ok {
+		t.Fatal("bounds just under 9e12 ms refused")
+	}
+	if got := msTime(b[1]).UnixMilli(); got != 8999999999999 {
+		t.Errorf("msTime(%v) = %d ms: overflowed", b[1], got)
+	}
+	if got := msTime(-8999999999999).UnixMilli(); got != -8999999999999 {
+		t.Errorf("msTime(-8999999999999) = %d ms", got)
+	}
+}
+
+func TestPlatformAlwaysSent(t *testing.T) {
+	b, _ := json.Marshal(Device{ID: "x"})
+	if !strings.Contains(string(b), `"platform":""`) {
+		t.Errorf("Device JSON %s has no platform key", b)
 	}
 }

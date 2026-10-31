@@ -66,7 +66,8 @@ func runHub(args []string, stdout, stderr io.Writer) int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	// No WriteTimeout: SSE streams stay open for as long as a TUI is connected.
+	// No WriteTimeout: SSE streams stay open while a TUI is connected. The stream handler sets
+	// a deadline on each write instead (hub.StreamWriteTimeout).
 	srv := &http.Server{Handler: h.Handler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
 		IdleTimeout: 2 * time.Minute, ErrorLog: logger}
 	served := make(chan error, 1)

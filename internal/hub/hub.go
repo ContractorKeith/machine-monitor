@@ -76,15 +76,20 @@ type Hub struct {
 	cfg      hubConfig
 	registry map[string]*Device // id -> device
 	latest   map[string]*Latest // id -> last report (memory only)
-	saveT    *time.Timer
-	stopped  bool // Close has run: no more delayed saves
+	// id -> lock held for the whole of one report's intake; see ingest
+	ingestLocks map[string]*sync.Mutex
+	saveT       *time.Timer
+	stopped     bool // Close has run: no more delayed saves
 
 	saveMu sync.Mutex     // serializes devices.json writes
 	saveWG sync.WaitGroup // delayed saves scheduled or running
 
-	smu     sync.Mutex
-	streams map[*stream]struct{}
-	closed  bool
+	smu           sync.Mutex
+	streams       map[*stream]struct{}
+	activeStreams int // stream handlers running, including dropped ones still finishing a write
+	closed        bool
+
+	streamWriteTimeout time.Duration // tests shorten StreamWriteTimeout
 }
 
 // New loads (or creates) config.json with the hub key, devices.json and history, and wires
@@ -112,7 +117,8 @@ func New(opt Options) (*Hub, error) {
 		return nil, err
 	}
 	h := &Hub{opt: opt, now: opt.Now, rate: newRateLimiter(opt.Now),
-		registry: map[string]*Device{}, latest: map[string]*Latest{}, streams: map[*stream]struct{}{}}
+		registry: map[string]*Device{}, latest: map[string]*Latest{}, ingestLocks: map[string]*sync.Mutex{},
+		streams: map[*stream]struct{}{}}
 
 	var err error
 	if h.cfg, err = loadConfig(opt.Paths.Config); err != nil {
@@ -206,8 +212,7 @@ func (h *Hub) closeStreams() {
 	defer h.smu.Unlock()
 	h.closed = true
 	for s := range h.streams {
-		delete(h.streams, s)
-		close(s.ch)
+		h.drop(s)
 	}
 }
 

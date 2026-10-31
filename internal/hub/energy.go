@@ -20,7 +20,7 @@ import (
 const (
 	maxBounds = 800
 	maxSpanMS = 32 * 86400e3
-	maxAbsMS  = 9e15 // keeps ms → time.Time conversion inside int64 nanoseconds
+	maxAbsMS  = 9e12 // keeps ms → ns (×1e6) inside int64, which ends at about 9.22e18
 )
 
 // Usage is one device's energy and usage totals between bounds.
@@ -61,7 +61,12 @@ func parseBounds(s string) ([]float64, bool) {
 	return out, out[len(out)-1]-out[0] <= maxSpanMS
 }
 
-func msTime(ms float64) time.Time { return time.Unix(0, int64(ms*1e6)) }
+// msTime converts Unix ms (maybe fractional) to a time. Whole ms and the fraction convert
+// separately: ms*1e6 in float64 would lose the last millisecond near maxAbsMS.
+func msTime(ms float64) time.Time {
+	whole := math.Floor(ms)
+	return time.UnixMilli(int64(whole)).Add(time.Duration((ms - whole) * 1e6))
+}
 
 // usage totals one device over bounds. hw is its last reported hardware; price may be nil.
 func (h *Hub) usage(id string, bounds []float64, hw power.HW, price *power.Settings) Usage {
