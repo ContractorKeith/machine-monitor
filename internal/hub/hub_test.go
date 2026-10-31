@@ -1453,3 +1453,12 @@ func TestSecondHubOnSameDirRefused(t *testing.T) {
 	}
 	h.Close()
 }
+
+// A refused alert setting says why (N12).
+func TestPutAlertsGivesReason(t *testing.T) {
+	th := newTestHub(t)
+	w := th.keyed("PUT", "/api/alerts", `{"rules":"nope"}`)
+	if w.Code != 400 || !strings.Contains(w.Body.String(), "invalid alert settings: ") {
+		t.Fatalf("PUT /api/alerts: %d %s", w.Code, w.Body)
+	}
+}

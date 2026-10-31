@@ -817,11 +817,13 @@ func TestDeliveryErrorsHideWebhookSecret(t *testing.T) {
 		"https://user:PASSWD@hooks.example/x/SECRET2#SECRET3",
 		"https://SECRET-USER@hooks.example/x",
 	} {
-		r := h.e.post(context.Background(), full, map[string]any{})
-		if r.OK || strings.Contains(r.Error, "SECRET") || strings.Contains(r.Error, "PASSWD") ||
-			!strings.Contains(r.Error, "https://hooks.example") {
-			t.Fatalf("%s: error = %q", full, r.Error)
-		}
+		t.Run(full, func(t *testing.T) {
+			r := h.e.post(context.Background(), full, map[string]any{})
+			if r.OK || strings.Contains(r.Error, "SECRET") || strings.Contains(r.Error, "PASSWD") ||
+				!strings.Contains(r.Error, "https://hooks.example") {
+				t.Fatalf("error = %q", r.Error)
+			}
+		})
 	}
 }
 
@@ -859,3 +861,20 @@ func TestBackOnlineAfterRestartForAnnouncedOffline(t *testing.T) {
 		t.Fatalf("no back-online after restart: %+v", got)
 	}
 }
+
+// A URL quoted inside the inner error (a bad redirect Location) is cut down too.
+func TestDeliveryErrorsScrubInnerURLs(t *testing.T) {
+	h := newHarness(t, "")
+	h.e.client = doerFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, &url.Error{Op: "Post", URL: r.URL.String(),
+			Err: errors.New(`failed to parse Location header "https://u:PASSWD@evil.example/SECRET?k=SECRET2": bad`)}
+	})
+	r := h.e.post(context.Background(), "https://hooks.example/x/SECRET", map[string]any{})
+	if strings.Contains(r.Error, "SECRET") || strings.Contains(r.Error, "PASSWD") || !strings.Contains(r.Error, "https://evil.example") {
+		t.Fatalf("error = %q", r.Error)
+	}
+}
+
+type doerFunc func(*http.Request) (*http.Response, error)
+
+func (f doerFunc) Do(r *http.Request) (*http.Response, error) { return f(r) }

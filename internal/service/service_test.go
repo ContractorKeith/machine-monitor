@@ -225,14 +225,14 @@ func TestSystemdFlow(t *testing.T) {
 	if err := m.Install(ctx, s, &out); err != nil {
 		t.Fatal(err)
 	}
-	wantCalls(t, f, "systemctl --user daemon-reload", "systemctl --user enable --now machine-monitor-hub.service")
+	wantCalls(t, f, "systemctl --user is-enabled machine-monitor-hub.service", "systemctl --user daemon-reload", "systemctl --user enable --now machine-monitor-hub.service")
 
 	// New port: rewrite and restart.
 	s.Port = 8080
 	if err := m.Install(ctx, s, &out); err != nil {
 		t.Fatal(err)
 	}
-	wantCalls(t, f, "systemctl --user daemon-reload", "systemctl --user enable --now machine-monitor-hub.service",
+	wantCalls(t, f, "systemctl --user is-enabled machine-monitor-hub.service", "systemctl --user daemon-reload", "systemctl --user enable --now machine-monitor-hub.service",
 		"systemctl --user restart machine-monitor-hub.service")
 
 	f.replies["systemctl --user is-enabled machine-monitor-hub.service"] = reply{out: "enabled\n"}
@@ -518,5 +518,25 @@ func TestSystemdRestoreKeepsSymlink(t *testing.T) {
 	}
 	if got, err := os.Readlink(unit); err != nil || got != target {
 		t.Errorf("unit = link %q, %v; want a link to %q", got, err, target)
+	}
+}
+
+// A unit that was disabled before a failed install is disabled again (pass-3 review, N13).
+func TestSystemdFailedInstallKeepsUnitDisabled(t *testing.T) {
+	ctx := context.Background()
+	m, f := testManager(t, "linux")
+	s := hubSpec(t)
+	if err := m.Install(ctx, s, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	f.replies["systemctl --user is-enabled machine-monitor-hub.service"] = reply{out: "disabled\n", err: true}
+	f.replies["systemctl --user enable --now machine-monitor-hub.service"] = reply{out: "boom", err: true}
+	s.Port = 8080
+	f.calls = nil
+	if err := m.Install(ctx, s, &bytes.Buffer{}); err == nil {
+		t.Fatal("install should fail")
+	}
+	if last := f.calls[len(f.calls)-1]; last != "systemctl --user disable --now machine-monitor-hub.service" {
+		t.Errorf("calls = %q, want a disable at the end", f.calls)
 	}
 }

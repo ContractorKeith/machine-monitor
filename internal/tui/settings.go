@@ -73,7 +73,8 @@ func loadPrefs(path string) prefs {
 	}
 	p.Fahrenheit = raw.Fahrenheit
 	if len(raw.Price) > 0 && string(raw.Price) != "null" {
-		if s, err := power.ParseSettings(raw.Price); err == nil {
+		// An overlapping time-of-use price keeps its flat rate rather than being dropped.
+		if s, err := power.LoadSettings(raw.Price); err == nil || errors.Is(err, power.ErrOverlappingPeriods) {
 			p.Price = &s
 		}
 	}

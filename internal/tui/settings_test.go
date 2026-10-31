@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/ContractorKeith/machine-monitor/internal/power"
@@ -17,5 +19,15 @@ func TestPriceProblemNamesOverlap(t *testing.T) {
 	s.TOU[0].From = 21
 	if got := priceProblem(s); got != "" {
 		t.Fatalf("touching periods: %q", got)
+	}
+}
+
+// loadPrefs keeps the flat rate of a saved price whose periods overlap (N9).
+func TestLoadPrefsKeepsFlatRateOnOverlap(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "prefs.json")
+	os.WriteFile(path, []byte(`{"price":{"region":"US","rate":0.2,"currency":"USD","tou":[`+
+		`{"from":16,"to":21,"rate":0.4},{"from":18,"to":23,"rate":0.5}]}}`), 0o600)
+	if p := loadPrefs(path); p.Price == nil || p.Price.Rate != 0.2 || len(p.Price.TOU) != 0 {
+		t.Fatalf("price = %+v", p.Price)
 	}
 }

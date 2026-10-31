@@ -431,7 +431,7 @@ func (h *Hub) handlePutAlerts(w http.ResponseWriter, r *http.Request) {
 	}
 	s, err := h.alerts.Update(raw)
 	if err != nil {
-		sendJSON(w, http.StatusBadRequest, errorBody("invalid alert settings"))
+		sendJSON(w, http.StatusBadRequest, errorBody(alertsRefusal(err)))
 		return
 	}
 	sendJSON(w, http.StatusOK, map[string]any{"settings": s, "active": h.alerts.Active()})

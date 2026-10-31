@@ -213,3 +213,13 @@ func settingsRefusal(err error) string {
 	}
 	return "invalid settings"
 }
+
+// alertsRefusal is the reason PUT /api/alerts answers a refused setting with. The alerts
+// package words its errors without the values given (never a webhook URL), so they are safe
+// to pass on.
+func alertsRefusal(err error) string {
+	if msg := strings.TrimSpace(err.Error()); msg != "" {
+		return "invalid alert settings: " + msg
+	}
+	return "invalid alert settings"
+}
