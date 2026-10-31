@@ -658,3 +658,18 @@ func TestGapThreshold(t *testing.T) {
 		t.Errorf("just over 3 buckets apart: %q", got)
 	}
 }
+
+// TestViewKeys: the number keys open the views PLAN §7 gives them, and tab visits all six.
+func TestViewKeys(t *testing.T) {
+	m := hubModel(t, newFakeHub(threeDevices()), 160, 48)
+	for k, want := range map[string]view{"1": viewDashboard, "2": viewDevice, "3": viewProcesses,
+		"4": viewHistory, "5": viewEnergy, "6": viewAlerts} {
+		next, _ := m.Update(keyMsg(k))
+		if got := next.(model).view; got != want {
+			t.Errorf("key %s opens %s, want %s", k, viewNames[got], viewNames[want])
+		}
+		if viewKeys[want] != k {
+			t.Errorf("%s tab is labelled %s, want %s", viewNames[want], viewKeys[want], k)
+		}
+	}
+}
