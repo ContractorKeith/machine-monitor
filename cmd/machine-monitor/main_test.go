@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
+
+	"github.com/ContractorKeith/machine-monitor/internal/tui"
 )
 
 // built lists the commands that are no longer stubs; each has its own test.
@@ -16,13 +19,15 @@ type runCase struct {
 }
 
 func TestRun(t *testing.T) {
+	var tuiOpts *tui.Options
+	runTUI = func(o tui.Options, _ io.Writer) int { tuiOpts = &o; return 0 }
 	tests := []runCase{
 		{[]string{"--version"}, 0, "machine-monitor dev\n", ""},
 		{[]string{"-version"}, 0, "machine-monitor dev\n", ""},
 		{[]string{"help"}, 0, "Usage:", ""},
 		{[]string{"-h"}, 0, "", "Usage:"},
-		{nil, 2, "", "tui: not built yet"},
-		{[]string{"--hub", "http://h:7777"}, 2, "", "tui: not built yet"},
+		{nil, 0, "", ""},
+		{[]string{"--hub", "http://h:7777"}, 2, "", "--hub: not built yet"},
 		{[]string{"nope"}, 2, "", `unknown command "nope"`},
 		{[]string{"--bogus"}, 2, "", "flag provided but not defined"},
 	}
@@ -39,5 +44,13 @@ func TestRun(t *testing.T) {
 			t.Errorf("run(%q) = %d, stdout %q, stderr %q; want %d, %q, %q",
 				tt.args, code, out.String(), errOut.String(), tt.code, tt.out, tt.errOut)
 		}
+	}
+	if tuiOpts == nil {
+		t.Fatal("run(nil) did not open the TUI")
+	}
+	tuiOpts = nil
+	t.Setenv(tui.EnvASCII, "")
+	if run([]string{"--ascii"}, io.Discard, io.Discard); tuiOpts == nil || !tuiOpts.ASCII {
+		t.Errorf("--ascii: TUI options %+v, want ASCII", tuiOpts)
 	}
 }

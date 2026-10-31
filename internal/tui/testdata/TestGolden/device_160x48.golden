@@ -1,0 +1,48 @@
+machine-monitor · ws-01   1 Dashboard  2 Device  3 Processes                                                                                      ? help  q quit
+System                                                                                                                                                          
+  Host          ws-01                                                                                                                                           
+  OS            Ubuntu 24.04.1 LTS · Precision 7960                                                                                                             
+  Platform      linux                                                                                                                                           
+  Form factor   desktop                                                                                                                                         
+  Uptime        3d 4h 12m                                                                                                                                       
+  ID            4c4c4544-0042-3510-8051-b2c04f4e3732                                                                                                            
+                                                                                                                                                                
+CPU                                                                                                                                                             
+  Model         AMD Ryzen Threadripper PRO 7975WX                                                                                                               
+  Usage         50%   threads 16   clock 4.35 GHz                                                                                                               
+  Temp          72°C                                                                                                                                            
+   0 █░░░░░░░░░  11%   3 ██░░░░░░░░  21%   6 ███░░░░░░░  31%   9 ████░░░░░░  41%  12 █████░░░░░  51%  15 ██████░░░░  61%                                        
+   1 █████░░░░░  48%   4 ██████░░░░  58%   7 ███████░░░  68%  10 ████████░░  78%  13 █████████░  88%                                                            
+   2 █████████░  85%   5 ██████████  95%   8 ░░░░░░░░░░   4%  11 █░░░░░░░░░  14%  14 ██░░░░░░░░  24%                                                            
+                                                                                                                                                                
+Memory                                                                                                                                                          
+  RAM           ██████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   37%  47.3 GiB / 128 GiB                                                                    
+                                                                                                                                                                
+GPUs                                                                                                                                                            
+  NVIDIA RTX 6000 Ada (nvidia)                                                                                                                                  
+  load          █████████████████████████████████████████████████░   97%                                                                                        
+  vram          █████████████████████████████████░░░░░░░░░░░░░░░░░   66%  31.5 GiB / 48.0 GiB                                                                   
+  temp 86°C   power 268 W / 300 W   fan 64%   clock 2.50 GHz                                                                                                    
+                                                                                                                                                                
+Drives                                                                                                                                                          
+  /             ████████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░   49%  912 GiB / 1.8 TiB                                                                     
+  /data         ██████████████████████████████████████████████░░░░   92%  6.7 TiB / 7.3 TiB                                                                     
+  I/O           read 54.0 MiB/s   write 3.2 MiB/s                                                                                                               
+                                                                                                                                                                
+Network                                                                                                                                                         
+  Total         ↓ 12.4 MiB/s   ↑ 860 KiB/s                                                                                                                      
+  enp5s0        ↓ 12.4 MiB/s   ↑ 860 KiB/s                                                                                                                      
+  tailscale0    ↓ 2.0 KiB/s   ↑ 1.0 KiB/s                                                                                                                       
+                                                                                                                                                                
+Sensors                                                                                                                                                         
+  k10temp Tctl                     72°C                                                                                                                         
+  nvme0 Composite                  45°C                                                                                                                         
+  amdgpu edge                      90°C                                                                                                                         
+  cpu_fan                          1420 rpm                                                                                                                     
+                                                                                                                                                                
+AI models                                                                                                                                                       
+  Ollama  18.6 GiB GPU memory                                                                                                                                   
+    llama3.1:70b-instruct-q4_K_M  42.5 GiB                                                                                                                      
+                                                                                                                                                                
+Power                                                                                                                                                           
+lines 1–46 of 51 · ↑/↓ pgup/pgdn scroll · ? help                                                                                                                

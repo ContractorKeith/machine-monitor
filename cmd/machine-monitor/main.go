@@ -8,6 +8,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/ContractorKeith/machine-monitor/internal/collect"
+	_ "github.com/ContractorKeith/machine-monitor/internal/collect/all" // register probes
+	"github.com/ContractorKeith/machine-monitor/internal/tui"
 )
 
 // version is set at build time: -ldflags "-X main.version=1.2.3".
@@ -30,6 +34,9 @@ Usage:
 Flags:
   --version   print the version
   --hub URL   hub to connect the TUI to
+  --ascii     ASCII bars and charts instead of braille (also MACHINE_MONITOR_ASCII=1)
+
+The TUI respects NO_COLOR.
 `
 
 // commands lists every subcommand. Each later milestone replaces its stub.
@@ -53,7 +60,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, usage) }
 	showVersion := fs.Bool("version", false, "print the version")
-	fs.String("hub", "", "hub to connect the TUI to") // read by the TUI (M2, M4)
+	hub := fs.String("hub", "", "hub to connect the TUI to")
+	ascii := fs.Bool("ascii", false, "ASCII bars and charts instead of braille")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -67,7 +75,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	rest := fs.Args()
 	if len(rest) == 0 {
-		return stub("tui")(nil, stdout, stderr)
+		if *hub != "" {
+			return stub("--hub")(nil, stdout, stderr) // connected TUI is M4
+		}
+		return runTUI(tui.OptionsFromEnv(tui.Options{ASCII: *ascii}), stderr)
 	}
 	name, rest := rest[0], rest[1:]
 	if name == "help" {
@@ -80,6 +91,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	return cmd(rest, stdout, stderr)
+}
+
+// runTUI opens the local TUI; tests replace it.
+var runTUI = func(o tui.Options, stderr io.Writer) int {
+	o.Collector = collect.New()
+	o.Procs = tui.SystemProcesses()
+	if err := tui.Run(o); err != nil {
+		fmt.Fprintf(stderr, "machine-monitor: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 // stub is a placeholder for a command that is not built yet.
