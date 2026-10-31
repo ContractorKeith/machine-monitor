@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -202,11 +203,11 @@ func (m model) updateSettings(msg tea.Msg) (model, tea.Cmd, bool) {
 		return m, nil, true
 	case priceSavedMsg:
 		if msg.err != nil {
-			m.set.form.err = "save failed: " + hubErr(msg.err)
+			m.set.form.err = sentence("Saving failed: " + hubErr(msg.err))
 			return m, nil, true
 		}
 		m.set.form = priceForm{}
-		m.set.notice = "price saved"
+		m.set.notice = "Price saved on the hub."
 		m.applyPrice(&msg.s)
 		return m, m.fetchToday(), true
 	case remoteMsg:
@@ -283,11 +284,39 @@ func (m model) settingsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// toggleUnit switches °C and °F and saves the choice on this machine.
+// toggleUnit switches °C and °F and saves the choice on this machine. In hub mode the hub's
+// alert settings take the unit too (tempUnit), so the alert texts it writes match.
 func (m model) toggleUnit() (tea.Model, tea.Cmd) {
 	m.theme.fahrenheit = !m.theme.fahrenheit
 	m.saveLocal()
-	return m, nil
+	if m.alerter() == nil {
+		return m, nil
+	}
+	m.al.unitPending = true
+	return m.syncAlertsUnit()
+}
+
+// hubTempUnit is the alerts tempUnit for the unit in use.
+func (m model) hubTempUnit() string {
+	if m.theme.fahrenheit {
+		return "F"
+	}
+	return "C"
+}
+
+// syncAlertsUnit saves the unit in the hub's alert settings once they are loaded and still
+// differ; until then it waits (unitPending) for the load the header's count starts.
+func (m model) syncAlertsUnit() (model, tea.Cmd) {
+	if !m.al.unitPending || !m.al.loaded {
+		return m, nil
+	}
+	m.al.unitPending = false
+	if m.al.cfg.TempUnit == m.hubTempUnit() {
+		return m, nil
+	}
+	s := cloneSettings(m.al.cfg)
+	s.TempUnit = m.hubTempUnit()
+	return m.saveAlerts(s)
 }
 
 // saveLocal writes this machine's settings, reporting a failure in the view.
@@ -299,7 +328,7 @@ func (m *model) saveLocal() {
 		p.Price = loadPrefs(m.opts.PrefsPath).Price // keep local mode's price
 	}
 	if err := savePrefs(m.opts.PrefsPath, p); err != nil {
-		m.set.notice = "could not save: " + err.Error()
+		m.set.notice = sentence("Couldn't save the settings on this machine: " + err.Error())
 	}
 }
 
@@ -324,7 +353,7 @@ const (
 // openPriceForm opens the editor on the price in force.
 func (m model) openPriceForm() (tea.Model, tea.Cmd) {
 	if m.multi() && m.settingsHub() == nil {
-		m.set.notice = "this hub has no price settings"
+		m.set.notice = "This hub has no price settings."
 		return m, nil
 	}
 	s, _ := m.effectivePrice()
@@ -407,12 +436,12 @@ func (m model) savePrice() (tea.Model, tea.Cmd) {
 	f := m.set.form
 	rate, err := strconv.ParseFloat(strings.TrimSpace(f.fields[pfRate].input.Value()), 64)
 	if err != nil {
-		m.set.form.err = "the rate must be a number, e.g. 0.165"
+		m.set.form.err = "The rate must be a number, such as 0.165."
 		return m, nil
 	}
-	tou, err := parseTOU(f.fields[pfTOU].input.Value())
-	if err != nil {
-		m.set.form.err = err.Error()
+	tou, problem := parseTOU(f.fields[pfTOU].input.Value())
+	if problem != "" {
+		m.set.form.err = problem
 		return m, nil
 	}
 	region := f.fields[pfRegion].values[f.fields[pfRegion].idx]
@@ -421,10 +450,14 @@ func (m model) savePrice() (tea.Model, tea.Cmd) {
 	}
 	in := power.Settings{Region: region, Rate: rate,
 		Currency: strings.ToUpper(strings.TrimSpace(f.fields[pfCurrency].input.Value())), TOU: tou}
+	if msg := priceProblem(in); msg != "" {
+		m.set.form.err = msg
+		return m, nil
+	}
 	b, _ := json.Marshal(in)
 	s, err := power.ParseSettings(b)
-	if err != nil {
-		m.set.form.err = "check the rate (0–100), the 3-letter currency and the periods (hours 0–24, start before end)"
+	if err != nil { // priceProblem covers every rule; this is a backstop
+		m.set.form.err = "The hub would refuse this price. Check the rate, the currency and the periods."
 		return m, nil
 	}
 	if sh := m.settingsHub(); m.multi() && sh != nil {
@@ -438,9 +471,47 @@ func (m model) savePrice() (tea.Model, tea.Cmd) {
 	m.applyPrice(&s)
 	m.saveLocal()
 	if m.set.notice == "" {
-		m.set.notice = "price saved on this machine"
+		m.set.notice = "Price saved on this machine."
 	}
 	return m, m.fetchToday()
+}
+
+// Price limits, as power.ParseSettings (upstream's validEnergySettings) enforces them.
+const (
+	maxRate    = 1000 // per kWh; a rate must be more than 0 and at most this
+	maxPeriods = 12
+)
+
+// priceProblem says, as a sentence, what power.ParseSettings would refuse in s, or "".
+func priceProblem(s power.Settings) string {
+	okRate := func(r float64) bool { return r > 0 && r <= maxRate && math.Round(r*1e4) != 0 }
+	okHour := func(h float64) bool { return h >= 0 && h <= 24 }
+	switch {
+	case !okRate(s.Rate):
+		return fmt.Sprintf("The rate must be more than 0 and at most %d per kWh.", maxRate)
+	case len(s.Currency) != 3 || strings.Trim(s.Currency, "ABCDEFGHIJKLMNOPQRSTUVWXYZ") != "":
+		return "The currency must be a 3-letter code, such as USD or EUR."
+	case len(s.TOU) > maxPeriods:
+		return fmt.Sprintf("Time of use takes at most %d periods.", maxPeriods)
+	}
+	for _, p := range s.TOU {
+		if !okHour(p.From) || !okHour(p.To) || math.Round(p.From*4) >= math.Round(p.To*4) {
+			return fmt.Sprintf("The period %s-%s needs hours from 0 to 24, with the start before the end.", trimFloat(p.From), trimFloat(p.To))
+		}
+		if !okRate(p.Rate) {
+			return fmt.Sprintf("The rate for %s-%s must be more than 0 and at most %d per kWh.", trimFloat(p.From), trimFloat(p.To), maxRate)
+		}
+	}
+	return ""
+}
+
+// sentence capitalises s and ends it with a full stop.
+func sentence(s string) string {
+	s = capitalize(strings.TrimSpace(s))
+	if s != "" && !strings.ContainsAny(s[len(s)-1:], ".!?") {
+		s += "."
+	}
+	return s
 }
 
 // fmtTOU writes periods as the editor takes them: "16-21 0.35, 0-6 0.08".
@@ -455,15 +526,15 @@ func fmtTOU(ps []power.Period) string {
 func trimFloat(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
 
 // parseTOU reads "16-21 0.35, 0-6 0.08": comma-separated periods of local hours FROM-TO
-// (quarter hours allowed, TO up to 24) and the rate for them. Empty is no periods.
-func parseTOU(s string) ([]power.Period, error) {
-	var out []power.Period
+// (quarter hours allowed, TO up to 24) and the rate for them. Empty is no periods. problem
+// is a sentence for the form when a period can't be read.
+func parseTOU(s string) (periods []power.Period, problem string) {
 	for part := range strings.SplitSeq(s, ",") {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
 		}
-		bad := fmt.Errorf("time of use: %q should look like 16-21 0.35", part)
+		bad := fmt.Sprintf("The time-of-use period %q should look like 16-21 0.35: local hours from and to, then the rate.", part)
 		hours, rate, ok := strings.Cut(part, " ")
 		if !ok {
 			return nil, bad
@@ -480,9 +551,9 @@ func parseTOU(s string) ([]power.Period, error) {
 		if err := errors.Join(err1, err2, err3); err != nil {
 			return nil, bad
 		}
-		out = append(out, p)
+		periods = append(periods, p)
 	}
-	return out, nil
+	return periods, ""
 }
 
 // ---- drawing -----------------------------------------------------------------------------

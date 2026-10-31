@@ -43,6 +43,7 @@ var viewKeys = [viewCount]string{"1", "2", "3", "4", "5", "6"}
 // Messages.
 type (
 	tickMsg   struct{}
+	startMsg  struct{} // Init's reads are due (see Init)
 	reportMsg struct {
 		r   *report.Report
 		err error
@@ -151,14 +152,26 @@ func New(o Options) tea.Model {
 	}
 }
 
-// Init starts the feed: the first local sample, or the hub's stream.
+// Init starts the feed: the first local sample, or the hub's stream. Bubble Tea throws
+// away the model Init runs on, so nothing here may change state: the reads that track
+// requests in the model (cost today, the alerts behind the header's count) start when
+// startMsg reaches Update.
 func (m model) Init() tea.Cmd {
+	start := func() tea.Msg { return startMsg{} }
 	if m.multi() {
-		// The alerts load feeds the header's count; Init's model is discarded, so
-		// the alerts state is set again when the reply arrives.
-		return tea.Batch(m.startStream(), tickHub(), m.fetchToday(), m.loadAlerts())
+		return tea.Batch(m.startStream(), tickHub(), start)
 	}
-	return tea.Batch(m.collect(), m.fetchToday())
+	return tea.Batch(m.collect(), start)
+}
+
+// start begins the reads Init can't: they number their requests in the live model.
+func (m model) start() (model, tea.Cmd) {
+	today := m.fetchToday()
+	var alerts tea.Cmd
+	if m.multi() {
+		alerts = m.loadAlerts()
+	}
+	return m, tea.Batch(today, alerts)
 }
 
 // multi reports whether the TUI follows a hub (many devices) rather than this machine.
@@ -241,6 +254,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		interval := m.opts.Interval
 		return m, tea.Tick(interval, func(time.Time) tea.Msg { return tickMsg{} })
+
+	case startMsg:
+		return m.start()
 
 	case tickMsg:
 		return m, tea.Batch(m.collect(), m.maybeProcs())

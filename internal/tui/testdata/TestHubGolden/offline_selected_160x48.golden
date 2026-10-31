@@ -1,5 +1,5 @@
 machine-monitor · hub hub.lan:7777   1 Dashboard  2 Device  3 Processes  4 History  5 Energy  6 Alerts                                            ? help  q quit
-3 devices · 2 online · 1 offline · ~572 W at the wall                                                                                                           
+3 devices · 2 online · 1 offline · ~572 W at the wall · $0.64 today                                                                                             
 ╭──────────────────────────────────────────────────────────────────────────────╮╭──────────────────────────────────────────────────────────────────────────────╮
 │ ws-01                                                                  linux ││ studio                                                                 macos │
 │ Ubuntu 24.04.1 LTS · Precision 7960                             up 3d 4h 12m ││ macOS 15.1 · Mac Studio                                          up 1d 2h 0m │

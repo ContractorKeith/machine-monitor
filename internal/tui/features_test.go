@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -304,16 +305,16 @@ func TestSettingsLocalPrice(t *testing.T) {
 }
 
 func TestParseTOU(t *testing.T) {
-	ps, err := parseTOU(" 16-21 0.35, 0-6.5 0.08 ,")
-	if err != nil || len(ps) != 2 || ps[1] != (power.Period{From: 0, To: 6.5, Rate: 0.08}) {
-		t.Errorf("parseTOU = %+v, %v", ps, err)
+	ps, problem := parseTOU(" 16-21 0.35, 0-6.5 0.08 ,")
+	if problem != "" || len(ps) != 2 || ps[1] != (power.Period{From: 0, To: 6.5, Rate: 0.08}) {
+		t.Errorf("parseTOU = %+v, %q", ps, problem)
 	}
-	if ps, err := parseTOU(""); err != nil || ps != nil {
-		t.Errorf("empty = %+v, %v", ps, err)
+	if ps, problem := parseTOU(""); problem != "" || ps != nil {
+		t.Errorf("empty = %+v, %q", ps, problem)
 	}
 	for _, bad := range []string{"16 0.3", "16-21", "a-b c"} {
-		if _, err := parseTOU(bad); err == nil {
-			t.Errorf("parseTOU(%q) accepted", bad)
+		if _, problem := parseTOU(bad); !strings.HasPrefix(problem, "The time-of-use period") || !strings.HasSuffix(problem, ".") {
+			t.Errorf("parseTOU(%q) = %q", bad, problem)
 		}
 	}
 	if s := fmtTOU(ps); s != "16-21 0.35, 0-6.5 0.08" {
@@ -331,6 +332,11 @@ func TestAddDevice(t *testing.T) {
 	if m.view != viewAddDevice || f.codes != 1 {
 		t.Fatalf("view %v, %d codes", m.view, f.codes)
 	}
+	// The install lines hide the key until s.
+	if f := frameText(m); strings.Contains(f, "Bearer KEY") || !strings.Contains(f, `-H "Authorization: Bearer ••••••••" http://192.168.1.5:7777/install.sh | sh`) {
+		t.Errorf("key not hidden:\n%s", f)
+	}
+	m = feed(t, m, keyMsg("s"))
 	frame := frameText(m)
 	for _, want := range []string{"Pairing code: 042 917", "Expires in 10:00", "On the new device, run: machine-monitor connect http://192.168.1.5:7777", "5 tries per device",
 		`curl -sSL --fail-with-body -H "Authorization: Bearer KEY" http://192.168.1.5:7777/install.sh | sh`,
@@ -478,5 +484,85 @@ func TestCosmetics(t *testing.T) {
 	// A device silent for 11 s is not "just now".
 	if got := m.ago(hubNow.Add(-11 * time.Second).UnixMilli()); got != "11s ago" {
 		t.Errorf("ago(11s) = %q", got)
+	}
+}
+
+// TestHeaderCostFromInit: the cost today and the alert count reach the header through the
+// real start-up path. Init runs on a model Bubble Tea throws away, so a read it numbered
+// there was dropped as stale when it answered (review of #55).
+func TestHeaderCostFromInit(t *testing.T) {
+	for _, mode := range []string{"hub", "local"} {
+		t.Run(mode, func(t *testing.T) {
+			var o Options
+			if mode == "hub" {
+				af := alertsFixture()
+				o = Options{Hub: energyFake{af}, Interval: time.Hour, Now: func() time.Time { return hubNow }}
+			} else {
+				o = localViewOptions(t) // two hours of samples, priced
+			}
+			m := New(o).(model)
+			next, _ := m.Update(tea.WindowSizeMsg{Width: 160, Height: 48})
+			p := &program{m: next.(model), msgs: make(chan tea.Msg, 64)}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			p.m.ctx = ctx
+			go p.run(ctx)
+			want := []string{"$1.23 today", "1 active alert"}
+			if mode == "local" {
+				want = []string{" today"}
+			}
+			var head string
+			for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+				p.mu.Lock()
+				head = strings.Split(frameText(p.m), "\n")[1]
+				p.mu.Unlock()
+				ok := true
+				for _, w := range want {
+					ok = ok && strings.Contains(head, w)
+				}
+				if ok {
+					return
+				}
+			}
+			t.Errorf("header %q lacks %q", head, want)
+		})
+	}
+}
+
+// TestAlertsInFahrenheit: with °F on, the rules table and the editor read thresholds in °F
+// while the hub keeps °C, and the hub's tempUnit follows, so the alert texts it writes match.
+func TestAlertsInFahrenheit(t *testing.T) {
+	f := alertsFixture()
+	m := alertsModel(t, f, 120, 40)
+	m, _ = send(t, m, keyMsg(","), keyMsg("u"))
+	if len(f.saved) != 1 || f.saved[0].TempUnit != "F" {
+		t.Fatalf("hub tempUnit not set: %+v", f.saved)
+	}
+	m, _ = send(t, m, keyMsg("6"))
+	frame := frameText(m)
+	// The rules: 90 °C and 85 °C. (The active alert's text is the hub's own, written in °C
+	// before the switch.)
+	if !strings.Contains(frame, "194°F") || !strings.Contains(frame, "185°F") {
+		t.Errorf("rules table not in °F:\n%s", frame)
+	}
+	// Edit the GPU rule (85 °C): the editor shows 185 °F; type 194 and save: the hub gets 90.
+	i := slices.IndexFunc(m.al.cfg.Rules, func(r alerts.Rule) bool { return r.Type == alerts.TypeGPUTemp })
+	m.al.cursor = i
+	m, _ = send(t, m, keyMsg("enter"))
+	if v := m.al.form.fields[ruleThreshold].input.Value(); v != "185" || m.al.form.fields[ruleThreshold].unit != "°F" {
+		t.Fatalf("editor threshold %q %s", v, m.al.form.fields[ruleThreshold].unit)
+	}
+	m.al.form.cur = ruleThreshold
+	m.focusField()
+	m, _ = send(t, m, keyMsg("backspace"), keyMsg("backspace"), keyMsg("backspace"), keyMsg("1"), keyMsg("9"), keyMsg("4"), keyMsg("enter"))
+	last := f.saved[len(f.saved)-1]
+	if th := last.Rules[i].Threshold; th == nil || *th != 90 || last.TempUnit != "F" {
+		t.Errorf("saved threshold %v, unit %q", th, last.TempUnit)
+	}
+	// Back to °C: the hub follows again.
+	n := len(f.saved)
+	_, _ = send(t, m, keyMsg(","), keyMsg("u"))
+	if len(f.saved) != n+1 || f.saved[n].TempUnit != "C" {
+		t.Errorf("tempUnit back to C: %+v", f.saved[n:])
 	}
 }

@@ -8,6 +8,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -34,6 +35,7 @@ type addState struct {
 	url    string // the hub address other machines use
 	sh, ps string // the one-line installs
 	notice string
+	shown  bool // the install lines show the key (s); hidden until asked, for screen sharing
 	paired bool // a device used the code
 	lost   bool // the stream dropped: the code lived only in that hub's memory
 }
@@ -118,12 +120,14 @@ func (m model) addKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.newCode()
 	case "c":
 		if m.add.sh != "" {
-			m.add.notice = "copied the Linux/macOS install to the clipboard"
+			m.add.notice = "Copied the Linux/macOS install to the clipboard."
 			return m, tea.SetClipboard(m.add.sh)
 		}
+	case "s":
+		m.add.shown = !m.add.shown
 	case "p":
 		if m.add.ps != "" {
-			m.add.notice = "copied the Windows install to the clipboard"
+			m.add.notice = "Copied the Windows install to the clipboard."
 			return m, tea.SetClipboard(m.add.ps)
 		}
 	}
@@ -173,8 +177,15 @@ func (m model) addView() string {
 				hub.PairTTL.Minutes(), hub.PairTries)))
 	}
 	if m.add.sh != "" {
-		lines = append(lines, "", t.label.Render("Or install the agent with one line")+t.dim.Render(" (it carries this hub's key: use it only on your own machines)"),
-			"", "Linux and macOS", m.wrapCmd(m.add.sh), "", "Windows (PowerShell)", m.wrapCmd(m.add.ps))
+		sh, ps := m.add.sh, m.add.ps
+		note := " (they carry this hub's key, hidden: s shows it; c and p copy them whole)"
+		if !m.add.shown {
+			sh, ps = maskKey(sh), maskKey(ps)
+		} else {
+			note = " (they carry this hub's key: use them only on your own machines; s hides it)"
+		}
+		lines = append(lines, "", t.label.Render("Or install the agent with one line")+t.dim.Render(note),
+			"", "Linux and macOS", m.wrapCmd(sh), "", "Windows (PowerShell)", m.wrapCmd(ps))
 	}
 	if m.add.notice != "" {
 		lines = append(lines, "", m.add.notice)
@@ -196,5 +207,15 @@ func (m model) wrapCmd(s string) string {
 
 // addFooter is Add device's footer.
 func (m model) addFooter() string {
-	return "n new code · c copy Linux/macOS line · p copy Windows line · esc back"
+	show := "s show key"
+	if m.add.shown {
+		show = "s hide key"
+	}
+	return "n new code · c copy Linux/macOS line · p copy Windows line · " + show + " · esc back"
 }
+
+// bearerRE finds the key in an install line's Authorization header.
+var bearerRE = regexp.MustCompile(`Bearer [^"']+`)
+
+// maskKey hides the hub key in an install line.
+func maskKey(s string) string { return bearerRE.ReplaceAllString(s, "Bearer ••••••••") }

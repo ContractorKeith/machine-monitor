@@ -141,8 +141,9 @@ func hubOptions(f *fakeHub) Options {
 	return Options{Hub: f, Interval: time.Hour, Now: func() time.Time { return hubNow }}
 }
 
-// synced is true once the hub's snapshot is in.
-func synced(m model) bool { return m.conn.snapshot }
+// synced is true once the hub's snapshot is in, and the header's cost today when the hub
+// has energy totals.
+func synced(m model) bool { return m.conn.snapshot && (m.source() == nil || m.today.cost != nil) }
 
 // driveHub runs hub mode at w×h, types keys, waits for done and returns the final model.
 func driveHub(t *testing.T, o Options, w, h int, keys string, done func(model) bool) model {
