@@ -40,12 +40,21 @@ type Delivery struct {
 	Webhook *Result `json:"webhook,omitempty"`
 }
 
-// blockedAddr reports whether alerts may not be sent to a: loopback, unspecified, 0.0.0.0/8
-// and link-local (which includes the 169.254.169.254 cloud metadata service), so a key-holder
-// can't turn the hub into an SSRF bounce point. Private LAN addresses are refused only when
+// tailscaleService is tailscaled's on-host service address ("quad-100": its DNS and local
+// web client), IPv4 and IPv6. Every machine running Tailscale answers it itself, and
+// net.InterfaceAddrs doesn't list it, so the own-address check below can't catch it.
+var tailscaleService = []netip.Addr{netip.MustParseAddr("100.100.100.100"), netip.MustParseAddr("fd7a:115c:a1e0::53")}
+
+// cgnat is 100.64.0.0/10, where Tailscale gives out tailnet addresses.
+var cgnat = netip.MustParsePrefix("100.64.0.0/10")
+
+// blockedAddr reports whether alerts may not be sent to a: loopback, unspecified, 0.0.0.0/8,
+// link-local (which includes the 169.254.169.254 cloud metadata service) and Tailscale's
+// on-host service, so a key-holder can't turn the hub into an SSRF bounce point. Private LAN
+// and tailnet addresses (RFC 1918, fc00::/7, 100.64.0.0/10) are refused only when
 // blockPrivate is set.
 func blockedAddr(a netip.Addr, blockPrivate bool) bool {
-	a = a.Unmap() // ::ffff:127.0.0.1 is 127.0.0.1
+	a = a.Unmap().WithZone("") // ::ffff:127.0.0.1 is 127.0.0.1
 	if b := a.As16(); a.Is6() && [12]byte(b[:12]) == [12]byte{} {
 		a = netip.AddrFrom4([4]byte(b[12:])) // ::127.0.0.1 (IPv4-compatible) too
 	}
@@ -53,7 +62,7 @@ func blockedAddr(a netip.Addr, blockPrivate bool) bool {
 		return true
 	}
 	return a.IsLoopback() || a.IsUnspecified() || a.IsLinkLocalUnicast() || a.IsLinkLocalMulticast() ||
-		(blockPrivate && a.IsPrivate())
+		slices.Contains(tailscaleService, a) || (blockPrivate && (a.IsPrivate() || cgnat.Contains(a)))
 }
 
 // ownAddrs lists this machine's interface addresses (LAN, Tailscale, ...). A webhook to one
@@ -137,13 +146,11 @@ func (e *Engine) post(ctx context.Context, rawURL string, body any) Result {
 		io.Copy(io.Discard, io.LimitReader(res.Body, 64<<10))
 		return Result{OK: true}
 	}
-	// A redirect is reported as a failure, never followed: it could point anywhere.
-	text, _ := io.ReadAll(io.LimitReader(res.Body, 4<<10))
-	msg := []rune(strings.ToValidUTF8(string(text), ""))
-	if len(msg) > 200 {
-		msg = msg[:200]
-	}
-	return Result{Error: strings.TrimSpace(fmt.Sprintf("HTTP %d %s", res.StatusCode, string(msg)))}
+	// A redirect is reported as a failure, never followed: it could point anywhere. The
+	// reply's body isn't passed on: POST /api/alerts/test would echo it to the caller,
+	// a read-back channel into whatever the URL reaches.
+	io.Copy(io.Discard, io.LimitReader(res.Body, 4<<10))
+	return Result{Error: strings.TrimSpace(fmt.Sprintf("HTTP %d %s", res.StatusCode, http.StatusText(res.StatusCode)))}
 }
 
 // newGuardedClient is the default Doer: no redirects, no proxy (a proxy would hide where the

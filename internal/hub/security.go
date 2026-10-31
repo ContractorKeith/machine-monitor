@@ -121,28 +121,44 @@ func remoteIP(remoteAddr string) (netip.Addr, bool) {
 }
 
 // clientAddr is the address a request comes from, for rate limits and pairing tries: the
-// socket's address, or the last X-Forwarded-For address when the socket is a proxy listed
-// in config.json "trustedProxies" (tailscale serve hands tailnet clients over from
-// loopback). Proxies append the address they saw, so only the last entry is the trusted
-// proxy's; everything before it is whatever the client sent. Anyone else's X-Forwarded-For is whatever they typed, so it is ignored, also
-// from loopback: any local process could otherwise dodge the limits by rotating it.
-// (Upstream honours it from every loopback peer.)
+// socket's address, or the forwarding proxy's view of the client when the socket is a proxy
+// listed in config.json "trustedProxies". Proxies append the address they saw, so the
+// X-Forwarded-For list is read from the right: entries that are themselves trusted proxies
+// are skipped and the first other one is the client. Anything to its left is whatever the
+// client typed. A rightmost entry that doesn't parse means the socket is used.
+//
+// A loopback socket is never believed, even when listed: every program on this machine
+// connects from loopback, so trusting `tailscale serve`'s forwarded address there would let
+// any local user forge sources (burn another device's pairing tries, fill the rate table).
+// Clients behind a loopback proxy share the proxy's limits instead. (Upstream honours
+// X-Forwarded-For from every loopback peer.)
 func (h *Hub) clientAddr(r *http.Request) (client, socket netip.Addr) {
 	socket, _ = remoteIP(r.RemoteAddr)
 	client = socket
-	if h.trustedProxy(r.RemoteAddr) {
-		hops := r.Header.Values("X-Forwarded-For")
-		last := ""
-		if len(hops) > 0 {
-			list := strings.Split(hops[len(hops)-1], ",")
-			last = list[len(list)-1]
+	if socket.IsLoopback() {
+		return client, socket
+	}
+	trusted := h.trustedProxies() // read once: not h.mu per hop
+	if !trusted.contains(socket) {
+		return client, socket
+	}
+	hops := strings.Split(strings.Join(r.Header.Values("X-Forwarded-For"), ","), ",")
+	for i := len(hops) - 1; i >= 0 && i >= len(hops)-maxForwardHops; i-- {
+		a, err := netip.ParseAddr(strings.TrimSpace(hops[i]))
+		if err != nil {
+			return client, socket
 		}
-		if a, err := netip.ParseAddr(strings.TrimSpace(last)); err == nil {
-			client = a.Unmap().WithZone("")
+		a = a.Unmap().WithZone("")
+		if !trusted.contains(a) {
+			return a, socket
 		}
 	}
-	return client, socket
+	return client, socket // nothing but trusted proxies within maxForwardHops
 }
+
+// maxForwardHops is how many X-Forwarded-For entries clientAddr reads from the right. Real
+// proxy chains are a hop or two; a client can send thousands.
+const maxForwardHops = 16
 
 // sameOrigin refuses cross-site requests: browsers send Origin on cross-site POST, PUT,
 // PATCH and DELETE (including pages that target 127.0.0.1). Agents and the TUI send none.
@@ -191,8 +207,39 @@ func hubProof(token, nonce string) string {
 	return hex.EncodeToString(m.Sum(nil))
 }
 
+// ConnProof is hubProof bound to one TCP connection: it also covers both ends of it as the
+// hub sees them, the client's address and port and the hub's own. A program squatting on
+// the hub's port can relay hubProof from the real hub, but the real hub then sees the
+// squatter's connection, not the client's, so this proof comes out wrong. Covering the
+// hub's end too means a socket that managed to share the client's port (Windows lets
+// SO_REUSEADDR bind a port an established socket holds) still connects to a different
+// listener than the one the client dialled. `machine-monitor pair` checks it on each
+// connection before sending the key on that connection. It only works where nothing
+// rewrites addresses (loopback), so other clients use hubProof.
+func ConnProof(token, nonce string, client, hub netip.AddrPort) string {
+	norm := func(ap netip.AddrPort) string {
+		return netip.AddrPortFrom(ap.Addr().Unmap().WithZone(""), ap.Port()).String()
+	}
+	m := hmac.New(sha256.New, []byte(token))
+	m.Write([]byte("machine-monitor-conn:" + nonce + ":" + norm(client) + ">" + norm(hub)))
+	return hex.EncodeToString(m.Sum(nil))
+}
+
+// sourceKey is who a limit is counted against: an IPv4 address, or an IPv6 /64, since one
+// machine can pick any address in its /64 (SLAAC privacy addresses, a ULA or link-local
+// prefix). Rate limits, the failed-report budget and pairing tries all use it. Every
+// link-local peer on a link shares fe80::/64, so those share one allowance.
+func sourceKey(a netip.Addr) string {
+	a = a.Unmap().WithZone("")
+	if a.Is6() {
+		p, _ := a.Prefix(64)
+		return p.String()
+	}
+	return a.String()
+}
+
 // Rate limit for endpoints that don't need the key: RateMax requests per RateWindow per
-// client address, so a noisy LAN peer can't make the hub do work nonstop.
+// source (sourceKey), so a noisy LAN peer can't make the hub do work nonstop.
 const (
 	RateWindow  = time.Minute
 	RateMax     = 120
@@ -219,13 +266,13 @@ func newRateLimiter(now func() time.Time) *rateLimiter {
 // full, new clients share its allowance, so rotating forwarded addresses can't grow the
 // table without bound.
 func (l *rateLimiter) allow(client, socket netip.Addr, max int) bool {
-	ip := client.String()
+	ip := sourceKey(client)
 	now := l.now()
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	e := l.rates[ip]
 	if e == nil && len(l.rates) >= rateMaxKeys { // table full: share the socket's allowance
-		ip = socket.String()
+		ip = sourceKey(socket)
 		e = l.rates[ip]
 	}
 	if e == nil || now.Sub(e.at) > RateWindow {
@@ -242,15 +289,8 @@ func (l *rateLimiter) over(client netip.Addr, max int) bool {
 	now := l.now()
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	e := l.rates[client.String()]
+	e := l.rates[sourceKey(client)]
 	return e != nil && now.Sub(e.at) <= RateWindow && e.n >= max
-}
-
-// forget drops client's count.
-func (l *rateLimiter) forget(client netip.Addr) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	delete(l.rates, client.String())
 }
 
 // prune forgets windows that have ended.

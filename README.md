@@ -44,8 +44,14 @@ curl -fsSL -H "Authorization: Bearer HUB_KEY" -o install.sh http://HUB:7777/inst
 ```
 
 Behind an HTTPS proxy such as `tailscale serve`, list the proxy's address in the hub's
-`config.json` as `"trustedProxies": ["127.0.0.1", "::1"]` so the installer links to the
-`https://` address; `X-Forwarded-Proto` from anywhere else is ignored.
+`config.json` as `"trustedProxies"`. For `tailscale serve` on the hub's own machine that is
+`["127.0.0.1", "::1"]`: the installer then links to the `https://` address
+(`X-Forwarded-Proto` from anywhere else is ignored). A loopback entry is trusted for that
+only, never for `X-Forwarded-For`: every program on the machine connects from loopback, so
+the hub can't tell the proxy's forwarded client address from one another local user made
+up. Clients that come in through `tailscale serve` therefore share one set of rate limits
+and pairing tries. Only a proxy on another machine, listed by its own address, has its
+`X-Forwarded-For` believed, and only the entry it appended.
 
 ### Homebrew (macOS)
 
@@ -149,8 +155,8 @@ Open 7777/TCP (and 7778/UDP for discovery) on the hub's firewall for your local 
   trust everything on it. Traffic between tailnet devices is encrypted and the hub accepts
   tailnet addresses.
 - Everything except the hub's identity and pairing needs the hub key. Pairing codes are
-  six digits and live ten minutes. Each source address gets five wrong tries, and a code
-  dies after 100 wrong tries in total.
+  six digits and live ten minutes; one is active at a time. Each source (an IPv4 address or
+  IPv6 /64) gets five wrong tries, and 100 wrong tries in all end the code.
 - Every report from another machine is validated and clamped before it is stored or shown.
 - Releases are signed: `update` and the hub's installers refuse any archive whose checksum,
   or whose `checksums.txt` signature from this repo's release workflow, doesn't verify.

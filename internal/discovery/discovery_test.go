@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/netip"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -49,7 +50,7 @@ func TestRawUpstreamProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := string(buf[:n]), `{"app":"device-monitor","name":"hub","port":7777,"impl":"machine-monitor"}`; got != want {
+	if got, want := string(buf[:n]), `^\{"app":"device-monitor","name":"hub","port":7777,"impl":"machine-monitor","id":"[0-9a-f]{16}"\}$`; !regexp.MustCompile(want).MatchString(got) {
 		t.Fatalf("reply %s, want %s", got, want)
 	}
 	if n > maxReply {
@@ -249,5 +250,92 @@ func TestReplyNameCleaned(t *testing.T) {
 	var r Reply
 	if err := json.Unmarshal(buf[:n], &r); err != nil || r.Name != strings.Repeat("x", 64) {
 		t.Fatalf("reply %s: %v", buf[:n], err)
+	}
+}
+
+// One source gets at most replyPerSource replies a window, so a spoofed source can't turn
+// the responder into a reflector.
+func TestResponderRateLimited(t *testing.T) {
+	addr := startResponder(t, "hub", 7777)
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	for range 3 * replyPerSource {
+		conn.WriteToUDPAddrPort([]byte(Probe), addr)
+	}
+	conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	buf := make([]byte, 1024)
+	n := 0
+	for {
+		if _, _, err := conn.ReadFromUDPAddrPort(buf); err != nil {
+			break
+		}
+		n++
+	}
+	if n == 0 || n > replyPerSource {
+		t.Fatalf("%d replies to %d probes; want 1-%d", n, 3*replyPerSource, replyPerSource)
+	}
+}
+
+func TestReplyLimiter(t *testing.T) {
+	now := time.Unix(1000, 0)
+	l := newReplyLimiter(func() time.Time { return now })
+	src := func(i int) netip.Addr { return netip.AddrFrom4([4]byte{10, 0, byte(i >> 8), byte(i)}) }
+	for i := range replyPerSource {
+		if !l.allow(src(0)) {
+			t.Fatalf("reply %d to one source refused", i+1)
+		}
+	}
+	if l.allow(src(0)) {
+		t.Fatal("one source over its limit")
+	}
+	for i := 1; l.total < replyGlobal; i++ {
+		if !l.allow(src(i)) {
+			t.Fatalf("source %d refused under the global limit", i)
+		}
+	}
+	if l.allow(src(9999)) || len(l.per) > replyGlobal {
+		t.Fatalf("over the global limit (tracking %d sources)", len(l.per))
+	}
+	now = now.Add(replyWindow)
+	if !l.allow(src(0)) {
+		t.Fatal("not reset after the window")
+	}
+}
+
+// One hub answering from its LAN and Tailscale addresses is one entry with the LAN URL,
+// whichever reply came first. Two hubs on one machine (sharing UDP 7778, different HTTP
+// ports) are two entries, and so are two of our hubs that share a hostname.
+func TestHubSetMerge(t *testing.T) {
+	var s hubSet
+	ours := `{"app":"device-monitor","name":"pc","port":7777,"impl":"machine-monitor","id":"aaaa"}`
+	s.add([]byte(ours), netip.MustParseAddr("100.127.35.0"))
+	s.add([]byte(ours), netip.MustParseAddr("192.168.0.105"))
+	s.add([]byte(ours), netip.MustParseAddr("127.0.0.1"))
+	s.add([]byte(`{"app":"device-monitor","name":"pc","port":7777,"impl":"machine-monitor","id":"bbbb"}`), netip.MustParseAddr("192.168.0.106"))
+	s.add([]byte(`{"app":"device-monitor","name":"pc","port":17801}`), netip.MustParseAddr("100.127.35.0"))
+	s.add([]byte(`{"app":"device-monitor","name":"pc","port":17801}`), netip.MustParseAddr("192.168.0.105"))
+	s.add([]byte(`{"app":"device-monitor","name":"pc","port":17802}`), netip.MustParseAddr("172.20.0.1"))
+	s.add([]byte(`{"app":"device-monitor","name":"pc","port":17802}`), netip.MustParseAddr("100.127.35.0"))
+	got := []string{}
+	for _, h := range s.list() {
+		got = append(got, h.URL)
+	}
+	want := []string{"http://192.168.0.105:7777", "http://192.168.0.106:7777", "http://192.168.0.105:17801", "http://100.127.35.0:17802"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+// Two of our responders on one port at different HTTP ports are both found by a probe that
+// reaches both (a broadcast in the field; here one probe to each).
+func TestTwoHubsOnOneMachine(t *testing.T) {
+	a := startResponder(t, "pc", 17800)
+	b := startResponder(t, "pc", 17801)
+	hubs, err := probe(500*time.Millisecond, []netip.AddrPort{a, b, a})
+	if err != nil || len(hubs) != 2 {
+		t.Fatalf("got %+v, %v; want both hubs", hubs, err)
 	}
 }

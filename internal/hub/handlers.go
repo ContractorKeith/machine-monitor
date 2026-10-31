@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"regexp"
 	"strings"
 
@@ -36,6 +37,7 @@ func (h *Hub) Handler() http.Handler {
 
 	key := func(pattern string, f http.HandlerFunc) { mux.Handle(pattern, h.requireKey(f)) }
 	key("POST /api/pair/code", h.handlePairCode)
+	key("DELETE /api/pair/code", h.handleCancelPairCode)
 	key("GET /api/devices", h.handleDevices)
 	key("GET /api/stream", h.handleStream)
 	key("GET /api/history/{id}", h.handleHistory)
@@ -179,7 +181,7 @@ func (h *Hub) deviceFromPath(r *http.Request) string {
 // (up to maxBody) is read. An address that has sent reportFailMax failed reports (bad body
 // or key) in a RateWindow gets only reportPeek bytes read: a report whose key is in them
 // goes on as usual, anything else is refused. Every agent puts "token" near the start of
-// its report. An agent left with an old key posts about 30 a minute, so it keeps getting the
+// its report. Addresses are counted per sourceKey. An agent left with an old key posts about 30 a minute, so it keeps getting the
 // clearer 401.
 const (
 	reportFailMax = 60
@@ -215,7 +217,9 @@ func (h *Hub) handleReport(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusUnauthorized, errorBody("bad token"))
 		return
 	}
-	h.reportFails.forget(client) // a keyed agent behind this address clears it
+	// A keyed report doesn't clear the address's count: anyone behind the same NAT or on
+	// loopback could then send another reportFailMax big bodies after each one. Keyed
+	// agents get through the peek anyway.
 	reply, err := h.ingest(raw)
 	if err != nil {
 		sendJSON(w, http.StatusBadRequest, errorBody(err.Error()))
@@ -230,6 +234,21 @@ type readCloser struct {
 	io.Closer
 }
 
+// connEnds is the request's TCP connection as the hub sees it: the client's address and
+// port, and the hub's own local address and port.
+func connEnds(r *http.Request) (client, hub netip.AddrPort, ok bool) {
+	client, err := netip.ParseAddrPort(r.RemoteAddr)
+	if err != nil {
+		return client, hub, false
+	}
+	local, _ := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
+	if local == nil {
+		return client, hub, false
+	}
+	hub, err = netip.ParseAddrPort(local.String())
+	return client, hub, err == nil
+}
+
 // handleInfo is the hub's identity. Without the key it only proves it knows the key: a
 // client sends a random nonce and checks the HMAC before trusting this hub with the key.
 func (h *Hub) handleInfo(w http.ResponseWriter, r *http.Request) {
@@ -238,6 +257,9 @@ func (h *Hub) handleInfo(w http.ResponseWriter, r *http.Request) {
 			"port": h.opt.Port, "locked": true}
 		if n := r.URL.Query().Get("nonce"); nonceRE.MatchString(n) {
 			body["proof"] = hubProof(h.Token(), n)
+			if client, hub, ok := connEnds(r); ok {
+				body["connProof"] = ConnProof(h.Token(), n, client, hub) // additive; see ConnProof
+			}
 		}
 		sendJSON(w, http.StatusOK, body)
 		return

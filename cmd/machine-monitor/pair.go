@@ -1,13 +1,21 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"regexp"
@@ -15,7 +23,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ContractorKeith/machine-monitor/internal/client"
 	"github.com/ContractorKeith/machine-monitor/internal/config"
 	"github.com/ContractorKeith/machine-monitor/internal/hub"
 )
@@ -26,15 +33,17 @@ var (
 	pairTick = time.Second
 )
 
-// runPair is `machine-monitor pair [--port 7777]`, run on the hub's machine: it asks the hub
-// running here for a one-time pairing code (with the key in this machine's config.json),
-// prints it and counts down until a device uses it or it expires. On a terminal the
-// countdown updates in place; otherwise it prints a plain line each minute. It exits 1 when
-// the hub goes away, since the code goes with it.
+// runPair is `machine-monitor pair [--port 7777] [--replace]`, run on the hub's machine: it
+// asks the hub running here for a one-time pairing code (with the key in this machine's
+// config.json), prints it and counts down until a device uses it or it expires. On a
+// terminal the countdown updates in place; otherwise it prints a plain line each minute. It
+// exits 1 when the hub goes away, since the code goes with it. Only one code is live at a
+// time: while another is, pair says so, unless --replace.
 func runPair(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("pair", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	port := fs.Int("port", hub.DefaultPort, "port the hub on this machine listens on")
+	replace := fs.Bool("replace", false, "end a pairing code that is already active and show a new one")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -61,27 +70,34 @@ func runPair(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail("%v", err)
 	}
-	hubURL := fmt.Sprintf("http://127.0.0.1:%d", *port)
-	c, err := client.New(hubURL, key)
-	if err != nil {
-		return fail("%v", err)
-	}
+	addr := fmt.Sprintf("127.0.0.1:%d", *port)
+	hubURL := "http://" + addr
+	hc := localHubClient(key)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	// The hub proves it holds the key before the key is sent, so another program squatting
-	// on the port can't collect it.
-	if err := c.Verify(ctx); err != nil {
-		return fail("no hub with this machine's key answers at %s: %v (is machine-monitor hub running here?)", hubURL, err)
-	}
 	// Follow the stream before asking for the code, so its "paired" event can't be missed.
+	// Every connection proves it reaches the hub itself before the key goes over it.
 	sctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	events := c.Stream(sctx)
-	if err := waitSnapshot(ctx, events); err != nil {
-		return fail("%v", err)
+	events, err := pairStream(sctx, hc, hubURL, key)
+	if errors.Is(err, errOldHub) {
+		return fail("%v", errOldHub)
 	}
-	code, expires, err := requestPairCode(ctx, hubURL, key)
+	if err != nil {
+		hint := "is machine-monitor hub running here?"
+		if *port == hub.DefaultPort {
+			hint += " If it runs on another port, pass --port."
+		}
+		return fail("no hub with this machine's key answers at %s: %v (%s)", hubURL, err, hint)
+	}
+	code, expires, id, err := requestPairCode(ctx, hc, hubURL, key, *replace)
+	var active *codeActiveError
+	if errors.As(err, &active) {
+		fmt.Fprintf(stderr, "machine-monitor pair: a pairing code is already active (from another machine-monitor pair, or the TUI's Add device); it expires in %s.\n", clockText(active.expires.Sub(pairNow()).Round(time.Second)))
+		fmt.Fprintln(stderr, "Use that code, or run machine-monitor pair --replace to end it and show a new one.")
+		return 1
+	}
 	if err != nil {
 		return fail("%v", err)
 	}
@@ -122,18 +138,28 @@ func runPair(args []string, stdout, stderr io.Writer) int {
 			if tty {
 				fmt.Fprintln(stdout)
 			}
+			// End this run's code, so the next pair needn't wait it out.
+			cctx, ccancel := context.WithTimeout(context.Background(), 3*time.Second)
+			cancelPairCode(cctx, hc, hubURL, key, id)
+			ccancel()
 			return 1
 		case ev, ok := <-events:
 			switch {
-			case !ok || ev.Type == client.EventDisconnected:
+			case !ok:
 				// The hub stopped or restarted, and an active code lives only in its memory.
 				clearLine()
 				fmt.Fprintln(stdout, "Lost the hub, and the code with it. Run machine-monitor pair again once the hub is back.")
 				return 1
+			case ev.ID != id:
+				// another code's event
 			case ev.Type == "paired":
 				clearLine()
 				fmt.Fprintln(stdout, "Paired: a device used the code.")
 				return 0
+			case ev.Type == "pairEnded":
+				clearLine()
+				fmt.Fprintln(stdout, "This code no longer works: a new one was asked for (pair --replace, or the TUI's Add device).")
+				return 1
 			}
 		case <-t.C:
 			if !render() {
@@ -143,64 +169,220 @@ func runPair(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
-// waitSnapshot waits until the stream is open (its snapshot has arrived), for up to 15 s.
-func waitSnapshot(ctx context.Context, events <-chan client.Event) error {
-	timeout := time.NewTimer(15 * time.Second)
-	defer timeout.Stop()
-	var last error
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-timeout.C:
-			if last != nil {
-				return fmt.Errorf("the hub's live stream didn't open: %v", last)
-			}
-			return errors.New("the hub's live stream didn't open")
-		case ev, ok := <-events:
-			if !ok {
-				return fmt.Errorf("the hub's live stream closed: %v", last)
-			}
-			switch ev.Type {
-			case client.EventSnapshot:
-				return nil
-			case client.EventDisconnected:
-				last = ev.Err
-			}
+// errNotHub is a program on the port that can't prove, for this very connection, that it is
+// the hub holding this machine's key.
+var errNotHub = errors.New("the program on this port can't prove it is the hub with this machine's key, so the key was not sent")
+
+// errOldHub is the hub with this machine's key, but a version from before pair checked the
+// connection (no connProof), e.g. still running after `update`. Its plain proof can be
+// relayed, so it doesn't get the key either.
+var errOldHub = errors.New("the hub running here predates this pair command, so the key was not sent: stop the running hub, start it again (machine-monitor hub, or re-run machine-monitor service install --role hub), then run pair again")
+
+// localHubClient talks to the hub on this machine. Each new connection first proves it
+// reaches the hub itself (proveHub), and only then carries the key. A program squatting on
+// the port (say another user's, when the hub runs on another port) can relay the plain hub
+// proof but not this one, so it never sees the key.
+func localHubClient(key string) *http.Client {
+	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		conn, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, network, addr)
+		if err != nil {
+			return nil, err
 		}
+		if err := proveHub(conn, addr, key); err != nil {
+			conn.Close()
+			return nil, err
+		}
+		return conn, nil
 	}
+	return &http.Client{Transport: &http.Transport{
+		Proxy:                 nil, // never send the key to a proxy
+		DialContext:           dial,
+		ResponseHeaderTimeout: 15 * time.Second,
+		MaxIdleConnsPerHost:   2,
+	}}
 }
 
-// requestPairCode asks the hub for a new pairing code, replacing any earlier one.
-func requestPairCode(ctx context.Context, hubURL, key string) (code string, expires time.Time, err error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, hubURL+"/api/pair/code", nil)
+// proveHub sends GET /api/info?nonce= on conn itself and checks the hub's connProof: an HMAC
+// under the key of the nonce and both ends of conn, this end and the address it dialled
+// (hub.ConnProof). A relay's connection to the real hub has other ends, so its answer can't
+// match.
+func proveHub(conn net.Conn, addr, key string) error {
+	local, ok := conn.LocalAddr().(*net.TCPAddr)
+	remote, ok2 := conn.RemoteAddr().(*net.TCPAddr)
+	if !ok || !ok2 {
+		return errNotHub
+	}
+	n := make([]byte, 16)
+	if _, err := rand.Read(n); err != nil {
+		return err
+	}
+	nonce := hex.EncodeToString(n)
+	conn.SetDeadline(time.Now().Add(10 * time.Second))
+	defer conn.SetDeadline(time.Time{})
+	req, err := http.NewRequest(http.MethodGet, "http://"+addr+"/api/info?nonce="+nonce, nil)
 	if err != nil {
-		return "", time.Time{}, err
+		return err
+	}
+	if err := req.Write(conn); err != nil {
+		return err
+	}
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, req)
+	if err != nil {
+		return err
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	resp.Body.Close()
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP %d from /api/info", resp.StatusCode)
+	}
+	var info struct {
+		Proof     string `json:"proof"`
+		ConnProof string `json:"connProof"`
+	}
+	// Nothing may follow the reply: the connection is handed on for the next request.
+	if json.Unmarshal(b, &info) != nil || resp.Close || br.Buffered() > 0 {
+		return errNotHub
+	}
+	if info.ConnProof == "" && hmac.Equal([]byte(info.Proof), []byte(plainProof(key, nonce))) {
+		return errOldHub
+	}
+	if !hmac.Equal([]byte(info.ConnProof), []byte(hub.ConnProof(key, nonce, local.AddrPort(), remote.AddrPort()))) {
+		return errNotHub
+	}
+	return nil
+}
+
+// plainProof is the hub proof every hub sends, upstream's too:
+// hex(HMAC-SHA256(key, "device-monitor-hub:" + nonce)).
+func plainProof(key, nonce string) string {
+	m := hmac.New(sha256.New, []byte(key))
+	m.Write([]byte("device-monitor-hub:" + nonce))
+	return hex.EncodeToString(m.Sum(nil))
+}
+
+// pairEvent is the part of a stream event pair follows.
+type pairEvent struct {
+	Type string `json:"type"`
+	ID   int64  `json:"id"`
+}
+
+// pairStream opens the hub's live stream and returns its "paired" and "pairEnded" events.
+// The channel closes when the stream ends. The hub registers a stream before it sends the
+// reply headers, so once this returns no event can be missed.
+func pairStream(ctx context.Context, hc *http.Client, hubURL, key string) (<-chan pairEvent, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, hubURL+"/api/stream", nil)
+	if err != nil {
+		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+key)
-	hc := &http.Client{Transport: &http.Transport{Proxy: nil}} // never send the key to a proxy
 	resp, err := hc.Do(req)
 	if err != nil {
-		return "", time.Time{}, err
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err // the URL is already in the caller's message
+		}
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, fmt.Errorf("the hub's live stream didn't open: HTTP %d", resp.StatusCode)
+	}
+	out := make(chan pairEvent, 16)
+	go func() {
+		defer close(out)
+		defer resp.Body.Close()
+		// Lines too long for the buffer (the snapshot) are skipped: pair's events are small.
+		br := bufio.NewReaderSize(resp.Body, 64<<10)
+		long := false
+		for {
+			line, err := br.ReadSlice('\n')
+			if errors.Is(err, bufio.ErrBufferFull) {
+				long = true
+				continue
+			}
+			if err != nil {
+				return
+			}
+			if long {
+				long = false
+				continue
+			}
+			var ev pairEvent
+			data, ok := bytes.CutPrefix(line, []byte("data: "))
+			if !ok || json.Unmarshal(data, &ev) != nil || (ev.Type != "paired" && ev.Type != "pairEnded") {
+				continue
+			}
+			select {
+			case out <- ev:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, nil
+}
+
+// codeActiveError is the hub refusing a new code because another is live.
+type codeActiveError struct{ expires time.Time }
+
+func (e *codeActiveError) Error() string { return "a pairing code is already active" }
+
+// requestPairCode asks the hub for a new pairing code. Unless replace, the hub refuses while
+// another code is live (codeActiveError).
+func requestPairCode(ctx context.Context, hc *http.Client, hubURL, key string, replace bool) (code string, expires time.Time, id int64, err error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	body := fmt.Sprintf(`{"replace":%t}`, replace)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, hubURL+"/api/pair/code", strings.NewReader(body))
+	if err != nil {
+		return "", time.Time{}, 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := hc.Do(req)
+	if err != nil {
+		return "", time.Time{}, 0, err
 	}
 	defer resp.Body.Close()
 	var v struct {
 		Code    string `json:"code"`
 		Expires int64  `json:"expires"` // Unix ms
+		ID      int64  `json:"id"`
+		Active  bool   `json:"active"`
 		Error   string `json:"error"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&v); err != nil {
-		return "", time.Time{}, fmt.Errorf("the hub sent an unreadable reply (HTTP %d)", resp.StatusCode)
+		return "", time.Time{}, 0, fmt.Errorf("the hub sent an unreadable reply (HTTP %d)", resp.StatusCode)
+	}
+	if resp.StatusCode == http.StatusConflict && v.Active {
+		return "", time.Time{}, 0, &codeActiveError{expires: time.UnixMilli(v.Expires)}
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", time.Time{}, fmt.Errorf("the hub refused: HTTP %d %s", resp.StatusCode, v.Error)
+		if v.Error != "" {
+			return "", time.Time{}, 0, errors.New(v.Error)
+		}
+		return "", time.Time{}, 0, fmt.Errorf("the hub refused: HTTP %d", resp.StatusCode)
 	}
 	if len(v.Code) != 6 || strings.Trim(v.Code, "0123456789") != "" {
-		return "", time.Time{}, errors.New("the hub sent an unusable code")
+		return "", time.Time{}, 0, errors.New("the hub sent an unusable code")
 	}
-	return v.Code, time.UnixMilli(v.Expires), nil
+	return v.Code, time.UnixMilli(v.Expires), v.ID, nil
+}
+
+// cancelPairCode ends code id on the hub, if it is still the live one. Best effort.
+func cancelPairCode(ctx context.Context, hc *http.Client, hubURL, key string, id int64) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, fmt.Sprintf("%s/api/pair/code?id=%d", hubURL, id), nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	if resp, err := hc.Do(req); err == nil {
+		resp.Body.Close()
+	}
 }
 
 // virtualIface matches adapters other devices can't reach the hub through.
