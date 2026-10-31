@@ -1,0 +1,24 @@
+machine-monitor · hub hub.lan:7777   1  2  3  6 Alerts            ? help  q quit
+Edit rule                                                                       
+                                                                                
+▶ Type               ◀ CPU temperature ▶                                        
+  Device             ◀ All devices ▶                                            
+  Threshold          90 °C                                                      
+  Minutes            2 min                                                      
+  Enabled            [x] on                                                     
+                                                                                
+Temperatures are in °C. Disk is the fullest drive over 1 GB.                    
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+↑↓ field · ←→ change · space toggle · enter save · esc cancel                   

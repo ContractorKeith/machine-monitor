@@ -1,0 +1,24 @@
+machine-monitor · hub hub.lan:7777   1  2  3  6 Alerts            ? help  q quit
+Active (1)                                                                      
+  ⚠ ws-01: CPU temperature 93°C · Above 90°C for 2 min. · since 11:57           
+                                                                                
+Rules (6)                                                                       
+    On   Type                   Device             Limit     For                
+    on   Offline                All devices        —         10 min             
+    on   CPU temperature        All devices        90°C      2 min              
+    on   GPU temperature        All devices        85°C      2 min              
+    on   Disk space used        All devices        90%       at once            
+  ▶ off  Power draw             ws-01              450 W     5 min              
+    on   Electricity cost today All devices        2.5/day   today (no price)   
+                                                                                
+Channels  banner and bell on · resolved notices on                              
+  ntfy     on  https://ntfy.sh/my-lab                                           
+  webhook  off                                                                  
+                                                                                
+Log (3)                                                                         
+         11:57 ⚠ ws-01: CPU temperature 93°C · Above 90°C for 2 min.            
+         10:00 ✓ nas-02 is back online · It was offline since 9:12 AM.          
+  Oct 30 10:00 ⚠ nas-02 is offline · No reports since 9:12 AM.                  
+                                                                                
+                                                                                
+a add · enter edit · space on/off · D delete · c channels · t test · C clear log

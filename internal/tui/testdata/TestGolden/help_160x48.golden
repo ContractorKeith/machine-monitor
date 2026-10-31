@@ -1,11 +1,11 @@
-machine-monitor · ws-01   1 Dashboard  2 Device  3 Processes                                                                                      ? help  q quit
+machine-monitor · ws-01   1 Dashboard  2 Device  3 Processes  6 Alerts                                                                            ? help  q quit
 1   dashboard    ↑/k  up           /   filter processes                                                                                                         
 2   device       ↓/j  down         s   sort column                                                                                                              
 3   processes    pgup page up      r   reverse sort                                                                                                             
-tab next view    pgdn page down    esc clear filter / close help                                                                                                
-?   help         g    top                                                                                                                                       
-q   quit         G    bottom                                                                                                                                    
-                                                                                                                                                                
+6   alerts       pgdn page down    esc clear filter / close help                                                                                                
+tab next view    g    top                                                                                                                                       
+?   help         G    bottom                                                                                                                                    
+q   quit                                                                                                                                                        
                                                                                                                                                                 
                                                                                                                                                                 
                                                                                                                                                                 

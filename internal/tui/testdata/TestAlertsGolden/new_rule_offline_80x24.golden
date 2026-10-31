@@ -1,0 +1,24 @@
+machine-monitor · hub hub.lan:7777   1  2  3  6 Alerts            ? help  q quit
+New rule                                                                        
+                                                                                
+▶ Type               ◀ Offline ▶                                                
+  Device             ◀ All devices ▶                                            
+  Minutes            10 min                                                     
+  Enabled            [x] on                                                     
+                                                                                
+Temperatures are in °C. Disk is the fullest drive over 1 GB.                    
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+↑↓ field · ←→ change · space toggle · enter save · esc cancel                   

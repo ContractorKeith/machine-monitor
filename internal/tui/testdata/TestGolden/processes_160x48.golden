@@ -1,4 +1,4 @@
-machine-monitor · ws-01   1 Dashboard  2 Device  3 Processes                                                                                      ? help  q quit
+machine-monitor · ws-01   1 Dashboard  2 Device  3 Processes  6 Alerts                                                                            ? help  q quit
     PID USER         CPU↓       MEM   GPU   GPU MEM NAME                     CMD                                                                                
    1259 root         96.4   2.1 GiB     —         — pipewire                 /usr/bin/pipewire --worker 37 --config /etc/pipewire.conf                          
    1126 keith        95.4   3.2 GiB     —         — code                     /usr/bin/code --worker 18 --config /etc/code.conf                                  
