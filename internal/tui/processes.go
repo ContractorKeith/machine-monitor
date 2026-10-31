@@ -41,7 +41,7 @@ func (m model) procKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, k.Clear):
 		m.filter.SetValue("")
 		m.filterValue = ""
-		m.refreshProcs()
+		m.applyFilter()
 	case key.Matches(msg, k.Sort):
 		m.procSort = (m.procSort + 1) % sortCount
 		m.procRev = false
@@ -212,7 +212,7 @@ func (m model) processes() string {
 	case !m.multi() && m.opts.Procs == nil:
 		return t.dim.Render("The process list is not available on this build.")
 	case m.procs == nil && m.procsErr != nil:
-		return t.err.Render("process list: " + m.procsErr.Error())
+		return t.err.Render("process list: " + hubErr(m.procsErr))
 	case m.procs == nil:
 		return t.dim.Render("Listing processes…")
 	}

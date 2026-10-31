@@ -185,7 +185,9 @@ func runService(args []string, stdout, stderr io.Writer) int {
 		if err := m.Install(ctx, spec, stdout); err != nil {
 			fmt.Fprintf(stderr, "machine-monitor service install: %v\n", err)
 			if statusErr == nil && !before.Installed { // unknown prior state: don't remove anything
-				if m.Uninstall(ctx, role, io.Discard) == nil {
+				// Uninstall can fail on a role that never got far enough to have anything to
+				// remove; what matters is what status says now.
+				if rmErr := m.Uninstall(ctx, role, io.Discard); rmErr == nil || stillGone(ctx, m, role) {
 					fmt.Fprintf(stderr, "Rolled back: the %s service is not installed.\n", role)
 				} else {
 					fmt.Fprintf(stderr, "The %s service may be partly installed; remove it with: machine-monitor service uninstall --role %s\n", role, role)
@@ -245,7 +247,7 @@ func pairedHub(hubFlag string, stderr io.Writer) (string, int) {
 	if err != nil {
 		return fail(1, "%v", err)
 	}
-	cl, err := agent.LoadClient(paths.Client)
+	cl, err := loadPairing(paths.Client)
 	if err == nil && (cl.HubURL == "" || !agent.ValidKey(cl.Key)) {
 		err = agent.ErrNotPaired
 	}
@@ -257,7 +259,7 @@ func pairedHub(hubFlag string, stderr io.Writer) (string, int) {
 		return fail(1, "the hub in %s (%q) is not usable: %v", paths.Client, cl.HubURL, err)
 	}
 	if want != "" && want != saved {
-		return fail(1, "this machine is paired with %s, not %s. Pair with that hub first: machine-monitor connect --no-agent %s", saved, want, want)
+		return fail(1, "this machine is paired with %s, not %s. Pair with that hub first: machine-monitor connect --no-tui %s", saved, want, want)
 	}
 	return saved, 0
 }
@@ -270,4 +272,10 @@ func inTempDir(path string) bool {
 	}
 	rel, err := filepath.Rel(tmp, path)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// stillGone reports whether status says the role isn't installed (after a failed removal).
+func stillGone(ctx context.Context, m *service.Manager, r service.Role) bool {
+	st, err := m.Status(ctx, r)
+	return err == nil && !st.Installed
 }

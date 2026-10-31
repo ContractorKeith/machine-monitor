@@ -107,9 +107,7 @@ type model struct {
 	procCursor  int
 	procOffset  int
 	filter      textinput.Model
-	filterValue string // the Processes filter
-	cardFilter  string // the dashboard's filter on device names
-	filterView  view   // the view the open filter input belongs to
+	filterValue string // the one filter: device names on the dashboard, processes in Processes
 }
 
 // New builds the model. Tests drive it through teatest; Run wraps it in a program.
@@ -245,6 +243,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.collectErr = msg.err
 		if msg.r != nil {
 			r := msg.r
+			cleanAll(r) // before anything reads the hostname or the strings in the report
 			m.recordLocal(r)
 			m.sel = localID
 			m.editDev(localID, func(d *device) {
@@ -265,6 +264,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.procsBusy = false
 		m.procsErr = msg.err
 		if msg.err == nil {
+			cleanAll(&msg.p)
 			m.procs = msg.p
 			m.refreshProcs()
 		}
@@ -282,6 +282,7 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "ctrl+c" { // always quits; plain q is text while filtering
 		return m, tea.Quit
 	}
+	m.notice = "" // a notice (a refused J/K, a failed action) answers one key press, not the session
 	if m.rename.Focused() || m.confirmID != "" {
 		return m.hubInputKey(msg)
 	}
@@ -337,8 +338,10 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	switch m.view {
 	case viewDashboard:
-		if key.Matches(msg, k.Clear) && m.cardFilter != "" {
-			m.cardFilter = ""
+		if key.Matches(msg, k.Clear) && m.filterValue != "" {
+			m.filter.SetValue("")
+			m.filterValue = ""
+			m.applyFilter()
 			return m, nil
 		}
 		if m.multi() {
@@ -365,14 +368,11 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // openFilter focuses the filter input for the open view: device names on the dashboard,
 // processes in Processes.
 func (m model) openFilter() (tea.Model, tea.Cmd) {
-	m.filterView = m.view
 	m.filter.Placeholder = "name, user, pid or command"
-	value := m.filterValue
 	if m.view == viewDashboard {
 		m.filter.Placeholder = "device name"
-		value = m.cardFilter
 	}
-	m.filter.SetValue(value)
+	m.filter.SetValue(m.filterValue)
 	m.filter.CursorEnd()
 	return m, m.filter.Focus()
 }
@@ -390,16 +390,16 @@ func (m model) filterKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	default:
 		m.filter, cmd = m.filter.Update(msg)
 	}
-	v := strings.TrimSpace(m.filter.Value())
-	if m.filterView == viewDashboard {
-		m.cardFilter = v
-		m.selectShown()
-		return m, cmd
-	}
-	m.filterValue = v
+	m.filterValue = strings.TrimSpace(m.filter.Value())
+	m.applyFilter()
+	return m, cmd
+}
+
+// applyFilter re-applies the one filter to both the device cards and the process list.
+func (m *model) applyFilter() {
+	m.selectShown()
 	m.procCursor, m.procOffset = 0, 0
 	m.refreshProcs()
-	return m, cmd
 }
 
 // switchTo changes view and closes help; opening Processes, History, Energy or Alerts
@@ -572,7 +572,7 @@ func (m model) header() string {
 func (m model) statusLine() string {
 	switch {
 	case m.collectErr != nil:
-		return "collect error: " + m.collectErr.Error()
+		return "collect error: " + hubErr(m.collectErr)
 	case m.report() == nil:
 		return "collecting…"
 	default:

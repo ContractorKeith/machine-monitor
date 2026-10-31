@@ -203,21 +203,21 @@ func (m model) updateHub(msg tea.Msg) (model, tea.Cmd, bool) {
 		return m, tickHub(), true
 	case renameMsg:
 		if msg.err != nil {
-			m.notice = "rename failed: " + msg.err.Error()
+			m.notice = "rename failed: " + hubErr(msg.err)
 		} else if msg.dev != nil && m.hasDev(msg.dev.ID) { // not one removed meanwhile
 			m.editDev(msg.dev.ID, func(d *device) { d.setRegistry(msg.dev) })
 		}
 		return m, nil, true
 	case removeMsg:
 		if msg.err != nil {
-			m.notice = "remove failed: " + msg.err.Error()
+			m.notice = "remove failed: " + hubErr(msg.err)
 		} else {
 			m.removeDev(msg.id)
 		}
 		return m, nil, true
 	case orderMsg:
 		if msg.err != nil {
-			m.notice = "reorder failed: " + msg.err.Error()
+			m.notice = "reorder failed: " + hubErr(msg.err)
 			if msg.gen != m.orderGen { // the hub has sent an order since: it wins
 				return m, nil, true
 			}
@@ -242,6 +242,9 @@ func (m *model) apply(ev client.Event) {
 		m.notice = "" // a stale action error must not hide the connection state
 	case client.EventDisconnected:
 		m.conn.connected, m.conn.err, m.conn.retry = false, ev.Err, ev.Retry
+		if m.conn.snapshot { // the stream is down: online flags are unknown now, not in staleAfter
+			m.conn.stale = true
+		}
 		if ev.Retry == 0 {
 			m.conn.ended = true
 		}
@@ -400,7 +403,7 @@ func (m model) gridKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			i = nOnline - 1
 		}
 	case key.Matches(msg, k.MoveUp), key.Matches(msg, k.MoveDown):
-		if m.cardFilter != "" { // neighbours on screen aren't neighbours in the order
+		if m.filterValue != "" { // neighbours on screen aren't neighbours in the order
 			m.notice = "clear the filter (esc) to move cards"
 			return m, nil
 		}
@@ -533,8 +536,8 @@ func (m model) hubDashboard() string {
 			t.dim.Render("No devices have reported to this hub yet. Press a to add one.")
 	}
 	online, offline := m.cards(), m.offCards()
-	if m.cardFilter != "" {
-		head += t.dim.Render(fmt.Sprintf(" · filter %q: %d shown · esc clears", m.cardFilter, len(online)+len(offline)))
+	if m.filterValue != "" {
+		head += t.dim.Render(fmt.Sprintf(" · filter %q: %d shown · esc clears", m.filterValue, len(online)+len(offline)))
 	}
 
 	avail := m.bodyHeight() - 1 // under the summary
@@ -747,5 +750,5 @@ func errText(err error) string {
 	if err == nil {
 		return "the stream ended"
 	}
-	return err.Error()
+	return hubErr(err)
 }

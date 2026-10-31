@@ -442,7 +442,7 @@ func (m model) historyView() string {
 	case d == nil:
 		return strings.Join(append(lines, "", m.theme.dim.Render("No devices yet.")), "\n")
 	case m.hv.err != nil && (res == nil || m.hv.resID != d.id):
-		return strings.Join(append(lines, "", m.theme.err.Render("history: "+m.hv.err.Error())), "\n")
+		return strings.Join(append(lines, "", m.theme.err.Render("history: "+hubErr(m.hv.err))), "\n")
 	case res == nil || m.hv.resID != d.id:
 		return strings.Join(append(lines, "", m.theme.dim.Render("loading…")), "\n")
 	}
@@ -773,7 +773,7 @@ func (m model) historyFooter() string {
 		s += " · j/k device"
 	}
 	if m.hv.err != nil && m.hv.res != nil {
-		s = "history: " + m.hv.err.Error() + " · " + s
+		s = "history: " + hubErr(m.hv.err) + " · " + s
 	}
 	return s
 }

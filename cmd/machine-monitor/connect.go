@@ -10,9 +10,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/charmbracelet/x/term"
 
 	"github.com/ContractorKeith/machine-monitor/internal/agent"
 	"github.com/ContractorKeith/machine-monitor/internal/config"
@@ -24,28 +27,24 @@ import (
 var stdin io.Reader = os.Stdin
 
 // stdinIsTerminal reports whether a person can answer the pairing prompt; tests replace it.
-var stdinIsTerminal = func() bool {
-	fi, err := os.Stdin.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
-}
+var stdinIsTerminal = func() bool { return term.IsTerminal(os.Stdin.Fd()) }
 
 // stdoutIsTerminal reports whether w is a terminal the TUI can draw on; tests replace it.
 var stdoutIsTerminal = func(w io.Writer) bool {
 	f, ok := w.(*os.File)
-	if !ok {
-		return false
-	}
-	fi, err := f.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+	return ok && term.IsTerminal(f.Fd()) // a character device isn't enough: /dev/null is one
 }
 
 // connectTUI opens the TUI against the hub after a successful connect; tests replace it.
 var connectTUI = func(hubURL, key string, stderr io.Writer) int {
-	return runConnected(hubURL, key, tui.OptionsFromEnv(tui.Options{}), stderr)
+	return runConnected(hubURL, key, tuiOptions(tui.Options{}), stderr)
 }
 
 // discoverHubs finds hubs on the LAN (1.5 s, as upstream); tests replace it.
 var discoverHubs = func() ([]discovery.Hub, error) { return discovery.Discover(1500 * time.Millisecond) }
+
+// nextHint says how to make this machine report; pairing alone only lets it view.
+const nextHint = "Next: this machine can watch the hub but doesn't report to it yet. Run `machine-monitor agent` to report, or `machine-monitor service install --role agent` to start reporting at login."
 
 const connectUsage = "usage: machine-monitor connect [--code CODE] [--key-stdin] [--no-tui] [URL]"
 
@@ -70,7 +69,11 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if fs.NArg() > 1 {
-		fmt.Fprintln(stderr, connectUsage)
+		if slices.ContainsFunc(fs.Args()[1:], func(a string) bool { return strings.HasPrefix(a, "-") }) {
+			fmt.Fprintf(stderr, "machine-monitor connect: flags go before the URL, not after it (Go stops reading flags at the first argument): machine-monitor connect [flags] %s\n", fs.Arg(0))
+			return 2
+		}
+		fmt.Fprintf(stderr, "machine-monitor connect: one hub at a time, got %d arguments\n%s\n", fs.NArg(), connectUsage)
 		return 2
 	}
 	fail := func(code int, format string, a ...any) int {
@@ -137,10 +140,16 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "Paired with %s (saved in %s).\n", hubURL, paths.Client)
 	// The TUI needs a keyboard: not when stdin was the piped key (--key-stdin) and isn't a TTY.
 	if *noTUI || !stdoutIsTerminal(stdout) || (*keyStdin && !stdinIsTerminal()) {
-		fmt.Fprintln(stdout, "Next: run `machine-monitor agent` to report this machine to the hub, or `machine-monitor service install --role agent` to start it at login.")
+		fmt.Fprintln(stdout, nextHint)
 		return 0
 	}
-	return connectTUI(hubURL, key, stderr)
+	// Printed before the TUI (the alternate screen leaves it in the scrollback) and again
+	// after it: pairing makes this machine a viewer, and a device only shows up on the hub
+	// once it reports.
+	fmt.Fprintln(stdout, nextHint)
+	code := connectTUI(hubURL, key, stderr)
+	fmt.Fprintln(stdout, nextHint)
+	return code
 }
 
 // chooseHub looks for hubs on the LAN and returns the address of the one to connect to. With

@@ -26,6 +26,7 @@ type device struct {
 
 // push records one report and its samples.
 func (d *device) push(r *report.Report) {
+	cleanAll(r)
 	d.last = r
 	d.cpu.push(r.CPU.Usage)
 	d.mem.push(pctOf(r.Memory.Used, r.Memory.Total))
@@ -45,10 +46,11 @@ func (d *device) pushPoint(p history.Point) {
 
 // setRegistry copies a hub device's registry fields and latest report (when it has one).
 func (d *device) setRegistry(v *client.Device) {
-	d.id, d.name, d.online = v.ID, v.Name, v.Online
+	d.id, d.name, d.online = v.ID, clean(v.Name), v.Online
 	d.order, d.firstSeen, d.lastSeen = v.Order, v.FirstSeen, v.LastSeen
 	if v.Latest != nil {
 		r := v.Latest.Report
+		cleanAll(&r)
 		d.last = &r
 		d.watts = nil
 		if v.Latest.PowerEst != nil {
@@ -156,7 +158,7 @@ func (m model) isOnline(d device) bool { return d.online && !m.conn.stale }
 
 // shown reports whether d passes the dashboard's filter (part of its name, any case).
 func (m model) shown(d device) bool {
-	return m.cardFilter == "" || strings.Contains(strings.ToLower(d.name), strings.ToLower(m.cardFilter))
+	return m.filterValue == "" || strings.Contains(strings.ToLower(d.name), strings.ToLower(m.filterValue))
 }
 
 // online and offline split the devices for the dashboard grid and its footer, in order.

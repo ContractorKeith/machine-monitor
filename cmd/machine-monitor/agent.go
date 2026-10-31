@@ -26,7 +26,7 @@ func runAgent(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("agent", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	hubFlag := fs.String("hub", "", "hub URL (default: the hub in client.json)")
-	keyFlag := fs.String("key", "", "hub key (default: the key in client.json)")
+	keyFlag := fs.String("key", "", "hub key (default: $"+envKey+", else the key in client.json)")
 	allowPower := fs.Bool("allow-power-actions", false, "let the hub sleep, restart or shut down this machine (signed commands)")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -56,8 +56,8 @@ func runAgent(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "machine-monitor agent: %v\n", err)
 		return 1
 	}
-	cl, err := agent.LoadClient(paths.Client)
-	if err != nil && !(errors.Is(err, agent.ErrNotPaired) && *keyFlag != "") {
+	cl, err := loadPairing(paths.Client)
+	if err != nil && !(errors.Is(err, agent.ErrNotPaired) && (*keyFlag != "" || os.Getenv(envKey) != "")) {
 		fmt.Fprintf(stderr, "machine-monitor agent: %v\n", err)
 		return 1
 	}
@@ -65,8 +65,8 @@ func runAgent(args []string, stdout, stderr io.Writer) int {
 	if hubURL == "" {
 		hubURL = cl.HubURL
 	}
-	if *keyFlag != "" {
-		key = *keyFlag
+	if k := keyArg(*keyFlag, stderr); k != "" {
+		key = k
 	}
 	if hubURL == "" || !agent.ValidKey(key) {
 		fmt.Fprintln(stderr, "machine-monitor agent: no hub or no valid key: run machine-monitor connect URL")
