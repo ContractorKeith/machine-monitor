@@ -38,10 +38,6 @@ func (m model) procKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	k := m.keys
 	rows := m.procRows()
 	switch {
-	case key.Matches(msg, k.Filter):
-		m.filter.SetValue(m.filterValue)
-		m.filter.CursorEnd()
-		return m, m.filter.Focus()
 	case key.Matches(msg, k.Clear):
 		m.filter.SetValue("")
 		m.filterValue = ""

@@ -177,7 +177,7 @@ func (m model) energyRows() []energyRow {
 	var rows []energyRow
 	for i, d := range m.devs {
 		r := energyRow{d: d, u: byID[d.id], color: i}
-		if d.online && d.last != nil {
+		if m.isOnline(d) && d.last != nil {
 			if b := power.Estimate(d.last); b != nil {
 				if d.watts != nil { // the hub's own estimate wins
 					b.Watts = *d.watts
@@ -550,7 +550,7 @@ func (m model) usageTable(rows []energyRow, span float64) []string {
 		return f(*s.Peak)
 	}
 	pct := func(v float64) string { return fmt.Sprintf("%.0f%%", v) }
-	temp := func(v float64) string { return fmt.Sprintf("%.0f°", v) }
+	temp := t.tempDeg
 	var body [][]string
 	for _, r := range rows {
 		u := r.u
@@ -745,4 +745,80 @@ func priceSource(s power.Settings, guessed bool) string {
 		return "Typical home rate for " + name + "."
 	}
 	return "The rate you entered."
+}
+
+// ---- cost today (dashboard header) -----------------------------------------------------
+
+// todayState is what every device has cost since local midnight.
+type todayState struct {
+	seq  int
+	cost *float64 // nil until the first read
+	cur  string
+}
+
+// Cost-today messages.
+type (
+	todayMsg struct {
+		seq  int
+		data *client.Energy
+		err  error
+	}
+	todayRefreshMsg struct{ seq int }
+)
+
+// fetchToday reads energy since local midnight, for the dashboard's cost today.
+func (m *model) fetchToday() tea.Cmd {
+	src := m.source()
+	if src == nil {
+		return nil
+	}
+	m.today.seq++
+	seq, parent := m.today.seq, m.ctx
+	now := m.now().In(m.loc())
+	y, mo, d := now.Date()
+	start := float64(time.Date(y, mo, d, 0, 0, 0, 0, now.Location()).UnixMilli())
+	end := math.Max(float64(now.UnixMilli()), start+60e3) // the hub wants an ascending pair
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(parent, viewTimeout)
+		defer cancel()
+		data, err := src.Energy(ctx, []float64{start, end})
+		return todayMsg{seq: seq, data: data, err: err}
+	}
+}
+
+// updateToday handles the cost-today messages; ok is false for anything else.
+func (m model) updateToday(msg tea.Msg) (model, tea.Cmd, bool) {
+	switch msg := msg.(type) {
+	case todayMsg:
+		if msg.seq != m.today.seq {
+			return m, nil, true
+		}
+		if msg.err == nil && msg.data != nil {
+			price, _ := m.priceSettings()
+			if msg.data.Settings != nil {
+				price = *msg.data.Settings
+			}
+			total := 0.0
+			for i := range msg.data.Devices {
+				total += devCost(&msg.data.Devices[i], price)
+			}
+			m.today.cost, m.today.cur = &total, price.Currency
+		}
+		seq := msg.seq
+		return m, tea.Tick(energyRefresh, func(time.Time) tea.Msg { return todayRefreshMsg{seq} }), true
+	case todayRefreshMsg:
+		if msg.seq != m.today.seq {
+			return m, nil, true
+		}
+		return m, m.fetchToday(), true
+	}
+	return m, nil, false
+}
+
+// todayText is the header's "$1.23 today", or "" before the first read.
+func (m model) todayText() string {
+	if m.today.cost == nil {
+		return ""
+	}
+	return money(*m.today.cost, m.today.cur) + " today"
 }

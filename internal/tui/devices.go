@@ -2,6 +2,7 @@ package tui
 
 import (
 	"slices"
+	"strings"
 
 	"github.com/ContractorKeith/machine-monitor/internal/client"
 	"github.com/ContractorKeith/machine-monitor/internal/history"
@@ -111,7 +112,7 @@ func (m model) report() *report.Report {
 // model on every update; a shared backing array would leak edits into old copies), adding
 // it when it is new. It reports whether the device existed.
 func (m *model) editDev(id string, f func(*device)) bool {
-	m.devs = slices.Clone(m.devs)
+	m.ownDevs()
 	for i := range m.devs {
 		if m.devs[i].id == id {
 			f(&m.devs[i])
@@ -124,18 +125,69 @@ func (m *model) editDev(id string, f func(*device)) bool {
 	return false
 }
 
+// ownDevs gives the model its own copy of the device list before an edit. Within a batch
+// of stream events the copy is made once.
+func (m *model) ownDevs() {
+	if !m.owned {
+		m.devs = slices.Clone(m.devs)
+		m.owned = m.batching
+	}
+}
+
+// resort puts the devices back in display order after an edit, or, within a batch, once at
+// its end.
+func (m *model) resort() {
+	if m.batching {
+		m.dirty = true
+		return
+	}
+	sortDevices(m.devs)
+	m.fixSelection()
+}
+
 // hasDev reports whether a device with id is on the list.
 func (m model) hasDev(id string) bool {
 	return slices.ContainsFunc(m.devs, func(d device) bool { return d.id == id })
 }
 
+// isOnline is d's online flag, unless the hub's stream has gone silent: then nothing is
+// known to be online.
+func (m model) isOnline(d device) bool { return d.online && !m.conn.stale }
+
+// shown reports whether d passes the dashboard's filter (part of its name, any case).
+func (m model) shown(d device) bool {
+	return m.cardFilter == "" || strings.Contains(strings.ToLower(d.name), strings.ToLower(m.cardFilter))
+}
+
 // online and offline split the devices for the dashboard grid and its footer, in order.
 func (m model) online() []device {
-	return slices.DeleteFunc(slices.Clone(m.devs), func(d device) bool { return !d.online })
+	return slices.DeleteFunc(slices.Clone(m.devs), func(d device) bool { return !m.isOnline(d) })
 }
 
 func (m model) offline() []device {
-	return slices.DeleteFunc(slices.Clone(m.devs), func(d device) bool { return d.online })
+	return slices.DeleteFunc(slices.Clone(m.devs), func(d device) bool { return m.isOnline(d) })
+}
+
+// cards and offCards are online and offline narrowed by the dashboard's filter; cardNav is
+// the dashboard's selection order through them.
+func (m model) cards() []device {
+	return slices.DeleteFunc(m.online(), func(d device) bool { return !m.shown(d) })
+}
+
+func (m model) offCards() []device {
+	return slices.DeleteFunc(m.offline(), func(d device) bool { return !m.shown(d) })
+}
+
+func (m model) cardNav() []device { return append(m.cards(), m.offCards()...) }
+
+// selectShown moves the selection to the first device the filter shows, when it hides the
+// selected one.
+func (m *model) selectShown() {
+	nav := m.cardNav()
+	if len(nav) == 0 || slices.ContainsFunc(nav, func(d device) bool { return d.id == m.sel }) {
+		return
+	}
+	m.sel = nav[0].id
 }
 
 // navOrder is the order selection moves through: the grid's cards, then the offline row.

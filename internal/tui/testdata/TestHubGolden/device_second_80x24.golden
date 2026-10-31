@@ -1,4 +1,4 @@
-machine-monitor · studio   1  2 Device  3  4  5  6                           ?/q
+machine-monitor · hub hub.lan:7777 › studio   1  2 Device  3  4  5  6        ?/q
 System                                                                          
   Host          studio                                                          
   OS            macOS 15.1 · Mac Studio                                         

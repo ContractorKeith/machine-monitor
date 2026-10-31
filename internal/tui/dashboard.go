@@ -24,6 +24,9 @@ func (m model) dashboard() string {
 		watts = "~" + fmtWatts(&b.Watts)
 	}
 	summary := fmt.Sprintf("1 device · 1 online · %s at the wall", watts)
+	if c := m.todayText(); c != "" {
+		summary += " · " + c
+	}
 	return m.theme.dim.Render(summary) + "\n" + m.card(*d, min(m.width, maxCardWidth), false)
 }
 
@@ -80,10 +83,26 @@ func (m model) card(d device, w int, selected bool) string {
 	if r.DiskIO != nil {
 		rd, wr = r.DiskIO.Read, r.DiskIO.Write
 	}
-	lines = append(lines, pad(fmt.Sprintf("%s ↓ %-11s ↑ %-11s  %s r %-11s w %s",
-		t.label.Render("NET"), fmtRate(rx), fmtRate(tx), t.label.Render("DISK"), fmtRate(rd), fmtRate(wr)), iw))
+	lines = append(lines, m.ioLine(rx, tx, rd, wr, iw))
 
 	return box.Render(strings.Join(lines, "\n"))
+}
+
+// ioLine is the card's network and disk rates in w cells: in columns when they fit, else
+// packed, else without the labels, so the disk-write rate isn't the one cut off.
+func (m model) ioLine(rx, tx, rd, wr *float64, w int) string {
+	t := m.theme
+	net, disk := t.label.Render("NET"), t.label.Render("DISK")
+	for _, s := range []string{
+		fmt.Sprintf("%s ↓ %-11s ↑ %-11s  %s r %-11s w %s", net, fmtRate(rx), fmtRate(tx), disk, fmtRate(rd), fmtRate(wr)),
+		fmt.Sprintf("%s ↓ %s ↑ %s  %s r %s w %s", net, fmtRate(rx), fmtRate(tx), disk, fmtRate(rd), fmtRate(wr)),
+		fmt.Sprintf("↓ %s ↑ %s  r %s w %s", fmtRate(rx), fmtRate(tx), fmtRate(rd), fmtRate(wr)),
+	} {
+		if lipgloss.Width(s) <= w {
+			return pad(s, w)
+		}
+	}
+	return pad(fmt.Sprintf("↓%s ↑%s r%s w%s", fmtRate(rx), fmtRate(tx), fmtRate(rd), fmtRate(wr)), w)
 }
 
 // gauge is one card row: a label, a bar filling the free width, and right-hand figures.

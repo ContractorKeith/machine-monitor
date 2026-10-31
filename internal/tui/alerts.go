@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -78,6 +79,8 @@ type alertsUI struct {
 	more   int           // alerts that arrived after the banner's, while it showed
 	seen   []string      // ids of alerts that already rang, newest last
 	bells  int           // bells rung, for tests
+
+	unitPending bool // the hub's tempUnit should follow Settings once the alerts load
 }
 
 // alerter is the hub's alerts API, or nil in local mode or for a Hub without one.
@@ -119,22 +122,6 @@ func (m *model) maybeLoadAlerts() tea.Cmd {
 // anything else.
 func (m model) updateAlerts(msg tea.Msg) (model, tea.Cmd, bool) {
 	switch msg := msg.(type) {
-	case hubMsg:
-		switch msg.ev.Type {
-		case client.EventAlert, client.EventAlertSettings:
-			bell := m.applyAlert(msg.ev)
-			var wait tea.Cmd
-			if m.events != nil { // a nil channel would block a goroutine for ever
-				wait = waitEvent(m.events)
-			}
-			return m, tea.Batch(wait, bell), true
-		case client.EventSnapshot: // a (re)connection: what we have may be stale
-			next, cmd, _ := m.updateHub(msg)
-			if !next.al.loaded {
-				return next, cmd, true
-			}
-			return next, tea.Batch(cmd, next.loadAlerts()), true
-		}
 	case alertsLoadedMsg:
 		m.al.loading = false
 		m.al.err = msg.err
@@ -147,6 +134,8 @@ func (m model) updateAlerts(msg tea.Msg) (model, tea.Cmd, bool) {
 				m.al.events = m.al.events[:maxAlertLog]
 			}
 			m.clampAlerts()
+			next, cmd := m.syncAlertsUnit()
+			return next, cmd, true
 		}
 		return m, nil, true
 	case alertsSavedMsg:
@@ -497,7 +486,7 @@ func (m *model) openRuleForm(i int) {
 	}
 	th := ""
 	if r.Threshold != nil {
-		th = strconv.FormatFloat(*r.Threshold, 'f', -1, 64)
+		th = m.thresholdIn(r.Type, *r.Threshold)
 	}
 	m.al.form = alertForm{open: true, rule: i, ruleID: r.ID, fields: []formField{
 		typ, dev,
@@ -515,7 +504,7 @@ func (m *model) syncRuleForm() {
 	f := &m.al.form
 	typ := ruleTypes[f.fields[ruleType].idx]
 	f.fields[ruleThreshold].hidden = !alerts.Types[typ].HasThreshold
-	f.fields[ruleThreshold].unit = thresholdUnit(typ)
+	f.fields[ruleThreshold].unit = m.thresholdUnit(typ)
 	f.fields[ruleMinutes].unit = "min"
 	if typ == alerts.TypeDailyCost {
 		f.fields[ruleMinutes].hidden = true // checked once per day, not over minutes
@@ -616,7 +605,7 @@ func (m *model) ruleTypeChanged() {
 	typ := ruleTypes[f.fields[ruleType].idx]
 	th := ""
 	if v, ok := defaultThreshold[typ]; ok {
-		th = strconv.FormatFloat(v, 'f', -1, 64)
+		th = m.thresholdIn(typ, v)
 	}
 	f.fields[ruleThreshold].input.SetValue(th)
 	mins := strings.TrimSpace(f.fields[ruleMinutes].input.Value())
@@ -656,6 +645,7 @@ func (m model) saveRule() (tea.Model, tea.Cmd) {
 			m.al.form.err = "threshold must be a number"
 			return m, nil
 		}
+		v = m.thresholdOut(typ, v)
 		r.Threshold = &v
 	}
 	if typ != alerts.TypeDailyCost {
@@ -701,10 +691,34 @@ func (m model) saveChannels() (tea.Model, tea.Cmd) {
 
 // ---- drawing -----------------------------------------------------------------------------
 
+// isTempRule reports whether a rule type's threshold is a temperature.
+func isTempRule(typ string) bool { return typ == alerts.TypeCPUTemp || typ == alerts.TypeGPUTemp }
+
+// thresholdIn shows a threshold as the editor and table take it: temperatures in the unit
+// in use (the hub keeps them in °C), to one decimal at most.
+func (m model) thresholdIn(typ string, v float64) string {
+	if isTempRule(typ) {
+		v = math.Round(m.theme.temp(v)*10) / 10
+	}
+	return strconv.FormatFloat(v, 'f', -1, 64)
+}
+
+// thresholdOut turns a threshold typed in the editor into what the hub keeps: °C for
+// temperatures, to one decimal.
+func (m model) thresholdOut(typ string, v float64) float64 {
+	if isTempRule(typ) && m.theme.fahrenheit {
+		return math.Round((v-32)*5/9*10) / 10
+	}
+	return v
+}
+
 // thresholdUnit is the unit a type's threshold is entered in.
-func thresholdUnit(typ string) string {
+func (m model) thresholdUnit(typ string) string {
 	switch typ {
 	case alerts.TypeCPUTemp, alerts.TypeGPUTemp:
+		if m.theme.fahrenheit {
+			return "°F"
+		}
 		return "°C"
 	case alerts.TypePower:
 		return "W"
@@ -717,13 +731,13 @@ func thresholdUnit(typ string) string {
 }
 
 // limitText is a rule's threshold for the rules table.
-func limitText(r alerts.Rule) string {
+func (m model) limitText(r alerts.Rule) string {
 	if r.Threshold == nil {
 		return none
 	}
-	v := strconv.FormatFloat(*r.Threshold, 'f', -1, 64)
-	switch u := thresholdUnit(r.Type); u {
-	case "%", "°C":
+	v := m.thresholdIn(r.Type, *r.Threshold)
+	switch u := m.thresholdUnit(r.Type); u {
+	case "%", "°C", "°F":
 		return v + u
 	case "per day":
 		return v + "/day"
@@ -847,7 +861,7 @@ func (m model) alertsLines() ([]string, int) {
 			on = t.normal.Render("on ")
 		}
 		row := pad(alerts.Types[r.Type].Label, typeW) + " " + pad(m.devName(r.Device), devW) + " " +
-			pad(limitText(r), 9) + " " + forText(r)
+			pad(m.limitText(r), 9) + " " + forText(r)
 		if r.Type == alerts.TypeDailyCost && !a.priceSet {
 			row += t.dim.Render(" (no price)")
 		}
@@ -954,7 +968,11 @@ func (m model) formView() string {
 		lines = append(lines, marker+label+" "+v)
 	}
 	if f.rule != channelsForm {
-		lines = append(lines, "", t.dim.Render("Temperatures are in °C. Disk is the fullest drive over 1 GB."))
+		unit := "Temperatures are in °C."
+		if t.fahrenheit {
+			unit = "Temperatures are in °F (, settings changes it); the hub keeps them in °C."
+		}
+		lines = append(lines, "", t.dim.Render(unit+" Disk is the fullest drive over 1 GB."))
 	} else {
 		lines = append(lines, "", t.dim.Render("Save first, then t sends a test alert to every channel that is on."))
 	}
@@ -1007,4 +1025,23 @@ func (m model) bannerLine() string {
 		text += fmt.Sprintf(" (+%d more)", m.al.more)
 	}
 	return spread(style.Reverse(true).Render(" "+m.glyph(e.State)+text+" "), t.dim.Render("esc dismiss · 6 alerts"), m.width)
+}
+
+// alertsActive is how many alerts are firing, or -1 before the hub has said.
+func (m model) alertsActive() int {
+	if !m.al.loaded {
+		return -1
+	}
+	return len(m.al.active)
+}
+
+// alertsCount is the dashboard header's alert count, red while any is firing.
+func (m model) alertsCount(n int) string {
+	switch n {
+	case 0:
+		return m.theme.dim.Render("no active alerts")
+	case 1:
+		return m.theme.hot.Render("1 active alert")
+	}
+	return m.theme.hot.Render(fmt.Sprintf("%d active alerts", n))
 }

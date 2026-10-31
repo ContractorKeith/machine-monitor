@@ -5,12 +5,12 @@ import "charm.land/bubbles/v2/key"
 // keyMap is every binding; it also feeds the ? help screen.
 type keyMap struct {
 	Dashboard, Device, Processes, History, Energy key.Binding
-	Alerts, Next                                  key.Binding
+	Alerts, Next, Settings                        key.Binding
 	Help, Quit                                    key.Binding
 	Up, Down, PageUp, PageDown, Top, Bottom       key.Binding
 	Filter, Sort, Reverse, Clear                  key.Binding
 	Left, Right, MoveUp, MoveDown, Rename, Remove key.Binding // hub mode
-	Wake, Power                                   key.Binding // hub mode actions
+	Wake, Power, Add                              key.Binding // hub mode actions
 
 	hub bool // hub mode: help lists the device keys
 }
@@ -26,6 +26,8 @@ func newKeyMap(hub bool) keyMap {
 		Remove:    key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "remove device")),
 		Wake:      key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "wake offline device")),
 		Power:     key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "power menu")),
+		Add:       key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add a device")),
+		Settings:  key.NewBinding(key.WithKeys(","), key.WithHelp(",", "settings")),
 		Dashboard: key.NewBinding(key.WithKeys("1"), key.WithHelp("1", "dashboard")),
 		Device:    key.NewBinding(key.WithKeys("2"), key.WithHelp("2", "device")),
 		Processes: key.NewBinding(key.WithKeys("3"), key.WithHelp("3", "processes")),
@@ -41,7 +43,7 @@ func newKeyMap(hub bool) keyMap {
 		PageDown:  key.NewBinding(key.WithKeys("pgdown", "space"), key.WithHelp("pgdn", "page down")),
 		Top:       key.NewBinding(key.WithKeys("home", "g"), key.WithHelp("g", "top")),
 		Bottom:    key.NewBinding(key.WithKeys("end", "G"), key.WithHelp("G", "bottom")),
-		Filter:    key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter processes")),
+		Filter:    key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter cards or processes")),
 		Sort:      key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "sort column")),
 		Reverse:   key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reverse sort")),
 		Clear:     key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear filter / close help")),
@@ -56,11 +58,11 @@ func (k keyMap) ShortHelp() []key.Binding {
 // FullHelp implements help.KeyMap: one column per group.
 func (k keyMap) FullHelp() [][]key.Binding {
 	groups := [][]key.Binding{
-		{k.Dashboard, k.Device, k.Processes, k.History, k.Energy, k.Alerts, k.Next, k.Help, k.Quit},
+		{k.Dashboard, k.Device, k.Processes, k.History, k.Energy, k.Alerts, k.Next, k.Settings, k.Help, k.Quit},
 		{k.Up, k.Down, k.PageUp, k.PageDown, k.Top, k.Bottom},
 	}
 	if k.hub {
-		groups = append(groups, []key.Binding{k.Left, k.Right, k.MoveUp, k.MoveDown, k.Rename, k.Remove, k.Wake, k.Power})
+		groups = append(groups, []key.Binding{k.Left, k.Right, k.MoveUp, k.MoveDown, k.Rename, k.Remove, k.Wake, k.Power, k.Add})
 	}
 	return append(groups, []key.Binding{k.Filter, k.Sort, k.Reverse, k.Clear})
 }

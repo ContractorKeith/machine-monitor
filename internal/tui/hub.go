@@ -15,6 +15,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/ContractorKeith/machine-monitor/internal/client"
+	"github.com/ContractorKeith/machine-monitor/internal/history"
 )
 
 // Hub is what hub mode needs from a hub. *client.Client is one; tests use a fake.
@@ -31,11 +32,27 @@ type Hub interface {
 // actionTimeout bounds a rename, remove or reorder request.
 const actionTimeout = 15 * time.Second
 
+// maxBatch caps the stream events one update applies, so a long backlog still redraws.
+const maxBatch = 512
+
+// staleAfter is how long the stream may stay silent before the dashboard stops trusting
+// its online flags: the hub sends a status event every 3 s, so 10 s of silence means the
+// hub or the network is gone.
+const staleAfter = 10 * time.Second
+
+// hubTick is how often hub mode wakes to check for a silent stream and redraw clocks.
+const hubTick = time.Second
+
 // Hub-mode messages.
 type (
-	streamMsg  struct{ ch <-chan client.Event }
-	hubMsg     struct{ ev client.Event }
+	streamMsg   struct{ ch <-chan client.Event }
+	hubMsg      struct{ ev client.Event } // one event; tests send these
+	hubBatchMsg struct {
+		evs  []client.Event // what the stream had ready, oldest first
+		done bool           // the stream closed after them
+	}
 	hubDoneMsg struct{} // the stream ended for good
+	hubTickMsg struct{}
 	renameMsg  struct {
 		dev *client.Device
 		err error
@@ -57,7 +74,9 @@ type hubConn struct {
 	ended     bool // the stream gave up (wrong key); nothing more will arrive
 	err       error
 	retry     time.Duration
-	snapshot  bool // a snapshot has arrived since the program started
+	snapshot  bool      // a snapshot has arrived since the program started
+	lastEvent time.Time // when the stream last delivered anything
+	stale     bool      // silent for staleAfter: online flags are unknown
 }
 
 // startStream opens the hub's stream off the UI goroutine.
@@ -66,15 +85,97 @@ func (m model) startStream() tea.Cmd {
 	return func() tea.Msg { return streamMsg{h.Stream(ctx)} }
 }
 
-// waitEvent waits for the stream's next event.
+// batchWindow is how long waitEvent gathers events after the first. A busy hub sends over
+// a hundred reports a second; applying them a few times a second costs a few redraws, not
+// one per report. A var so tests can shorten it.
+var batchWindow = 250 * time.Millisecond
+
+// waitEvent waits for the stream's next event, then gathers what follows for batchWindow
+// (up to maxBatch events), so a busy hub costs one update and one redraw per batch.
 func waitEvent(ch <-chan client.Event) tea.Cmd {
 	return func() tea.Msg {
 		ev, ok := <-ch
 		if !ok {
 			return hubDoneMsg{}
 		}
-		return hubMsg{ev}
+		evs := []client.Event{ev}
+		window := time.NewTimer(batchWindow)
+		defer window.Stop()
+		for len(evs) < maxBatch {
+			select {
+			case ev, ok := <-ch:
+				if !ok {
+					return hubBatchMsg{evs: evs, done: true}
+				}
+				evs = append(evs, ev)
+			case <-window.C:
+				return hubBatchMsg{evs: evs}
+			}
+		}
+		return hubBatchMsg{evs: evs}
 	}
+}
+
+// tickHub schedules the next hub-mode clock tick.
+func tickHub() tea.Cmd {
+	return tea.Tick(hubTick, func(time.Time) tea.Msg { return hubTickMsg{} })
+}
+
+// applyBatch folds stream events into the model: the device list is copied once and sorted
+// once for the whole batch.
+func (m model) applyBatch(evs []client.Event, done bool) (model, tea.Cmd) {
+	m.batching = true
+	cmds := make([]tea.Cmd, 0, 2)
+	for _, ev := range evs {
+		// Only the hub's own events show it is alive; the client's reconnect attempts
+		// keep arriving while it is gone.
+		if ev.Type != client.EventConnected && ev.Type != client.EventDisconnected {
+			m.conn.lastEvent, m.conn.stale = m.now(), false
+		}
+		var cmd tea.Cmd
+		m, cmd = m.handleEvent(ev)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	if m.dirty {
+		if !m.owned {
+			m.devs = slices.Clone(m.devs)
+		}
+		sortDevices(m.devs)
+		m.fixSelection()
+	}
+	m.batching, m.owned, m.dirty = false, false, false
+	m.clampScroll()
+	switch {
+	case done:
+		m.conn.ended, m.conn.connected = true, false
+	case m.events != nil: // a nil channel would block a goroutine for ever
+		cmds = append(cmds, waitEvent(m.events))
+	}
+	return m, tea.Batch(cmds...)
+}
+
+// handleEvent applies one stream event and returns what it starts: the bell for a new
+// alert, a reload of the alerts after a reconnect.
+func (m model) handleEvent(ev client.Event) (model, tea.Cmd) {
+	switch ev.Type {
+	case client.EventAlert, client.EventAlertSettings:
+		return m, m.applyAlert(ev)
+	case client.EventEnergySettings:
+		m.applyEnergySettings(ev)
+		return m, nil
+	case client.EventPaired:
+		m.pairedEvent()
+		return m, nil
+	case client.EventDisconnected:
+		m.lostHub()
+	}
+	m.apply(ev)
+	if ev.Type == client.EventSnapshot && m.al.loaded { // a (re)connection: what we have may be stale
+		return m, m.loadAlerts()
+	}
+	return m, nil
 }
 
 // updateHub handles hub-mode messages; ok is false for anything else.
@@ -87,12 +188,19 @@ func (m model) updateHub(msg tea.Msg) (model, tea.Cmd, bool) {
 		m.events = msg.ch
 		return m, waitEvent(m.events), true
 	case hubMsg:
-		m.apply(msg.ev)
-		m.clampScroll()
-		return m, waitEvent(m.events), true
+		next, cmd := m.applyBatch([]client.Event{msg.ev}, false)
+		return next, cmd, true
+	case hubBatchMsg:
+		next, cmd := m.applyBatch(msg.evs, msg.done)
+		return next, cmd, true
 	case hubDoneMsg:
 		m.conn.ended, m.conn.connected = true, false
 		return m, nil, true
+	case hubTickMsg:
+		if m.conn.snapshot && m.now().Sub(m.conn.lastEvent) >= staleAfter {
+			m.conn.stale = true
+		}
+		return m, tickHub(), true
 	case renameMsg:
 		if msg.err != nil {
 			m.notice = "rename failed: " + msg.err.Error()
@@ -113,13 +221,13 @@ func (m model) updateHub(msg tea.Msg) (model, tea.Cmd, bool) {
 			if msg.gen != m.orderGen { // the hub has sent an order since: it wins
 				return m, nil, true
 			}
-			m.devs = slices.Clone(m.devs)
+			m.ownDevs()
 			for i := range m.devs {
 				if o, ok := msg.prev[m.devs[i].id]; ok {
 					m.devs[i].order = o
 				}
 			}
-			sortDevices(m.devs)
+			m.resort()
 		}
 		return m, nil, true
 	}
@@ -145,15 +253,19 @@ func (m *model) apply(ev client.Event) {
 		for _, v := range ev.Devices {
 			devs = append(devs, fromHub(v))
 		}
-		m.devs = devs
+		m.devs, m.owned = devs, m.batching
 	case client.EventReport:
 		if ev.Device == nil {
 			return
 		}
+		pts := ev.Samples // a merged report carries every sample it stands for
+		if len(pts) == 0 && ev.Sample != nil {
+			pts = []history.Point{*ev.Sample}
+		}
 		m.editDev(ev.Device.ID, func(d *device) {
 			d.setRegistry(ev.Device)
-			if ev.Sample != nil {
-				d.pushPoint(*ev.Sample)
+			for _, p := range pts {
+				d.pushPoint(p)
 			}
 		})
 	case client.EventDevice:
@@ -161,7 +273,7 @@ func (m *model) apply(ev client.Event) {
 			m.editDev(ev.Device.ID, func(d *device) { d.setRegistry(ev.Device) })
 		}
 	case client.EventStatus:
-		m.devs = slices.Clone(m.devs)
+		m.ownDevs()
 		for i := range m.devs {
 			if on, ok := ev.Online[m.devs[i].id]; ok {
 				m.devs[i].online = on
@@ -169,7 +281,7 @@ func (m *model) apply(ev client.Event) {
 		}
 	case client.EventOrder:
 		m.orderGen++
-		m.devs = slices.Clone(m.devs)
+		m.ownDevs()
 		for i := range m.devs {
 			if o, ok := ev.Order[m.devs[i].id]; ok {
 				m.devs[i].order = o
@@ -185,8 +297,7 @@ func (m *model) apply(ev client.Event) {
 	default:
 		return // alerts and the rest arrive with their own views
 	}
-	sortDevices(m.devs)
-	m.fixSelection()
+	m.resort()
 }
 
 // removeDev drops a device, moving the selection to its neighbour.
@@ -257,12 +368,15 @@ func (m model) hubCall(f func(ctx context.Context, h Hub) tea.Msg) tea.Cmd {
 // gridKey handles the hub dashboard's keys: move the selection, reorder, rename, remove.
 func (m model) gridKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	k := m.keys
-	nav := m.navOrder()
+	if key.Matches(msg, k.Add) {
+		return m.openAdd()
+	}
+	nav := m.cardNav()
 	if len(nav) == 0 {
 		return m, nil
 	}
 	i := max(0, slices.IndexFunc(nav, func(d device) bool { return d.id == m.sel }))
-	nOnline := len(m.online())
+	nOnline := len(m.cards())
 	ncol := gridColumns(m.width)
 	switch {
 	case key.Matches(msg, k.Left):
@@ -285,10 +399,16 @@ func (m model) gridKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		default:
 			i = nOnline - 1
 		}
-	case key.Matches(msg, k.MoveUp):
-		return m.move(-1)
-	case key.Matches(msg, k.MoveDown):
+	case key.Matches(msg, k.MoveUp), key.Matches(msg, k.MoveDown):
+		if m.cardFilter != "" { // neighbours on screen aren't neighbours in the order
+			m.notice = "clear the filter (esc) to move cards"
+			return m, nil
+		}
+		if key.Matches(msg, k.MoveUp) {
+			return m.move(-1)
+		}
 		return m.move(1)
+
 	case key.Matches(msg, k.Rename):
 		if d := m.cur(); d != nil {
 			m.renameID = d.id
@@ -379,11 +499,12 @@ func (m model) hubDashboard() string {
 	if !m.conn.snapshot {
 		return t.dim.Render("Connecting to the hub at " + m.hubHost() + "…")
 	}
-	online, offline := m.online(), m.offline()
+	nOnline, nOffline := len(m.online()), 0
+	nOffline = len(m.devs) - nOnline
 	var watts float64
 	known := false
-	for _, d := range online {
-		if d.watts != nil {
+	for _, d := range m.devs {
+		if m.isOnline(d) && d.watts != nil {
 			watts += *d.watts
 			known = true
 		}
@@ -392,13 +513,28 @@ func (m model) hubDashboard() string {
 	if known {
 		w = "~" + fmtWatts(&watts)
 	}
-	summary := fmt.Sprintf("%d devices · %d online · %d offline · %s at the wall", len(m.devs), len(online), len(offline), w)
+	summary := fmt.Sprintf("%d devices · %d online · %d offline · %s at the wall", len(m.devs), nOnline, nOffline, w)
 	if len(m.devs) == 1 {
 		summary = strings.Replace(summary, "devices", "device", 1)
 	}
+	if c := m.todayText(); c != "" {
+		summary += " · " + c
+	}
+	head := t.dim.Render(summary)
+	if n := m.alertsActive(); n >= 0 {
+		head += t.dim.Render(" · ") + m.alertsCount(n)
+	}
+	if m.conn.stale {
+		head += t.dim.Render(" · ") + t.warm.Render(fmt.Sprintf("no word from the hub for %s: online state unknown",
+			m.now().Sub(m.conn.lastEvent).Truncate(time.Second)))
+	}
 	if len(m.devs) == 0 {
-		return t.dim.Render(summary) + "\n\n" +
-			t.dim.Render("No devices have reported to this hub yet. Run `machine-monitor agent --hub URL` on each machine.")
+		return head + "\n\n" +
+			t.dim.Render("No devices have reported to this hub yet. Press a to add one.")
+	}
+	online, offline := m.cards(), m.offCards()
+	if m.cardFilter != "" {
+		head += t.dim.Render(fmt.Sprintf(" · filter %q: %d shown · esc clears", m.cardFilter, len(online)+len(offline)))
 	}
 
 	avail := m.bodyHeight() - 1 // under the summary
@@ -408,7 +544,10 @@ func (m model) hubDashboard() string {
 		avail--
 	}
 	grid := m.grid(online, avail)
-	lines := []string{t.dim.Render(summary)}
+	if len(online)+len(offline) == 0 {
+		grid = t.dim.Render("No device name matches the filter.")
+	}
+	lines := []string{head}
 	if grid != "" {
 		lines = append(lines, grid)
 	}
@@ -428,24 +567,31 @@ func (m model) grid(online []device, h int) string {
 	}
 	ncol := min(gridColumns(m.width), len(online))
 	cw := min(maxCardWidth, m.width/ncol)
-	var rows []string
+	nrows := (len(online) + ncol - 1) / ncol
 	selRow := -1
-	for start := 0; start < len(online); start += ncol {
+	if i := slices.IndexFunc(online, func(d device) bool { return d.id == m.sel }); i >= 0 {
+		selRow = i / ncol
+	}
+	// Rows are drawn only when looked at: with hundreds of devices, drawing every card on
+	// every frame is what makes a busy hub slow.
+	drawn := make(map[int]string)
+	row := func(r int) string {
+		if s, ok := drawn[r]; ok {
+			return s
+		}
 		var cards []string
-		for _, d := range online[start:min(start+ncol, len(online))] {
-			if d.id == m.sel {
-				selRow = len(rows)
-			}
+		for _, d := range online[r*ncol : min((r+1)*ncol, len(online))] {
 			cards = append(cards, m.card(d, cw, m.multi() && d.id == m.sel))
 		}
-		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, cards...))
+		drawn[r] = lipgloss.JoinHorizontal(lipgloss.Top, cards...)
+		return drawn[r]
 	}
 	// Show whole rows from top; move top down until the selected row fits (one line is kept
 	// for the "more" note whenever rows are hidden).
 	fits := func(top int) (end int) {
 		used := 0
-		for end = top; end < len(rows); end++ {
-			hgt := lipgloss.Height(rows[end])
+		for end = top; end < nrows; end++ {
+			hgt := lipgloss.Height(row(end))
 			if used+hgt > h {
 				break
 			}
@@ -455,21 +601,31 @@ func (m model) grid(online []device, h int) string {
 	}
 	top := 0
 	end := fits(top)
-	if end < len(rows) {
+	if end < nrows {
 		h-- // room for the note
 		end = fits(top)
 	}
-	for selRow >= end && top < selRow {
-		top++
+	if selRow >= end { // start from the selected row and take earlier rows while they fit
+		top = selRow
+		for top > 0 {
+			if e := fits(top - 1); e <= selRow {
+				break
+			}
+			top--
+		}
 		end = fits(top)
 	}
-	end = max(end, min(top+1, len(rows))) // always at least one row, clipped by the frame
-	out := strings.Join(rows[top:end], "\n")
+	end = max(end, min(top+1, nrows)) // always at least one row, clipped by the frame
+	var shown []string
+	for r := top; r < end; r++ {
+		shown = append(shown, row(r))
+	}
+	out := strings.Join(shown, "\n")
 	var more []string
 	if top > 0 {
 		more = append(more, fmt.Sprintf("↑ %d more", top*ncol))
 	}
-	if end < len(rows) {
+	if end < nrows {
 		more = append(more, fmt.Sprintf("↓ %d more", len(online)-end*ncol))
 	}
 	if len(more) > 0 {
@@ -526,8 +682,10 @@ func (m model) ago(ms int64) string {
 	}
 	d := m.now().Sub(time.UnixMilli(ms))
 	switch {
-	case d < time.Minute:
+	case d < 5*time.Second:
 		return "just now"
+	case d < time.Minute:
+		return fmt.Sprintf("%ds ago", int(d.Seconds()))
 	case d < time.Hour:
 		return fmt.Sprintf("%dm ago", int(d.Minutes()))
 	case d < 48*time.Hour:
@@ -564,6 +722,8 @@ func (m model) hubStatus() string {
 			}
 		}
 		return "Remove " + name + " and its history from the hub? y to confirm, any other key cancels"
+	case m.filter.Focused():
+		return m.filter.View() + "   enter keep · esc clear"
 	case m.notice != "":
 		return m.notice
 	case m.conn.ended:
@@ -573,8 +733,14 @@ func (m model) hubStatus() string {
 		return fmt.Sprintf("hub %s unreachable: %s · retrying in %s", m.hubHost(), errText(m.conn.err), retry)
 	case !m.conn.connected:
 		return "connecting to " + m.hubHost() + "…"
+	case m.conn.stale:
+		return "hub " + m.hubHost() + ": the stream has gone quiet · waiting for it"
 	}
-	return "hub " + m.hubHost() + " · ←↑↓→ select · J/K move · R rename · D remove · ? help"
+	full := "hub " + m.hubHost() + " · ←↑↓→ select · J/K move · R rename · D remove · a add · / filter · , settings"
+	if lipgloss.Width(full) <= m.width {
+		return full
+	}
+	return "hub " + m.hubHost() + " · ←↑↓→ select · a add · / filter · , settings · ? help"
 }
 
 func errText(err error) string {

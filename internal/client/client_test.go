@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -339,9 +340,9 @@ func fakeHub(t *testing.T, key string, fn func(ctx context.Context, w http.Respo
 	return c
 }
 
-// TestSlowConsumer: a consumer that stops reading never stalls the network reader. The
-// client drops the connection once its buffer is full, and reconnects (fresh snapshot) once
-// the consumer catches up.
+// TestSlowConsumer: a consumer that stops reading never stalls the network reader. Events
+// that can't be merged fill the queue; the client then drops the connection, and
+// reconnects (fresh snapshot) once the consumer catches up.
 func TestSlowConsumer(t *testing.T) {
 	const sent = 200
 	finished := make(chan int, 4)
@@ -349,7 +350,7 @@ func TestSlowConsumer(t *testing.T) {
 		io.WriteString(w, "data: {\"type\":\"snapshot\",\"devices\":[]}\n\n")
 		n := 0
 		for ; n < sent; n++ {
-			if _, err := fmt.Fprintf(w, "data: {\"type\":\"status\",\"online\":{\"n%d\":true}}\n\n", n); err != nil {
+			if _, err := fmt.Fprintf(w, "data: {\"type\":\"alert\",\"n\":%d}\n\n", n); err != nil {
 				break
 			}
 			f.Flush()
@@ -379,12 +380,110 @@ func TestSlowConsumer(t *testing.T) {
 			break
 		}
 	}
-	if len(got) != cfg.buffer+1 || got[0] != EventConnected || got[1] != EventSnapshot {
+	// connected, snapshot, then alerts until more than buffer were waiting (give or take the
+	// one the pump holds while it waits for the consumer).
+	if len(got) < cfg.buffer+1 || len(got) > cfg.buffer+3 || got[0] != EventConnected || got[1] != EventSnapshot {
 		t.Errorf("events before the drop: %v", got)
 	}
 	ev := events{t, ch}
 	ev.next(EventConnected)
 	ev.next(EventSnapshot)
+}
+
+// TestCoalesce: while the consumer is busy, a device's reports merge into its newest one,
+// keeping every sample, and status events merge into one; the stream stays up, events
+// keep their order around anything that can't merge, and the queue stays one slot per
+// device however much the hub sends.
+func TestCoalesce(t *testing.T) {
+	const devices, rounds = 50, 40
+	finished := make(chan struct{}, 4)
+	c := fakeHub(t, "k", func(ctx context.Context, w http.ResponseWriter, f http.Flusher) {
+		io.WriteString(w, "data: {\"type\":\"snapshot\",\"devices\":[")
+		for d := range devices {
+			if d > 0 {
+				io.WriteString(w, ",")
+			}
+			fmt.Fprintf(w, "{\"id\":\"d%02d\"}", d)
+		}
+		io.WriteString(w, "]}\n\n")
+		for r := range rounds {
+			for d := range devices {
+				fmt.Fprintf(w, "data: {\"type\":\"report\",\"device\":{\"id\":\"d%02d\",\"name\":\"r%d\"},\"sample\":{\"t\":%d,\"cpu\":%d}}\n\n", d, r, r, r)
+			}
+			fmt.Fprintf(w, "data: {\"type\":\"status\",\"online\":{\"d%02d\":true,\"d00\":%v}}\n\n", r%devices, r%2 == 0)
+			if r == rounds/2 {
+				io.WriteString(w, "data: {\"type\":\"order\",\"order\":{\"d00\":1}}\n\n")
+			}
+		}
+		f.Flush()
+		select { // reconnects after a failure call this again: never block on it
+		case finished <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+	})
+	cfg := fastConfig()
+	cfg.buffer = 8 // far below the 2000 reports: only merging keeps the stream up
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := c.streamWith(ctx, cfg)
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the server's writes blocked on a slow consumer")
+	}
+	time.Sleep(200 * time.Millisecond) // let the reader queue everything
+
+	samples := map[string][]float64{}
+	names := map[string]string{}
+	var types []string
+	var lastOnline map[string]bool
+	for ev := range ch {
+		if ev.Type == EventDisconnected {
+			t.Fatalf("stream dropped: %v", ev.Err)
+		}
+		types = append(types, ev.Type)
+		switch ev.Type {
+		case EventReport:
+			for _, p := range ev.Samples {
+				samples[ev.Device.ID] = append(samples[ev.Device.ID], *p.CPU)
+			}
+			if ev.Sample == nil || *ev.Sample.CPU != *ev.Samples[len(ev.Samples)-1].CPU {
+				t.Fatalf("Sample is not the newest of Samples")
+			}
+			names[ev.Device.ID] = ev.Device.Name
+		case EventStatus:
+			lastOnline = ev.Online
+		}
+		if len(names) == devices && names["d49"] == fmt.Sprintf("r%d", rounds-1) && lastOnline != nil && len(lastOnline) > 1 {
+			break
+		}
+	}
+	// Merged: one report per device, one status, the order event.
+	if len(types) > 2+devices+2 {
+		t.Errorf("%d events delivered; reports were not merged", len(types))
+	}
+	if i := slices.Index(types, EventOrder); i < 0 {
+		t.Error("the order event was lost")
+	}
+	for d := range devices {
+		id := fmt.Sprintf("d%02d", d)
+		got := samples[id]
+		if len(got) != rounds {
+			t.Fatalf("%s: %d samples, want %d (%v)", id, len(got), rounds, got)
+		}
+		for i, v := range got {
+			if v != float64(i) {
+				t.Fatalf("%s: samples out of order: %v", id, got)
+			}
+		}
+		if names[id] != fmt.Sprintf("r%d", rounds-1) {
+			t.Errorf("%s: name %q, want the newest", id, names[id])
+		}
+	}
+	if lastOnline["d00"] != ((rounds-1)%2 == 0) {
+		t.Errorf("merged status kept an old flag: %v", lastOnline)
+	}
 }
 
 // TestIdleStream: a stream that goes silent (a pulled cable) is dropped and retried.
