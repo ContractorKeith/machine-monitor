@@ -107,6 +107,21 @@ func TestPairCodeExpiresLocally(t *testing.T) {
 	}
 }
 
+func TestPairStopsWhenHubGoes(t *testing.T) {
+	_, srv, port := pairHub(t)
+	out, errOut, rc := startPair(port)
+	for deadline := time.Now().Add(10 * time.Second); !strings.Contains(out.String(), "Pairing code"); time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("no code: stdout %q, stderr %q", out.String(), errOut.String())
+		}
+	}
+	srv.CloseClientConnections()
+	srv.Close()
+	if c := waitExit(t, rc, errOut); c != 1 || !strings.Contains(out.String(), "Lost the hub") {
+		t.Fatalf("exit %d, stdout %q", c, out.String())
+	}
+}
+
 func TestPairNeedsLocalHub(t *testing.T) {
 	t.Setenv(config.DirEnv, t.TempDir())
 	var out, errOut bytes.Buffer

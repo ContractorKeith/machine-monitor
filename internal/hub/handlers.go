@@ -7,6 +7,7 @@ package hub
 // (MIT, © 2026 Matt): https://github.com/Forward-Future/device-monitor
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -83,14 +84,6 @@ func (h *Hub) guard(next http.Handler) http.Handler {
 		if openPaths[r.URL.Path] && !h.authorized(r) {
 			if client, socket := h.clientAddr(r); !h.rate.allow(client, socket, RateMax) {
 				sendJSON(w, http.StatusTooManyRequests, errorBody("too many requests"))
-				return
-			}
-		}
-		// A report is checked for the key only after its body (up to maxBody) is read, so a
-		// peer whose reports keep failing is refused before the next body is read.
-		if r.URL.Path == "/api/report" {
-			if client, _ := h.clientAddr(r); h.reportFails.over(client, reportFailMax) {
-				sendJSON(w, http.StatusTooManyRequests, errorBody("too many failed reports"))
 				return
 			}
 		}
@@ -182,15 +175,31 @@ func (h *Hub) deviceFromPath(r *http.Request) string {
 
 // ---- report and info ---------------------------------------------------------------------
 
-// reportFailMax is how many failed reports (bad body or key) one address may send per
-// RateWindow before the guard refuses its reports unread. An agent left with an old key
-// posts about 30 a minute, so it keeps getting the clearer 401.
-const reportFailMax = 60
+// Failed-report budget. The key is in a report's body, so it is checked only after the body
+// (up to maxBody) is read. An address that has sent reportFailMax failed reports (bad body
+// or key) in a RateWindow gets only reportPeek bytes read: a report whose key is in them
+// goes on as usual, anything else is refused. Every agent puts "token" near the start of
+// its report. An agent left with an old key posts about 30 a minute, so it keeps getting the
+// clearer 401.
+const (
+	reportFailMax = 60
+	reportPeek    = 64 << 10
+)
+
+// reportTokenRE finds the token field in the start of a report.
+var reportTokenRE = regexp.MustCompile(`"token"\s*:\s*"([^"\\]{1,128})"`)
 
 func (h *Hub) handleReport(w http.ResponseWriter, r *http.Request) {
-	fail := func() {
-		client, socket := h.clientAddr(r)
-		h.reportFails.allow(client, socket, reportFailMax)
+	client, socket := h.clientAddr(r)
+	fail := func() { h.reportFails.allow(client, socket, reportFailMax) }
+	if !h.authorized(r) && h.reportFails.over(client, reportFailMax) {
+		peek, _ := io.ReadAll(io.LimitReader(r.Body, reportPeek))
+		m := reportTokenRE.FindSubmatch(peek)
+		if m == nil || !h.keyOK(string(m[1])) {
+			sendJSON(w, http.StatusTooManyRequests, errorBody("too many failed reports"))
+			return
+		}
+		r.Body = readCloser{io.MultiReader(bytes.NewReader(peek), r.Body), r.Body}
 	}
 	raw, err := readBody(w, r)
 	if err != nil {
@@ -206,12 +215,19 @@ func (h *Hub) handleReport(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusUnauthorized, errorBody("bad token"))
 		return
 	}
+	h.reportFails.forget(client) // a keyed agent behind this address clears it
 	reply, err := h.ingest(raw)
 	if err != nil {
 		sendJSON(w, http.StatusBadRequest, errorBody(err.Error()))
 		return
 	}
 	sendJSON(w, http.StatusOK, reply)
+}
+
+// readCloser reads from Reader and closes Closer.
+type readCloser struct {
+	io.Reader
+	io.Closer
 }
 
 // handleInfo is the hub's identity. Without the key it only proves it knows the key: a

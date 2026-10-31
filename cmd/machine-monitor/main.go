@@ -23,6 +23,8 @@ Usage:
   machine-monitor                            open the TUI for this machine
   machine-monitor --hub URL                  open the TUI against a hub
   machine-monitor hub [--port 7777]          run a headless hub (also monitors itself)
+  machine-monitor hub --show-key             print this machine's hub key
+  machine-monitor pair [--port 7777]         on the hub: show a code for connect to pair with
   machine-monitor agent --hub URL            report this machine to a hub
   machine-monitor connect [URL]              pair with a hub (finds LAN hubs if no URL), open the TUI
   machine-monitor status --json              print one report

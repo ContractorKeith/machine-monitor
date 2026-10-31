@@ -121,17 +121,23 @@ func remoteIP(remoteAddr string) (netip.Addr, bool) {
 }
 
 // clientAddr is the address a request comes from, for rate limits and pairing tries: the
-// socket's address, or the first X-Forwarded-For address when the socket is a proxy listed
+// socket's address, or the last X-Forwarded-For address when the socket is a proxy listed
 // in config.json "trustedProxies" (tailscale serve hands tailnet clients over from
-// loopback). Anyone else's X-Forwarded-For is whatever they typed, so it is ignored, also
+// loopback). Proxies append the address they saw, so only the last entry is the trusted
+// proxy's; everything before it is whatever the client sent. Anyone else's X-Forwarded-For is whatever they typed, so it is ignored, also
 // from loopback: any local process could otherwise dodge the limits by rotating it.
 // (Upstream honours it from every loopback peer.)
 func (h *Hub) clientAddr(r *http.Request) (client, socket netip.Addr) {
 	socket, _ = remoteIP(r.RemoteAddr)
 	client = socket
 	if h.trustedProxy(r.RemoteAddr) {
-		fwd, _, _ := strings.Cut(r.Header.Get("X-Forwarded-For"), ",")
-		if a, err := netip.ParseAddr(strings.TrimSpace(fwd)); err == nil {
+		hops := r.Header.Values("X-Forwarded-For")
+		last := ""
+		if len(hops) > 0 {
+			list := strings.Split(hops[len(hops)-1], ",")
+			last = list[len(list)-1]
+		}
+		if a, err := netip.ParseAddr(strings.TrimSpace(last)); err == nil {
 			client = a.Unmap().WithZone("")
 		}
 	}
@@ -238,6 +244,13 @@ func (l *rateLimiter) over(client netip.Addr, max int) bool {
 	defer l.mu.Unlock()
 	e := l.rates[client.String()]
 	return e != nil && now.Sub(e.at) <= RateWindow && e.n >= max
+}
+
+// forget drops client's count.
+func (l *rateLimiter) forget(client netip.Addr) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.rates, client.String())
 }
 
 // prune forgets windows that have ended.

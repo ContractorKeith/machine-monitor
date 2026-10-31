@@ -109,6 +109,7 @@ type Hub struct {
 	closed        bool
 
 	streamWriteTimeout time.Duration // tests shorten StreamWriteTimeout
+	statusInterval     time.Duration // tests lengthen StatusInterval
 
 	sentOnline map[string]bool // online flags in the last "status" event; Run's goroutine only
 
@@ -217,7 +218,11 @@ func (h *Hub) Run(ctx context.Context) {
 			defer r.Close()
 		}
 	}
-	status := time.NewTicker(StatusInterval)
+	every := StatusInterval
+	if h.statusInterval != 0 {
+		every = h.statusInterval
+	}
+	status := time.NewTicker(every)
 	prune := time.NewTicker(RateWindow)
 	offline := time.NewTimer(h.checkOnline())
 	defer status.Stop()

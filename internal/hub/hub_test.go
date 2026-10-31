@@ -522,6 +522,13 @@ func TestRateLimit(t *testing.T) {
 	if w := th.req("GET", "/api/info", "", "", "X-Forwarded-For", "100.64.0.7"); w.Code != 200 {
 		t.Errorf("client forwarded by a trusted proxy: %d", w.Code)
 	}
+	// The proxy appends the address it saw; earlier entries are the client's to invent.
+	for i := range RateMax {
+		th.req("GET", "/api/info", "", "", "X-Forwarded-For", fmt.Sprintf("10.1.%d.%d, 100.64.0.9", i/250, i%250+1))
+	}
+	if w := th.req("GET", "/api/info", "", "", "X-Forwarded-For", "10.9.9.9, 100.64.0.9"); w.Code != 429 {
+		t.Errorf("rotating the leftmost X-Forwarded-For dodged the limit: %d", w.Code)
+	}
 	// The key skips the limit; the limit resets after the window.
 	if w := th.keyed("GET", "/api/info", ""); w.Code != 200 {
 		t.Errorf("with key: %d", w.Code)
@@ -1033,6 +1040,40 @@ func TestOfflineStatusSentAtOnce(t *testing.T) {
 	}
 }
 
+// Run sends the offline "status" event on its own, without the heartbeat, when a device
+// crosses OfflineAfter: its timer keeps re-arming.
+func TestRunSendsOfflineStatus(t *testing.T) {
+	th := newTestHub(t)
+	th.statusInterval = time.Hour // only the offline check can send "status"
+	srv := httptest.NewServer(th.h)
+	t.Cleanup(srv.Close)
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	wg.Go(func() { th.Run(ctx) })
+	t.Cleanup(func() { cancel(); wg.Wait() })
+
+	s := openStream(t, srv, th.Token())
+	s.next("snapshot")
+	th.postReport("dev-1", nil)
+	s.next("report")
+	time.Sleep(1500 * time.Millisecond) // past the first timer, so only a re-armed one fires
+	th.clk.Add(OfflineAfter)            // dev-1's last report is now OfflineAfter old
+	deadline := time.After(1500 * time.Millisecond)
+	for {
+		select {
+		case m, ok := <-s.ch:
+			if !ok {
+				t.Fatal("stream closed")
+			}
+			if m["type"] == "status" && m["online"].(map[string]any)["dev-1"] == false {
+				return
+			}
+		case <-deadline:
+			t.Fatal("no offline status within 1.5 s of the device crossing OfflineAfter")
+		}
+	}
+}
+
 // logs collects a hub's log lines.
 type logs struct {
 	mu    sync.Mutex
@@ -1163,43 +1204,79 @@ func TestSaveSkipsUnchangedRegistry(t *testing.T) {
 	}
 }
 
-// readCounter records whether a request body was read.
+// readCounter counts the bytes read from a request body.
 type readCounter struct {
-	r    io.Reader
-	read atomic.Bool
+	r io.Reader
+	n atomic.Int64
 }
 
-func (c *readCounter) Read(p []byte) (int, error) { c.read.Store(true); return c.r.Read(p) }
+func (c *readCounter) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n.Add(int64(n))
+	return n, err
+}
 
-// A peer whose reports keep failing is refused before its next body is read.
+// postFrom sends a report body from remote and returns the status and bytes read.
+func (th *testHub) postFrom(remote, body string) (int, int64) {
+	rc := &readCounter{r: strings.NewReader(body)}
+	r := httptest.NewRequest("POST", "/api/report", rc)
+	r.RemoteAddr, r.Host = remote, "127.0.0.1:7777"
+	w := httptest.NewRecorder()
+	th.h.ServeHTTP(w, r)
+	return w.Code, rc.n.Load()
+}
+
+// A peer whose reports keep failing gets only the start of its next bodies read.
 func TestFailedReportsLimited(t *testing.T) {
 	th := newTestHub(t)
-	post := func(remote, body string) (int, bool) {
-		rc := &readCounter{r: strings.NewReader(body)}
-		r := httptest.NewRequest("POST", "/api/report", rc)
-		r.RemoteAddr, r.Host = remote, "127.0.0.1:7777"
-		w := httptest.NewRecorder()
-		th.h.ServeHTTP(w, r)
-		return w.Code, rc.read.Load()
-	}
 	bad := `{"token":"wrong","id":"dev-1"}`
 	for i := range reportFailMax {
-		if code, _ := post("192.168.1.9:4000", bad); code != 401 {
+		if code, _ := th.postFrom("192.168.1.9:4000", bad); code != 401 {
 			t.Fatalf("bad report %d: %d", i+1, code)
 		}
 	}
-	if code, read := post("192.168.1.9:4000", bad); code != 429 || read {
-		t.Fatalf("over the budget: %d, body read %v; want 429 unread", code, read)
+	big := `{"token":"wrong","id":"dev-1","pad":"` + strings.Repeat("x", 900_000) + `"}`
+	if code, n := th.postFrom("192.168.1.9:4000", big); code != 429 || n > reportPeek {
+		t.Fatalf("over the budget: %d after reading %d bytes; want 429 within %d", code, n, reportPeek)
 	}
-	if code, _ := post("192.168.1.10:4000", bad); code != 401 {
+	if code, _ := th.postFrom("192.168.1.10:4000", bad); code != 401 {
 		t.Errorf("another address: %d", code)
 	}
-	if code, _ := post("192.168.1.9:4000", "{not json"); code != 429 {
+	if code, _ := th.postFrom("192.168.1.9:4000", "{not json"); code != 429 {
 		t.Errorf("garbage over the budget: %d", code)
 	}
 	th.clk.Add(RateWindow + time.Second)
-	if code, _ := post("192.168.1.9:4000", th.agentReport("dev-1", nil)); code != 200 {
+	if code, _ := th.postFrom("192.168.1.9:4000", bad); code != 401 {
 		t.Errorf("after the window: %d", code)
+	}
+}
+
+// An attacker and a keyed agent behind one address: the agent keeps reporting, however many
+// bad reports the attacker sends between its reports.
+func TestFailedReportsDontLockOutAgent(t *testing.T) {
+	th := newTestHub(t)
+	const nat = "192.168.1.9:4000"
+	for round := range 3 {
+		for range reportFailMax + 5 {
+			th.postFrom(nat, `{"token":"guess","id":"dev-x"}`)
+		}
+		th.clk.Add(2 * time.Second)
+		if code, _ := th.postFrom(nat, th.agentReport("dev-1", nil)); code != 200 {
+			t.Fatalf("round %d: keyed report: %d", round, code)
+		}
+		// Its success cleared the address, so a stray bad report is a 401 again.
+		if code, _ := th.postFrom(nat, `{"token":"guess"}`); code != 401 {
+			t.Fatalf("round %d: after the agent's report: %d", round, code)
+		}
+	}
+	// A report with its token past the peek is refused while the address is over budget.
+	for range reportFailMax {
+		th.postFrom(nat, `{"token":"guess"}`)
+	}
+	late := th.agentReport("dev-1", func(m map[string]any) { delete(m, "token") })
+	late = strings.TrimSuffix(late, "}") + `,"pad":"` + strings.Repeat("x", reportPeek) + `","token":"` + th.Token() + `"}`
+	if code, _ := th.postFrom(nat, late); code != 429 {
+		t.Errorf("token past the peek over budget: %d", code)
 	}
 }
 

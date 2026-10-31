@@ -29,7 +29,8 @@ var (
 // runPair is `machine-monitor pair [--port 7777]`, run on the hub's machine: it asks the hub
 // running here for a one-time pairing code (with the key in this machine's config.json),
 // prints it and counts down until a device uses it or it expires. On a terminal the
-// countdown updates in place; otherwise it prints a plain line each minute.
+// countdown updates in place; otherwise it prints a plain line each minute. It exits 1 when
+// the hub goes away, since the code goes with it.
 func runPair(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("pair", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -123,9 +124,13 @@ func runPair(args []string, stdout, stderr io.Writer) int {
 			}
 			return 1
 		case ev, ok := <-events:
-			if !ok { // the stream gave up (the key changed); keep counting down
-				events = nil
-			} else if ev.Type == "paired" {
+			switch {
+			case !ok || ev.Type == client.EventDisconnected:
+				// The hub stopped or restarted, and an active code lives only in its memory.
+				clearLine()
+				fmt.Fprintln(stdout, "Lost the hub, and the code with it. Run machine-monitor pair again once the hub is back.")
+				return 1
+			case ev.Type == "paired":
 				clearLine()
 				fmt.Fprintln(stdout, "Paired: a device used the code.")
 				return 0

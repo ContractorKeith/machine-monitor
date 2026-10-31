@@ -208,8 +208,11 @@ func TestPairTriesUseForwardedClient(t *testing.T) {
 	try := func(fwd, code string) int {
 		return th.req("POST", "/api/pair", "", fmt.Sprintf(`{"code":%q}`, code), "X-Forwarded-For", fwd).Code
 	}
-	for range PairTries {
-		try("100.64.0.7", wrongCode(c))
+	for i := range PairTries { // a spoofed leftmost entry doesn't buy fresh tries
+		try(fmt.Sprintf("10.0.0.%d, 100.64.0.7", i+1), wrongCode(c))
+	}
+	if code := try("10.0.0.99, 100.64.0.7", c); code != 403 {
+		t.Fatalf("same client behind a new spoofed entry: %d", code)
 	}
 	if code := try("100.64.0.8", c); code != 200 {
 		t.Fatalf("another tailnet client: %d", code)

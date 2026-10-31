@@ -207,7 +207,7 @@ func pairLoop(ctx context.Context, in *bufio.Reader, c *http.Client, hubURL, cod
 
 // readCode prompts for a pairing code on stdout and reads one line from in.
 func readCode(in *bufio.Reader, stdout io.Writer) (string, error) {
-	fmt.Fprint(stdout, "Pairing code from the hub: ")
+	fmt.Fprint(stdout, `Pairing code (run "machine-monitor pair" on the hub, or Add device in its TUI): `)
 	line, err := in.ReadString('\n')
 	line = strings.TrimSpace(line)
 	if line == "" && err != nil {
