@@ -16,21 +16,24 @@ import (
 // taskName is the Task Scheduler task for a role, in the root folder.
 func taskName(r Role) string { return "machine-monitor-" + string(r) }
 
-// conhost runs the console binary with no window. Task Scheduler expands %SystemRoot%.
-const conhost = `%SystemRoot%\System32\conhost.exe`
-
-// TaskXML renders the logon task for s. It runs as the current user with an interactive
-// token and least privilege, so creating it needs no elevation. The binary is started
-// through `conhost.exe --headless` so a console window doesn't open at every login.
-func (m *Manager) TaskXML(s Spec) string {
-	return m.taskXML("machine-monitor "+string(s.Role), append([]string{s.Exe}, s.Args()...))
+// TaskArgs is the task's command line after the binary: `service run -- <role args>`.
+// `service run` detaches from the console it's given and logs to a file, so no window
+// stays open. The binary is the task's own process, so /End stops it; a launcher such as
+// `conhost.exe --headless` would be ended while the binary kept running.
+func TaskArgs(s Spec) []string {
+	return append([]string{"service", "run", "--"}, s.Args()...)
 }
 
-// taskXML renders a logon task that runs argv (argv[0] is the binary) under conhost.
+// TaskXML renders the logon task for s. It runs as the current user with an interactive
+// token and least privilege, so creating it needs no elevation.
+func (m *Manager) TaskXML(s Spec) string {
+	return m.taskXML("machine-monitor "+string(s.Role), append([]string{s.Exe}, TaskArgs(s)...))
+}
+
+// taskXML renders a logon task that runs argv; argv[0] is the binary.
 func (m *Manager) taskXML(what string, argv []string) string {
-	args := append([]string{"--headless"}, argv...)
-	quoted := make([]string, len(args))
-	for i, a := range args {
+	quoted := make([]string, len(argv)-1)
+	for i, a := range argv[1:] {
 		quoted[i] = winQuote(a)
 	}
 	user := xmlEscape(m.User)
@@ -71,7 +74,7 @@ func (m *Manager) taskXML(what string, argv []string) string {
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>` + conhost + `</Command>
+      <Command>` + xmlEscape(winQuote(argv[0])) + `</Command>
       <Arguments>` + xmlEscape(strings.Join(quoted, " ")) + `</Arguments>
     </Exec>
   </Actions>
@@ -134,7 +137,7 @@ func (m *Manager) installTask(ctx context.Context, s Spec, out io.Writer) error 
 		return err
 	}
 	fmt.Fprintf(out, "ran schtasks /Run /TN %s\n", name)
-	fmt.Fprintf(out, "machine-monitor %s starts at login (Task Scheduler task %s)\n", s.Role, name)
+	fmt.Fprintf(out, "machine-monitor %s starts at login (Task Scheduler task %s, logs: %s)\n", s.Role, name, LogFile(m.DataDir, s.Role))
 	if m.DataDirEnv != "" {
 		fmt.Fprintf(out, "warning: a logon task can't set MACHINE_MONITOR_DIR; the service uses the default data dir\n")
 	}
@@ -151,6 +154,11 @@ func (m *Manager) createTask(ctx context.Context, name, xml string) error {
 	defer os.Remove(xmlPath)
 	_, err := m.run(ctx, "schtasks", "/Create", "/TN", name, "/XML", xmlPath, "/F")
 	return err
+}
+
+// LogFile is where `service run` sends a Windows service's output.
+func LogFile(dataDir string, r Role) string {
+	return filepath.Join(dataDir, "logs", string(r)+".log")
 }
 
 func (m *Manager) uninstallTask(ctx context.Context, r Role, out io.Writer) error {

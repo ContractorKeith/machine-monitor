@@ -7,10 +7,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/ContractorKeith/machine-monitor/internal/config"
 	"github.com/ContractorKeith/machine-monitor/internal/service"
 )
 
@@ -19,6 +22,8 @@ const serviceUsage = `Usage:
   machine-monitor service install --hub URL                    start an agent at login
   machine-monitor service uninstall [--role hub|agent]         stop and remove (both roles by default)
   machine-monitor service status [--role hub|agent]            show the install state
+  machine-monitor service run -- hub|agent [flags]             run a role detached, logging to a file
+                                                               (what the Windows logon task starts)
 `
 
 // Seams for tests.
@@ -33,12 +38,64 @@ var (
 // initializer would be a cycle.
 var agentBuilt func() bool
 
+// roleCommand is the dispatcher entry for a role; set in init for the same reason.
+var roleCommand func(r service.Role) func(args []string, stdout, stderr io.Writer) int
+
 func init() {
 	agentBuilt = func() bool {
 		var errOut bytes.Buffer
 		commands["agent"]([]string{"-h"}, io.Discard, &errOut)
 		return !strings.Contains(errOut.String(), "not built yet")
 	}
+	roleCommand = func(r service.Role) func(args []string, stdout, stderr io.Writer) int {
+		return commands[string(r)]
+	}
+}
+
+// redirectOutput points the whole process's output at f and, on Windows, detaches from
+// the console so no window stays open. Tests replace it.
+var redirectOutput = func(f *os.File) {
+	os.Stdout, os.Stderr = f, f
+	log.SetOutput(f)
+	detachConsole()
+}
+
+// runServiceRun is `service run -- hub|agent [flags]`: the role's command with its output
+// appended to <data dir>/logs/<role>.log.
+func runServiceRun(args []string, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "--" {
+		args = args[1:]
+	}
+	if len(args) == 0 {
+		fmt.Fprint(stderr, "machine-monitor service run: missing role\n\n"+serviceUsage)
+		return 2
+	}
+	role, err := service.ParseRole(args[0])
+	if err != nil {
+		fmt.Fprintf(stderr, "machine-monitor service run: %v\n", err)
+		return 2
+	}
+	paths, err := config.Default()
+	if err != nil {
+		fmt.Fprintf(stderr, "machine-monitor service run: %v\n", err)
+		return 1
+	}
+	logPath := service.LogFile(paths.Dir, role)
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
+		fmt.Fprintf(stderr, "machine-monitor service run: %v\n", err)
+		return 1
+	}
+	f, err := os.OpenFile(logPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		fmt.Fprintf(stderr, "machine-monitor service run: %v\n", err)
+		return 1
+	}
+	defer f.Close()
+	redirectOutput(f)
+	fmt.Fprintf(f, "%s machine-monitor service run %s\n", time.Now().Format(time.RFC3339), strings.Join(args, " "))
+	code := roleCommand(role)(args[1:], f, f)
+	fmt.Fprintf(f, "%s exited %d\n", time.Now().Format(time.RFC3339), code)
+	return code
 }
 
 // runService is `machine-monitor service install|uninstall|status`: a user-level autostart
@@ -49,6 +106,9 @@ func runService(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	action := args[0]
+	if action == "run" {
+		return runServiceRun(args[1:], stderr)
+	}
 	fs := flag.NewFlagSet("service", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, serviceUsage) }

@@ -34,8 +34,8 @@
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>%SystemRoot%\System32\conhost.exe</Command>
-      <Arguments>--headless "C:\Program Files\machine-monitor\machine-monitor.exe" agent --hub http://hub.local:7777/?a=1&amp;b=2</Arguments>
+      <Command>"C:\Program Files\machine-monitor\machine-monitor.exe"</Command>
+      <Arguments>service run -- agent --hub http://hub.local:7777/?a=1&amp;b=2</Arguments>
     </Exec>
   </Actions>
 </Task>

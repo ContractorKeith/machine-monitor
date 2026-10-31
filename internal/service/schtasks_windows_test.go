@@ -49,7 +49,7 @@ func beating(path string) bool {
 }
 
 // TestSchtasksLogonTaskIntegration creates a real logon task through the same XML and
-// schtasks calls as install, runs it once through conhost --headless, checks /End stops
+// schtasks calls as install, runs it once, checks /End stops
 // it (reinstall relies on that), and deletes it.
 func TestSchtasksLogonTaskIntegration(t *testing.T) {
 	if testing.Short() {

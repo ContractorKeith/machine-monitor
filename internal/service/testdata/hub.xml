@@ -34,8 +34,8 @@
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>%SystemRoot%\System32\conhost.exe</Command>
-      <Arguments>--headless C:\Users\alice\AppData\Local\Programs\machine-monitor\machine-monitor.exe hub --port 8080</Arguments>
+      <Command>C:\Users\alice\AppData\Local\Programs\machine-monitor\machine-monitor.exe</Command>
+      <Arguments>service run -- hub --port 8080</Arguments>
     </Exec>
   </Actions>
 </Task>

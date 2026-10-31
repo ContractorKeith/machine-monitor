@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -79,6 +80,39 @@ func TestServiceWarnsWhenAgentIsStub(t *testing.T) {
 	errOut.Reset()
 	if code := run(args, &out, &errOut); code != 0 || strings.Contains(errOut.String(), warning) {
 		t.Errorf("built agent: exit %d, stderr %q; want 0 and no warning", code, errOut.String())
+	}
+}
+
+func TestServiceRun(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MACHINE_MONITOR_DIR", dir)
+	oldAgent, oldRedirect := commands["agent"], redirectOutput
+	t.Cleanup(func() { commands["agent"], redirectOutput = oldAgent, oldRedirect })
+	redirected := false
+	redirectOutput = func(*os.File) { redirected = true } // keep go test's own output
+	var got []string
+	commands["agent"] = func(args []string, stdout, _ io.Writer) int {
+		got = args
+		io.WriteString(stdout, "agent says hi\n")
+		return 3
+	}
+
+	var out, errOut bytes.Buffer
+	if code := run([]string{"service", "run", "--", "agent", "--hub", "http://h:7777"}, &out, &errOut); code != 3 {
+		t.Fatalf("exit %d, want the command's 3; stderr %q", code, errOut.String())
+	}
+	if !slices.Equal(got, []string{"--hub", "http://h:7777"}) || !redirected {
+		t.Errorf("args %q, redirected %v", got, redirected)
+	}
+	b, err := os.ReadFile(service.LogFile(dir, service.RoleAgent))
+	if err != nil || !strings.Contains(string(b), "agent says hi") || !strings.Contains(string(b), "exited 3") {
+		t.Errorf("log %q, %v", b, err)
+	}
+
+	for _, args := range [][]string{{"service", "run"}, {"service", "run", "--", "status"}} {
+		if code := run(args, &out, &errOut); code != 2 {
+			t.Errorf("run(%q) = %d, want 2", args, code)
+		}
 	}
 }
 
