@@ -243,6 +243,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.collectErr = msg.err
 		if msg.r != nil {
 			r := msg.r
+			cleanAll(r) // before anything reads the hostname or the strings in the report
 			m.recordLocal(r)
 			m.sel = localID
 			m.editDev(localID, func(d *device) {

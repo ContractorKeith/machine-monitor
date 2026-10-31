@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/url"
 	"os"
@@ -30,6 +31,9 @@ func TestCleanStripsTerminalControls(t *testing.T) {
 		"bidi\u202eAB\u2066CD\u061cEF\u200bG\ufeffH":             "bidiABCDEFGH",
 		"tab\there\nnew":                                         "tab here new",
 		"bad\xffutf":                                             "badutf",
+		"family 👨\u200d👩\u200d👧 ok":                              "family 👨\u200d👩\u200d👧 ok",
+		"persian می\u200cخواهم":                                  "persian می\u200cخواهم",
+		"lead\u200d trail\u200d dup a\u200d\u200db":              "lead trail dup ab",
 		"héllo — 日本語 🚀":                                          "héllo — 日本語 🚀",
 	} {
 		if got := clean(in); got != want {
@@ -109,7 +113,7 @@ func TestMoveNoticeClearsOnNextKey(t *testing.T) {
 // not after staleAfter.
 func TestStaleRightAfterDisconnect(t *testing.T) {
 	m := hubModel(t, newFakeHub(threeDevices()), 100, 30)
-	m = run(t, m, hubMsg{client.Event{Type: client.EventDisconnected, Err: errors.New("connection refused"), Retry: time.Second}})
+	m = run(t, m, hubMsg{client.Event{Type: client.EventDisconnected, Err: fmt.Errorf("dial: %w", syscall.ECONNREFUSED), Retry: time.Second}})
 	if !m.conn.stale {
 		t.Error("devices still trusted right after the stream dropped")
 	}
@@ -179,3 +183,18 @@ func TestVersionOption(t *testing.T) {
 }
 
 var _ tea.Msg = hubMsg{}
+
+// TestLocalHostnameIsCleaned: in local mode the hostname is cleaned before it names the
+// device, so it can't reach the cards, History or Energy.
+func TestLocalHostnameIsCleaned(t *testing.T) {
+	m := New(Options{Interval: time.Hour}).(model)
+	r := &report.Report{Hostname: report.Ptr("box\x1b]8;;http://evil.example/\aLINK\x1b[41mRED\u202e")}
+	next, _ := m.Update(reportMsg{r: r})
+	m = next.(model)
+	if got := m.devs[0].name; got != "boxLINKRED" {
+		t.Errorf("name = %q", got)
+	}
+	if f := m.render(); strings.Contains(f, "evil.example") || strings.Contains(f, "\x1b[41m") {
+		t.Errorf("frame carries the hostname's escapes: %q", f)
+	}
+}

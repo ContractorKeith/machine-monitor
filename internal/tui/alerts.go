@@ -132,9 +132,9 @@ func (m model) updateAlerts(msg tea.Msg) (model, tea.Cmd, bool) {
 		m.al.err = msg.err
 		if msg.err == nil && msg.a != nil {
 			m.al.loaded = true
+			cleanAll(&msg.a) // before the rules and the active list are copied out
 			m.al.active, m.al.priceSet = msg.a.Active, msg.a.PriceSet
 			m.setRules(msg.a.Settings)
-			cleanAll(&msg.a)
 			m.al.events = msg.a.Events
 			if len(m.al.events) > maxAlertLog {
 				m.al.events = m.al.events[:maxAlertLog]
@@ -224,6 +224,9 @@ func (m *model) setRules(s alerts.Settings) {
 	m.clampAlerts()
 }
 
+// wsaConnRefused is Windows' WSAECONNREFUSED, which is not syscall.ECONNREFUSED there.
+const wsaConnRefused = syscall.Errno(10061)
+
 // hubErr turns an error into a sentence for the footer: the hub's own message for a refused
 // request, a plain-words reason for the usual network failures, never Go's "Get \"url\": dial
 // tcp …". Whatever is left is cleaned of control characters.
@@ -239,7 +242,7 @@ func hubErr(err error) string {
 	var dns *net.DNSError
 	text := err.Error()
 	switch {
-	case errors.Is(err, syscall.ECONNREFUSED), strings.Contains(text, "refused"):
+	case errors.Is(err, syscall.ECONNREFUSED), errors.Is(err, wsaConnRefused):
 		return "the hub isn't accepting connections (is it running?)"
 	case errors.As(err, &dns):
 		return "can't find the hub's address"
