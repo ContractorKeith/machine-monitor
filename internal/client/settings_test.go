@@ -91,3 +91,49 @@ func TestInstallCommands(t *testing.T) {
 		t.Errorf("InstallURL for a LAN name = %q", got)
 	}
 }
+
+// TestPairCodeTiedToStream (review of #70): a code from the TUI's Add device outlived a
+// killed TUI for the whole PairTTL. The client names itself on its stream and its codes, so
+// the hub refuses a code while the client has no stream open, and ends one hub.PairGrace
+// after the client's stream is gone. Runs for about PairGrace.
+func TestPairCodeTiedToStream(t *testing.T) {
+	if testing.Short() {
+		t.Skip("waits out hub.PairGrace")
+	}
+	th := newTestHub(t, config.At(t.TempDir()), "")
+	c := th.client(th.h.Token())
+	ctx := context.Background()
+	var se *StatusError
+	if _, err := c.NewPairCode(ctx); !errors.As(err, &se) || se.Code != 409 {
+		t.Fatalf("a code with no stream open: %v", err)
+	}
+	sctx, stop := context.WithCancel(ctx)
+	ev := events{t, c.streamWith(sctx, fastConfig())}
+	ev.next(EventSnapshot)
+	if _, err := c.NewPairCode(ctx); err != nil {
+		t.Fatal(err)
+	}
+	other := th.client(th.h.Token())
+	exclusive := func() int {
+		t.Helper()
+		err := other.do(ctx, "POST", "/api/pair/code", map[string]bool{"replace": false}, nil)
+		if errors.As(err, &se) {
+			return se.Code
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return 200
+	}
+	if code := exclusive(); code != 409 {
+		t.Fatalf("exclusive code while the TUI's is live: %d", code)
+	}
+	stop() // the TUI is killed: its stream goes
+	deadline := time.Now().Add(hub.PairGrace + 5*time.Second)
+	for exclusive() != 200 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the TUI's code still live %v after its stream closed", hub.PairGrace+5*time.Second)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}

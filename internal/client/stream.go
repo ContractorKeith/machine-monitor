@@ -191,7 +191,7 @@ func (c *Client) streamOnce(ctx context.Context, st *streamState) error {
 	defer cancel(nil)
 	// compact=1 asks our hub for the compact stream (no history in the snapshot, coalesced
 	// batches; see hub/stream.go). Upstream hubs route by path and ignore it.
-	req, err := http.NewRequestWithContext(cctx, "GET", c.base.String()+"/api/stream?compact=1", nil)
+	req, err := http.NewRequestWithContext(cctx, "GET", c.base.String()+"/api/stream?compact=1&pair="+c.owner, nil)
 	if err != nil {
 		return err
 	}

@@ -107,6 +107,53 @@ func TestStaleStream(t *testing.T) {
 	}
 }
 
+// TestLaggingStream is skeptic report N1: over a link slower than the stream, reports kept
+// arriving, later and later, with nothing to say so. Reports lateAfter late (by the hub's
+// own clock, so a clock difference doesn't count) mark the data late in the header and
+// footer until they are under lateClear again. The cards keep the hub's online flags
+// (review of #70: "0 online · 250 offline" while data was merely late), and a lag wavering
+// below lateAfter (a link that only just keeps up) never warns.
+func TestLaggingStream(t *testing.T) {
+	m, now := clockModel(t, newFakeHub(nil), 120, 40)
+	hubClock := now.Add(-3 * time.Hour) // the hub's clock is far off; only the lag counts
+	start := *now
+	// late sends a report that arrives lag after the hub took it, 5 s after the last one.
+	late := func(lag time.Duration) {
+		t.Helper()
+		*now = now.Add(5 * time.Second)
+		d := threeDevices()[0]
+		d.LastSeen = hubClock.Add(now.Sub(start) - lag).UnixMilli()
+		m = feed(t, m, hubMsg{client.Event{Type: client.EventReport, ID: d.ID, Device: &d}})
+	}
+	late(0) // the reference
+	// Break-even: the lag wavers but never reaches lateAfter.
+	for _, lag := range []time.Duration{12, 18, 14, 19, 16, 18} {
+		late(lag * time.Second)
+		if m.conn.late || m.conn.stale {
+			t.Fatalf("late at a %v lag, under lateAfter", lag*time.Second)
+		}
+	}
+	late(25 * time.Second)
+	if !m.conn.late || m.conn.stale || len(m.online()) != 2 {
+		t.Fatalf("25 s behind: late=%v stale=%v online=%d; want late, not stale, 2 online", m.conn.late, m.conn.stale, len(m.online()))
+	}
+	m = feed(t, m, hubMsg{client.Event{Type: client.EventStatus, Online: map[string]bool{"mac-0001": true}}})
+	f := frameText(m)
+	for _, want := range []string{"2 online · 1 offline", "data 25s behind: the link is slow", "the link is too slow to keep up"} {
+		if !strings.Contains(f, want) {
+			t.Errorf("frame lacks %q:\n%s", want, f)
+		}
+	}
+	late(17 * time.Second) // under lateAfter but not lateClear: still late
+	if !m.conn.late {
+		t.Error("late cleared at 17 s, above lateClear")
+	}
+	late(3 * time.Second) // caught up
+	if m.conn.late || strings.Contains(frameText(m), "behind") {
+		t.Errorf("still late once reports are on time: lag=%v", m.conn.lag)
+	}
+}
+
 // TestTemperatureUnit: °F applies to cards, the Device view and History, and is saved on
 // this machine for the next start.
 func TestTemperatureUnit(t *testing.T) {

@@ -74,13 +74,27 @@ func runPair(args []string, stdout, stderr io.Writer) int {
 	hubURL := "http://" + addr
 	hc := localHubClient(key)
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// SIGHUP (terminal closed, SSH dropped) ends the run like Ctrl+C, so its code is
+	// cancelled (skeptic report N3). So does stdout's reader quitting (`pair | head -1`):
+	// with SIGPIPE caught, a write to the closed pipe fails with EPIPE instead of killing
+	// the process (os/signal), and quitOnError turns that failure into a stop. Windows has no
+	// SIGPIPE; the write just fails there.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGPIPE)
 	defer stop()
+	ctx, quit := context.WithCancel(ctx)
+	defer quit()
+	tty := isTerminal(stdout) // before the wrap: it looks for an *os.File
+	stdout = &quitOnError{w: stdout, quit: quit}
+	// The owner ties the code to this run's stream: if the run dies without cancelling
+	// (SIGKILL, a crash), the hub ends the code when the stream closes.
+	ob := make([]byte, 16)
+	rand.Read(ob)
+	owner := hex.EncodeToString(ob)
 	// Follow the stream before asking for the code, so its "paired" event can't be missed.
 	// Every connection proves it reaches the hub itself before the key goes over it.
 	sctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	events, err := pairStream(sctx, hc, hubURL, key)
+	events, err := pairStream(sctx, hc, hubURL, key, owner)
 	if errors.Is(err, errOldHub) {
 		return fail("%v", errOldHub)
 	}
@@ -91,7 +105,7 @@ func runPair(args []string, stdout, stderr io.Writer) int {
 		}
 		return fail("no hub with this machine's key answers at %s: %v (%s)", hubURL, err, hint)
 	}
-	code, expires, id, err := requestPairCode(ctx, hc, hubURL, key, *replace)
+	code, expires, id, err := requestPairCode(ctx, hc, hubURL, key, owner, *replace)
 	var active *codeActiveError
 	if errors.As(err, &active) {
 		fmt.Fprintf(stderr, "machine-monitor pair: a pairing code is already active (from another machine-monitor pair, or the TUI's Add device); it expires in %s.\n", clockText(active.expires.Sub(pairNow()).Round(time.Second)))
@@ -104,7 +118,6 @@ func runPair(args []string, stdout, stderr io.Writer) int {
 
 	fmt.Fprintf(stdout, "Pairing code: %s %s\n", code[:3], code[3:])
 	fmt.Fprintf(stdout, "On the new device, run: machine-monitor connect %s\n", hubAddress(*port))
-	tty := isTerminal(stdout)
 	clearLine := func() {
 		if tty {
 			fmt.Fprint(stdout, "\r\033[K")
@@ -145,6 +158,9 @@ func runPair(args []string, stdout, stderr io.Writer) int {
 			return 1
 		case ev, ok := <-events:
 			switch {
+			case !ok && ctx.Err() != nil:
+				// Stopped: the stream closed with ctx. The hub ends the code with it.
+				return 1
 			case !ok:
 				// The hub stopped or restarted, and an active code lives only in its memory.
 				clearLine()
@@ -167,6 +183,20 @@ func runPair(args []string, stdout, stderr io.Writer) int {
 			}
 		}
 	}
+}
+
+// quitOnError passes writes to w, and calls quit once one fails.
+type quitOnError struct {
+	w    io.Writer
+	quit func()
+}
+
+func (q *quitOnError) Write(b []byte) (int, error) {
+	n, err := q.w.Write(b)
+	if err != nil {
+		q.quit()
+	}
+	return n, err
 }
 
 // errNotHub is a program on the port that can't prove, for this very connection, that it is
@@ -270,11 +300,11 @@ type pairEvent struct {
 	ID   int64  `json:"id"`
 }
 
-// pairStream opens the hub's live stream and returns its "paired" and "pairEnded" events.
-// The channel closes when the stream ends. The hub registers a stream before it sends the
-// reply headers, so once this returns no event can be missed.
-func pairStream(ctx context.Context, hc *http.Client, hubURL, key string) (<-chan pairEvent, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, hubURL+"/api/stream", nil)
+// pairStream opens the hub's live stream as owner and returns its "paired" and "pairEnded"
+// events. The channel closes when the stream ends. The hub registers a stream before it
+// sends the reply headers, so once this returns no event can be missed.
+func pairStream(ctx context.Context, hc *http.Client, hubURL, key, owner string) (<-chan pairEvent, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, hubURL+"/api/stream?pair="+owner, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -331,12 +361,12 @@ type codeActiveError struct{ expires time.Time }
 
 func (e *codeActiveError) Error() string { return "a pairing code is already active" }
 
-// requestPairCode asks the hub for a new pairing code. Unless replace, the hub refuses while
-// another code is live (codeActiveError).
-func requestPairCode(ctx context.Context, hc *http.Client, hubURL, key string, replace bool) (code string, expires time.Time, id int64, err error) {
+// requestPairCode asks the hub for a new pairing code, tied to owner's stream. Unless
+// replace, the hub refuses while another code is live (codeActiveError).
+func requestPairCode(ctx context.Context, hc *http.Client, hubURL, key, owner string, replace bool) (code string, expires time.Time, id int64, err error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	body := fmt.Sprintf(`{"replace":%t}`, replace)
+	body := fmt.Sprintf(`{"replace":%t,"owner":%q}`, replace, owner)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, hubURL+"/api/pair/code", strings.NewReader(body))
 	if err != nil {
 		return "", time.Time{}, 0, err

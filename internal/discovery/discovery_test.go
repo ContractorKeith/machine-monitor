@@ -291,17 +291,107 @@ func TestReplyLimiter(t *testing.T) {
 	if l.allow(src(0)) {
 		t.Fatal("one source over its limit")
 	}
-	for i := 1; l.total < replyGlobal; i++ {
-		if !l.allow(src(i)) {
-			t.Fatalf("source %d refused under the global limit", i)
+	// New sources in one /24 share that network's budget.
+	n := 0
+	for i := 1; i < 256; i++ {
+		if l.allow(src(i)) {
+			n++
 		}
 	}
-	if l.allow(src(9999)) || len(l.per) > replyGlobal {
-		t.Fatalf("over the global limit (tracking %d sources)", len(l.per))
+	if n+replyPerSource != replyPerNetwork {
+		t.Fatalf("%d replies to 255 new sources in one /24; want %d", n, replyPerNetwork-replyPerSource)
 	}
-	now = now.Add(replyWindow)
+	if !l.allow(src(256)) { // 10.0.1.0: another /24
+		t.Fatal("another network refused")
+	}
+	now = now.Add(time.Second)
 	if !l.allow(src(0)) {
-		t.Fatal("not reset after the window")
+		t.Fatal("not refilled after a second")
+	}
+	// IPv6 sources are grouped by /64.
+	a, b, c := netip.MustParseAddr("fd00::1"), netip.MustParseAddr("fd00::ffff:2"), netip.MustParseAddr("fd00:0:0:1::1")
+	if network(a) != network(b) || network(a) == network(c) || network(netip.MustParseAddr("192.168.1.9")).String() != "192.168.1.0/24" {
+		t.Fatalf("networks: %v %v %v", network(a), network(b), network(c))
+	}
+}
+
+// floodRun probes l every step for 20 s from flood(k), the k-th flood probe, plus a
+// legitimate prober (127.0.0.1) sending three probes at 8, 11 and 14 s, as `connect` run
+// three times in a row. It fails if any second has more than replyTotal replies, and
+// returns the flood's replies and how many legitimate probes were answered of how many.
+func floodRun(t *testing.T, step time.Duration, flood func(k int) netip.Addr) (replies, answered, probes int) {
+	t.Helper()
+	now := time.Unix(1000, 0)
+	l := newReplyLimiter(func() time.Time { return now })
+	legit := netip.MustParseAddr("127.0.0.1")
+	start, second, perSecond := now, now, 0
+	for k := 0; now.Sub(start) < 20*time.Second; k++ {
+		now = now.Add(step)
+		if now.Sub(second) >= time.Second {
+			if perSecond > replyTotal {
+				t.Fatalf("%d replies in one second; want at most %d", perSecond, replyTotal)
+			}
+			second, perSecond = now, 0
+		}
+		if l.allow(flood(k)) {
+			replies++
+			perSecond++
+		}
+		if at := now.Sub(start); at == 8*time.Second || at == 11*time.Second || at == 14*time.Second {
+			for range 3 {
+				probes++
+				if l.allow(legit) {
+					answered++
+				}
+			}
+		}
+	}
+	return replies, answered, probes
+}
+
+// TestReplyFloodLeavesRoom is skeptic report N2: ten sources probing 50 times a second each
+// (500 pps, unprivileged on one machine) used up the global limit, so every legitimate
+// probe went unanswered. The flood must stay within its sources' and network's limits, and
+// a prober on the same network must still be answered.
+func TestReplyFloodLeavesRoom(t *testing.T) {
+	replies, answered, probes := floodRun(t, 2*time.Millisecond, func(k int) netip.Addr {
+		return netip.AddrFrom4([4]byte{127, 0, 0, byte(2 + k%10)})
+	})
+	if answered != probes {
+		t.Errorf("the legitimate prober got %d replies to %d probes during the flood; want all", answered, probes)
+	}
+	if max := 20*10*replySourceRate + 10*replyPerSource; float64(replies) > max {
+		t.Errorf("the flood got %d replies in 20 s; want at most %v", replies, max)
+	}
+	if replies == 0 {
+		t.Error("the flood's sources got no replies at all; each should keep a small share")
+	}
+}
+
+// TestReplyRotatingFlood (review of #70): a flood from a new address each probe (400 pps)
+// drained the budget kept for new sources, so a legitimate prober got 0 of 8 replies. Each
+// /24 now has its own budget: the flood gets at most that per network it uses, and the
+// prober, on a network the flood isn't using at the time, is answered.
+func TestReplyRotatingFlood(t *testing.T) {
+	for name, flood := range map[string]func(k int) netip.Addr{
+		// 127.0.0.2, 127.0.0.3, …: a new address each probe, a new /24 every 256.
+		"sequential": func(k int) netip.Addr {
+			i := k + 2
+			return netip.AddrFrom4([4]byte{127, byte(i >> 16), byte(i >> 8), byte(i)})
+		},
+		// A new /24 each probe, spread over 127.0.0.0/8.
+		"scattered": func(k int) netip.Addr {
+			i := uint32(k)*2654435761 | 1<<8 // never 127.0.0.x, the prober's network
+			return netip.AddrFrom4([4]byte{127, byte(i >> 16), byte(i >> 8), byte(i)})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			replies, answered, probes := floodRun(t, 2500*time.Microsecond, flood)
+			if answered != probes {
+				t.Errorf("the legitimate prober got %d replies to %d probes during the flood; want all", answered, probes)
+			}
+			t.Logf("the flood got %d replies to 8000 probes", replies)
+		})
 	}
 }
 

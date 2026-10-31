@@ -30,6 +30,36 @@ type testHub struct {
 	h    *hub.Hub
 	srv  *httptest.Server
 	stop func() // shuts the hub down and saves its data, as if its machine went away
+	ln   *trackListener
+}
+
+// trackListener remembers the connections it accepts, so a test can drop them all: the
+// hub takes compact streams' connections over (hijacks them), so the server's
+// CloseClientConnections no longer reaches them.
+type trackListener struct {
+	net.Listener
+	mu    sync.Mutex
+	conns []net.Conn
+}
+
+func (l *trackListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err == nil {
+		l.mu.Lock()
+		l.conns = append(l.conns, c)
+		l.mu.Unlock()
+	}
+	return c, err
+}
+
+// dropConns closes every connection accepted so far, as a network failure would.
+func (th *testHub) dropConns() {
+	th.ln.mu.Lock()
+	defer th.ln.mu.Unlock()
+	for _, c := range th.ln.conns {
+		c.Close()
+	}
+	th.ln.conns = nil
 }
 
 // newTestHub starts a hub on addr ("" for any free port) and runs its timers.
@@ -52,12 +82,13 @@ func newTestHub(t *testing.T, paths config.Paths, addr string) *testHub {
 		t.Fatal(err)
 	}
 	srv := httptest.NewUnstartedServer(h.Handler())
-	srv.Listener = ln
+	tl := &trackListener{Listener: ln}
+	srv.Listener = tl
 	srv.Start()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { h.Run(ctx); close(done) }()
-	th := &testHub{t: t, h: h, srv: srv}
+	th := &testHub{t: t, h: h, srv: srv, ln: tl}
 	th.stop = sync.OnceFunc(func() {
 		srv.CloseClientConnections()
 		cancel()
@@ -260,7 +291,7 @@ func TestStreamReconnect(t *testing.T) {
 	ev.next(EventSnapshot)
 
 	// 1. The connection drops; the hub is still there.
-	th.srv.CloseClientConnections()
+	th.dropConns()
 	if d := ev.next(EventDisconnected); d.Err == nil || d.Retry <= 0 {
 		t.Errorf("disconnected = %+v", d)
 	}

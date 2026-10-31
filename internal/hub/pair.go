@@ -8,6 +8,12 @@ package hub
 // device issue codes. Each code has an id, carried by the "paired" and "pairEnded" events,
 // so whoever shows a code knows when that code, not some other one, was used or replaced.
 //
+// `machine-monitor pair` and the TUI name themselves with a random owner on both their
+// stream (/api/stream?pair=OWNER) and their code request. PairGrace after the last stream
+// with that owner ends, its code ends too, so a pair or TUI killed without a chance to
+// cancel (SIGKILL, a crash, a closed terminal) doesn't leave a code nobody shows (skeptic
+// report N3).
+//
 // Ported from Forward-Future/device-monitor server.js @ c3a4c41
 // (MIT, © 2026 Matt): https://github.com/Forward-Future/device-monitor
 
@@ -16,6 +22,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,6 +46,63 @@ type pairState struct {
 	expires time.Time
 	tries   map[string]int // source (sourceKey) -> wrong guesses at this code
 	wrong   int            // wrong guesses from every source
+	owner   string         // the pair run showing this code; "" for the TUI's Add device
+	streams map[string]int // owner -> open streams that named it
+}
+
+// pairOwnerRE is what an owner may look like: pair sends 32 hex digits.
+var pairOwnerRE = regexp.MustCompile(`^[0-9a-f]{16,64}$`)
+
+// pairOwner is the stream's ?pair= owner, or "" when it has none (or a malformed one).
+func pairOwner(r *http.Request) string {
+	if o := r.URL.Query().Get("pair"); pairOwnerRE.MatchString(o) {
+		return o
+	}
+	return ""
+}
+
+// PairGrace is how long a code outlives the last stream of its owner. A TUI that reconnects
+// within it keeps its code (it would also miss the "pairEnded" sent while it was away).
+const PairGrace = 15 * time.Second
+
+// watchPair counts a stream that names owner; the returned func, called when the stream
+// ends, ends owner's code PairGrace later unless a stream with that owner is open again.
+func (h *Hub) watchPair(owner string) (done func()) {
+	p := &h.pair
+	p.mu.Lock()
+	if p.streams == nil {
+		p.streams = map[string]int{}
+	}
+	p.streams[owner]++
+	p.mu.Unlock()
+	return func() {
+		p.mu.Lock()
+		p.streams[owner]--
+		last := p.streams[owner] <= 0
+		if last {
+			delete(p.streams, owner)
+		}
+		id := p.id
+		p.mu.Unlock()
+		if !last {
+			return
+		}
+		grace := h.pairGrace
+		if grace == 0 {
+			grace = PairGrace
+		}
+		time.AfterFunc(grace, func() {
+			p.mu.Lock()
+			end := p.activeLocked(h.now()) && p.owner == owner && p.id == id && p.streams[owner] == 0
+			if end {
+				p.code = ""
+			}
+			p.mu.Unlock()
+			if end {
+				h.broadcast(map[string]any{"type": "pairEnded", "id": id, "reason": "abandoned"})
+			}
+		})
+	}
 }
 
 // activeLocked reports whether a code is live, dropping an expired one. Caller holds mu.
@@ -67,7 +131,8 @@ func (h *Hub) full() bool {
 
 // handlePairCode (key) issues a new code. A body of {"replace": false} asks for a code only
 // if none is active (409 otherwise), which is what `machine-monitor pair` sends, so two runs
-// can't hand out two codes of which only one works. Without it the new code replaces the
+// can't hand out two codes of which only one works. "owner" ties the code to the caller's
+// open stream (see watchPair); with no such stream open, no code is issued. Without it the new code replaces the
 // old one, as upstream, and a "pairEnded" event tells whoever showed the old one.
 func (h *Hub) handlePairCode(w http.ResponseWriter, r *http.Request) {
 	body, _, err := readObject(w, r)
@@ -77,6 +142,11 @@ func (h *Hub) handlePairCode(w http.ResponseWriter, r *http.Request) {
 	}
 	replace, set := body["replace"].(bool)
 	replace = replace || !set
+	owner, _ := body["owner"].(string)
+	if owner != "" && !pairOwnerRE.MatchString(owner) {
+		sendJSON(w, http.StatusBadRequest, errorBody("bad owner"))
+		return
+	}
 	if h.full() {
 		sendJSON(w, http.StatusConflict, errorBody(fullMessage))
 		return
@@ -89,6 +159,11 @@ func (h *Hub) handlePairCode(w http.ResponseWriter, r *http.Request) {
 	p := &h.pair
 	p.mu.Lock()
 	var ended map[string]any
+	if owner != "" && p.streams[owner] == 0 { // its stream already ended: nobody would show the code
+		p.mu.Unlock()
+		sendJSON(w, http.StatusConflict, errorBody("This pair run's live stream from the hub has closed. Run machine-monitor pair again."))
+		return
+	}
 	if p.activeLocked(h.now()) {
 		if !replace {
 			expires := p.expires
@@ -100,6 +175,7 @@ func (h *Hub) handlePairCode(w http.ResponseWriter, r *http.Request) {
 	}
 	p.id++
 	p.code, p.expires, p.tries, p.wrong = fmt.Sprintf("%06d", n.Int64()), h.now().Add(PairTTL), map[string]int{}, 0
+	p.owner = owner
 	code, expires, id := p.code, p.expires, p.id
 	p.mu.Unlock()
 	if ended != nil {
