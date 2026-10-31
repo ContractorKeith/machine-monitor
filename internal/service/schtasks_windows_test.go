@@ -77,7 +77,11 @@ func TestSchtasksLogonTaskIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Run a copy so a payload that outlives the test can't lock go test's own binary.
-	dir := t.TempDir()
+	// The space proves the quoted <Command> path works, as under C:\Program Files.
+	dir := filepath.Join(t.TempDir(), "with space")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	exe := filepath.Join(dir, "payload.exe")
 	copyFile(t, self, exe)
 	marker := filepath.Join(dir, "heartbeat")
