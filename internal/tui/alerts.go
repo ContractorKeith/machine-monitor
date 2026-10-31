@@ -119,22 +119,6 @@ func (m *model) maybeLoadAlerts() tea.Cmd {
 // anything else.
 func (m model) updateAlerts(msg tea.Msg) (model, tea.Cmd, bool) {
 	switch msg := msg.(type) {
-	case hubMsg:
-		switch msg.ev.Type {
-		case client.EventAlert, client.EventAlertSettings:
-			bell := m.applyAlert(msg.ev)
-			var wait tea.Cmd
-			if m.events != nil { // a nil channel would block a goroutine for ever
-				wait = waitEvent(m.events)
-			}
-			return m, tea.Batch(wait, bell), true
-		case client.EventSnapshot: // a (re)connection: what we have may be stale
-			next, cmd, _ := m.updateHub(msg)
-			if !next.al.loaded {
-				return next, cmd, true
-			}
-			return next, tea.Batch(cmd, next.loadAlerts()), true
-		}
 	case alertsLoadedMsg:
 		m.al.loading = false
 		m.al.err = msg.err
@@ -1007,4 +991,23 @@ func (m model) bannerLine() string {
 		text += fmt.Sprintf(" (+%d more)", m.al.more)
 	}
 	return spread(style.Reverse(true).Render(" "+m.glyph(e.State)+text+" "), t.dim.Render("esc dismiss · 6 alerts"), m.width)
+}
+
+// alertsActive is how many alerts are firing, or -1 before the hub has said.
+func (m model) alertsActive() int {
+	if !m.al.loaded {
+		return -1
+	}
+	return len(m.al.active)
+}
+
+// alertsCount is the dashboard header's alert count, red while any is firing.
+func (m model) alertsCount(n int) string {
+	switch n {
+	case 0:
+		return m.theme.dim.Render("no active alerts")
+	case 1:
+		return m.theme.hot.Render("1 active alert")
+	}
+	return m.theme.hot.Render(fmt.Sprintf("%d active alerts", n))
 }

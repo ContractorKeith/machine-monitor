@@ -361,6 +361,7 @@ type histChart struct {
 	series []histSeries
 	fmt    func(float64) string // readout
 	axis   func(float64) string // y-axis label, at most histAxisW cells
+	temp   bool                 // values are °C: fmt and axis follow the unit in Settings
 }
 
 // histSeries is one line of a chart; peak is nil for fields without a stored peak.
@@ -377,7 +378,7 @@ var histCharts = []histChart{
 			{"GPU", func(p *history.Point) *float64 { return p.GPU }, func(p *history.Point) *float64 { return p.GPUMax }},
 			{"Memory", func(p *history.Point) *float64 { return p.Mem }, nil},
 		}},
-	{title: "Temperature", fmt: fmtTempV,
+	{title: "Temperature", fmt: fmtTempV, temp: true,
 		axis: func(v float64) string { return fmt.Sprintf("%.0f°", v) },
 		series: []histSeries{
 			{"CPU", func(p *history.Point) *float64 { return p.CPUTemp }, func(p *history.Point) *float64 { return p.CPUTempMax }},
@@ -458,6 +459,9 @@ func (m model) historyView() string {
 		}
 		if len(ss) > 0 {
 			c.series = ss
+			if c.temp {
+				c.fmt, c.axis = m.theme.tempV, m.theme.tempDeg
+			}
 			present = append(present, c)
 		}
 	}
@@ -498,16 +502,17 @@ type histTile struct {
 	label     string
 	get, peak func(*history.Point) *float64
 	fmt       func(float64) string
+	temp      bool // °C: shown in the unit in use
 }
 
 // histTiles are upstream's tiles: utilisation, temperatures and GPU power.
 var histTiles = []histTile{
-	{"CPU", func(p *history.Point) *float64 { return p.CPU }, func(p *history.Point) *float64 { return p.CPUMax }, fmtPctV},
-	{"GPU", func(p *history.Point) *float64 { return p.GPU }, func(p *history.Point) *float64 { return p.GPUMax }, fmtPctV},
-	{"Memory", func(p *history.Point) *float64 { return p.Mem }, nil, fmtPctV},
-	{"CPU temp", func(p *history.Point) *float64 { return p.CPUTemp }, func(p *history.Point) *float64 { return p.CPUTempMax }, fmtTempV},
-	{"GPU temp", func(p *history.Point) *float64 { return p.GPUTemp }, func(p *history.Point) *float64 { return p.GPUTempMax }, fmtTempV},
-	{"GPU power", func(p *history.Point) *float64 { return p.GPUPower }, nil, fmtWattsV},
+	{"CPU", func(p *history.Point) *float64 { return p.CPU }, func(p *history.Point) *float64 { return p.CPUMax }, fmtPctV, false},
+	{"GPU", func(p *history.Point) *float64 { return p.GPU }, func(p *history.Point) *float64 { return p.GPUMax }, fmtPctV, false},
+	{"Memory", func(p *history.Point) *float64 { return p.Mem }, nil, fmtPctV, false},
+	{"CPU temp", func(p *history.Point) *float64 { return p.CPUTemp }, func(p *history.Point) *float64 { return p.CPUTempMax }, fmtTempV, true},
+	{"GPU temp", func(p *history.Point) *float64 { return p.GPUTemp }, func(p *history.Point) *float64 { return p.GPUTempMax }, fmtTempV, true},
+	{"GPU power", func(p *history.Point) *float64 { return p.GPUPower }, nil, fmtWattsV, false},
 }
 
 func fmtTempV(v float64) string { return fmt.Sprintf("%.0f°C", v) }
@@ -525,6 +530,9 @@ func (m model) histTiles(pts []history.Point, from, to float64, w int) string {
 	pts = pts[i:j]
 	line := ""
 	for _, tl := range histTiles {
+		if tl.temp {
+			tl.fmt = t.tempV
+		}
 		sum, n, peak := 0.0, 0, math.Inf(-1)
 		for k := range pts {
 			v := tl.get(&pts[k])
@@ -574,11 +582,11 @@ func (m model) histPicker(w int) string {
 	var names []string
 	for _, d := range nav {
 		dot := t.normal.Render("●")
-		if !d.online {
+		if !m.isOnline(d) {
 			dot = t.dim.Render("○")
 		}
 		if t.ascii {
-			dot = map[bool]string{true: "*", false: "o"}[d.online]
+			dot = map[bool]string{true: "*", false: "o"}[m.isOnline(d)]
 		}
 		label := dot + " " + orNone(d.name)
 		if c := m.cur(); c != nil && d.id == c.id {
@@ -608,13 +616,18 @@ func (m model) histPicker(w int) string {
 func (m model) histInfo() string {
 	from, to := m.histWindow()
 	span := to - from
-	s := timeLabel(m.msTime(from), span) + " – " + timeLabel(m.msTime(to), span)
+	label := func(ms float64) string { return timeLabel(m.msTime(ms), span) }
+	if f, t := m.msTime(from), m.msTime(to); span <= 36*3600e3 && f.YearDay() != t.YearDay() {
+		// Clock times alone would read "10:28 – 10:28" for 24 h: name the days too.
+		label = func(ms float64) string { return m.msTime(ms).Format("Mon 15:04") }
+	}
+	s := label(from) + " – " + label(to)
 	if r := m.hv.res; r != nil && r.Resolution > 0 {
 		s += " · " + fmtBucket(r.Resolution) + " buckets"
 	}
 	pw := m.histPlotW()
 	tc := cursorTime(m.cursorCol(pw), pw, from, to)
-	return m.theme.dim.Render(s+" · cursor ") + timeLabel(m.msTime(tc), span)
+	return m.theme.dim.Render(s+" · cursor ") + label(tc)
 }
 
 // msTime converts Unix ms to a time in the view's zone.

@@ -6,9 +6,9 @@ machine-monitor · hub hub.lan:7777   1  2  3  4  5  6                        ?/
 5   energy       g    top          R   rename device                            
 6   alerts       G    bottom       D   remove device                            
 tab next view                      w   wake offline device                      
-?   help                           P   power menu                               
+,   settings                       P   power menu                               
+?   help                           a   add a device                             
 q   quit                                                                        
-                                                                                
                                                                                 
                                                                                 
                                                                                 

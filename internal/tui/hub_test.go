@@ -437,7 +437,7 @@ func TestAgo(t *testing.T) {
 	for _, c := range []struct {
 		ago  time.Duration
 		want string
-	}{{10 * time.Second, "just now"}, {5 * time.Minute, "5m ago"}, {3 * time.Hour, "3h ago"}, {72 * time.Hour, "3d ago"}} {
+	}{{3 * time.Second, "just now"}, {11 * time.Second, "11s ago"}, {5 * time.Minute, "5m ago"}, {3 * time.Hour, "3h ago"}, {72 * time.Hour, "3d ago"}} {
 		if got := m.ago(hubNow.Add(-c.ago).UnixMilli()); got != c.want {
 			t.Errorf("ago(%v) = %q, want %q", c.ago, got, c.want)
 		}
@@ -452,12 +452,10 @@ func TestHubStreamEnds(t *testing.T) {
 	m := New(hubOptions(newFakeHub(threeDevices()))).(model)
 	ctx, cancel := context.WithCancel(context.Background())
 	m.ctx = ctx
-	next, cmd := m.Update(m.Init()()) // streamMsg: start reading
+	next, cmd := m.Update(m.startStream()()) // streamMsg: start reading
 	m = next.(model)
-	for range 2 { // connected, snapshot
-		next, cmd = m.Update(cmd())
-		m = next.(model)
-	}
+	next, cmd = m.Update(cmd()) // connected and snapshot, in one batch
+	m = next.(model)
 	if !m.conn.connected || !m.conn.snapshot {
 		t.Fatalf("not synced: %+v", m.conn)
 	}

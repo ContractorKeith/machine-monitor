@@ -21,4 +21,4 @@ machine-monitor · hub hub.lan:7777   1 Dashboard  2  3  4  5  6              ?/
                                                                                 
                                                                                 
 Offline (1)  nas-02 (3h ago)                                                    
-hub hub.lan:7777 · ←↑↓→ select · J/K move · R rename · D remove · ? help        
+hub hub.lan:7777 · ←↑↓→ select · a add · / filter · , settings · ? help         

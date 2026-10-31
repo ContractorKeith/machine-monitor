@@ -1,4 +1,4 @@
-machine-monitor · ws-01   1  2  3  4  5 Energy  6                            ?/q
+machine-monitor · hub hub.lan:7777   1  2  3  4  5 Energy  6                 ?/q
 Energy per day                                       ■ ws-01  ■ studio  ■ nas-02
    25 kWh                                                                       
                  ▂  ▄ ▄ ▇  ▄ ▆        ▂  ▄ ▄ ▇  ▄ ▆        ▂  ▄ ▄ ▇  ▄ ▆        

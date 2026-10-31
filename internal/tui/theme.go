@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"fmt"
+
 	"charm.land/lipgloss/v2"
 )
 
@@ -26,7 +28,28 @@ type theme struct {
 	// Glyphs, swapped for ASCII by the fallback.
 	fill, empty rune
 	ascii       bool
+
+	fahrenheit bool // temperatures read in °F (Settings); bands stay in °C
 }
+
+// temp converts a °C value to the unit in use.
+func (t theme) temp(c float64) float64 {
+	if t.fahrenheit {
+		return c*9/5 + 32
+	}
+	return c
+}
+
+// tempV formats a °C value in the unit in use: "72°C" or "162°F".
+func (t theme) tempV(c float64) string {
+	if t.fahrenheit {
+		return fmt.Sprintf("%.0f°F", t.temp(c))
+	}
+	return fmt.Sprintf("%.0f°C", c)
+}
+
+// tempDeg is tempV without the letter, for axes and tight tables: "72°".
+func (t theme) tempDeg(c float64) string { return fmt.Sprintf("%.0f°", t.temp(c)) }
 
 func newTheme(noColor, ascii bool) theme {
 	t := theme{

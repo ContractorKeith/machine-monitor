@@ -122,7 +122,7 @@ func (t theme) fmtTemp(c *float64) string {
 	if c == nil {
 		return none
 	}
-	return t.tempStyle(*c).Render(fmt.Sprintf("%.0f°C", *c))
+	return t.tempStyle(*c).Render(t.tempV(*c))
 }
 
 // bar draws a w-cell gauge for a percentage; an unknown value draws an empty track.

@@ -30,6 +30,9 @@ const (
 	viewEnergy
 	viewAlerts
 	viewCount
+	// Views without a number or tab.
+	viewSettings  = viewCount     // `,`
+	viewAddDevice = viewCount + 1 // `a` on the dashboard or in Settings (hub mode)
 )
 
 var viewNames = [viewCount]string{"Dashboard", "Device", "Processes", "History", "Energy", "Alerts"}
@@ -76,6 +79,9 @@ type model struct {
 	confirmID string // device awaiting remove confirmation
 	notice    string // last action's error, until the next action or reconnect
 	orderGen  int    // counts order and snapshot events, so a late reorder failure can't undo them
+	// While a batch of stream events applies: devs is already this model's own copy (owned)
+	// and needs sorting at the end (dirty).
+	batching, owned, dirty bool
 
 	act actState // remote processes, wake and the power menu (actions.go)
 
@@ -87,6 +93,10 @@ type model struct {
 	ev    energyState    // the Energy view (energy.go)
 	guess power.Settings // price guessed from the time zone, until one is saved
 
+	set   settingsState // the Settings view (settings.go)
+	add   addState      // the Add device view (add.go)
+	today todayState    // cost since midnight, for the dashboard header (energy.go)
+
 	procs       []report.Process
 	visible     []report.Process // procs filtered and sorted; refreshProcs keeps it current
 	procsErr    error
@@ -96,7 +106,9 @@ type model struct {
 	procCursor  int
 	procOffset  int
 	filter      textinput.Model
-	filterValue string
+	filterValue string // the Processes filter
+	cardFilter  string // the dashboard's filter on device names
+	filterView  view   // the view the open filter input belongs to
 }
 
 // New builds the model. Tests drive it through teatest; Run wraps it in a program.
@@ -124,6 +136,11 @@ func New(o Options) tea.Model {
 	if o.Now == nil {
 		o.Now = time.Now
 	}
+	p := loadPrefs(o.PrefsPath)
+	th.fahrenheit = p.Fahrenheit
+	if o.Price == nil && o.Hub == nil {
+		o.Price = p.Price
+	}
 	return model{
 		opts: o, theme: th, keys: newKeyMap(o.Hub != nil), help: h,
 		width: 80, height: 24,
@@ -137,9 +154,11 @@ func New(o Options) tea.Model {
 // Init starts the feed: the first local sample, or the hub's stream.
 func (m model) Init() tea.Cmd {
 	if m.multi() {
-		return m.startStream()
+		// The alerts load feeds the header's count; Init's model is discarded, so
+		// the alerts state is set again when the reply arrives.
+		return tea.Batch(m.startStream(), tickHub(), m.fetchToday(), m.loadAlerts())
 	}
-	return m.collect()
+	return tea.Batch(m.collect(), m.fetchToday())
 }
 
 // multi reports whether the TUI follows a hub (many devices) rather than this machine.
@@ -196,6 +215,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if next, cmd, ok := m.updateViews(msg); ok {
 		return next, cmd
 	}
+	if next, cmd, ok := m.updateSettings(msg); ok {
+		return next, cmd
+	}
+	if next, cmd, ok := m.updateToday(msg); ok {
+		return next, cmd
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -248,25 +273,10 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.actionKey(msg)
 	}
 	if m.filter.Focused() {
-		switch msg.String() {
-		case "enter":
-			m.filter.Blur()
-			m.filterValue = strings.TrimSpace(m.filter.Value())
-		case "esc":
-			m.filter.Blur()
-			m.filter.SetValue("")
-			m.filterValue = ""
-		default:
-			var cmd tea.Cmd
-			m.filter, cmd = m.filter.Update(msg)
-			m.filterValue = strings.TrimSpace(m.filter.Value())
-			m.procCursor, m.procOffset = 0, 0
-			m.refreshProcs()
-			return m, cmd
-		}
-		m.procCursor, m.procOffset = 0, 0
-		m.refreshProcs()
-		return m, nil
+		return m.filterKey(msg)
+	}
+	if m.set.form.open && m.view == viewSettings {
+		return m.priceFormKey(msg)
 	}
 	if next, cmd, ok := m.alertsPreKey(msg); ok {
 		return next, cmd
@@ -295,7 +305,15 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, k.Alerts):
 		return m.switchTo(viewAlerts)
 	case key.Matches(msg, k.Next):
-		return m.switchTo((m.view + 1) % viewCount)
+		return m.switchTo((m.view + 1) % viewCount) // Settings and Add device go to view 1
+	case key.Matches(msg, k.Settings) && m.view != viewSettings:
+		m.set.prev = m.view
+		if m.view == viewAddDevice {
+			m.set.prev = m.add.prev
+		}
+		return m.switchTo(viewSettings)
+	case key.Matches(msg, k.Filter) && !m.showHelp && ((m.view == viewDashboard && m.multi()) || m.view == viewProcesses):
+		return m.openFilter()
 	}
 
 	if m.showHelp { // view keys would act on a view that isn't shown
@@ -303,6 +321,10 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	switch m.view {
 	case viewDashboard:
+		if key.Matches(msg, k.Clear) && m.cardFilter != "" {
+			m.cardFilter = ""
+			return m, nil
+		}
 		if m.multi() {
 			return m.gridKey(msg)
 		}
@@ -316,8 +338,52 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.energyKey(msg)
 	case viewAlerts:
 		return m.alertsKey(msg)
+	case viewSettings:
+		return m.settingsKey(msg)
+	case viewAddDevice:
+		return m.addKey(msg)
 	}
 	return m, nil
+}
+
+// openFilter focuses the filter input for the open view: device names on the dashboard,
+// processes in Processes.
+func (m model) openFilter() (tea.Model, tea.Cmd) {
+	m.filterView = m.view
+	m.filter.Placeholder = "name, user, pid or command"
+	value := m.filterValue
+	if m.view == viewDashboard {
+		m.filter.Placeholder = "device name"
+		value = m.cardFilter
+	}
+	m.filter.SetValue(value)
+	m.filter.CursorEnd()
+	return m, m.filter.Focus()
+}
+
+// filterKey handles a key while the filter input is open: typing filters at once, enter
+// keeps the filter, esc clears it.
+func (m model) filterKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	switch msg.String() {
+	case "enter":
+		m.filter.Blur()
+	case "esc":
+		m.filter.Blur()
+		m.filter.SetValue("")
+	default:
+		m.filter, cmd = m.filter.Update(msg)
+	}
+	v := strings.TrimSpace(m.filter.Value())
+	if m.filterView == viewDashboard {
+		m.cardFilter = v
+		m.selectShown()
+		return m, cmd
+	}
+	m.filterValue = v
+	m.procCursor, m.procOffset = 0, 0
+	m.refreshProcs()
+	return m, cmd
 }
 
 // switchTo changes view and closes help; opening Processes, History, Energy or Alerts
@@ -328,7 +394,12 @@ func (m model) switchTo(v view) (tea.Model, tea.Cmd) {
 	procs := m.maybeProcs()
 	alerts := m.maybeLoadAlerts()
 	open := m.openView()
-	return m, tea.Batch(procs, alerts, open)
+	var set tea.Cmd
+	if v == viewSettings {
+		m.set.cursor, m.set.form, m.set.notice = 0, priceForm{}, ""
+		set = m.openSettings()
+	}
+	return m, tea.Batch(procs, alerts, open, set)
 }
 
 // bodyHeight is the rows between the header (and the alert banner) and the footer.
@@ -408,6 +479,10 @@ func (m model) render() string {
 		body, foot = m.energyView(), m.energyFooter()
 	case m.view == viewAlerts:
 		body, foot = m.alertsView(), m.alertsFooter()
+	case m.view == viewSettings:
+		body, foot = m.settingsView(), m.settingsFooter()
+	case m.view == viewAddDevice:
+		body, foot = m.addView(), m.addFooter()
 	}
 	if h < 3 { // no room for the header and footer: the body alone
 		return fit(body, w, h)
@@ -419,17 +494,31 @@ func (m model) render() string {
 	return top + "\n" + fit(body, w, m.bodyHeight()) + "\n" + fit(m.theme.dim.Render(foot), w, 1)
 }
 
-// header shows the app, the machine, the view tabs and the help hint.
+// header shows the app, the hub or machine, the view tabs and the help hint.
 func (m model) header() string {
 	t := m.theme
-	left := t.title.Render("machine-monitor")
+	title := t.title.Render("machine-monitor")
+	sep := " " + t.dim.Render("·") + " "
+	left := title
 	switch {
-	case m.multi() && (m.view == viewDashboard || m.view == viewAlerts || m.cur() == nil):
-		left += " " + t.dim.Render("·") + " hub " + m.hubHost()
 	case m.multi():
-		left += " " + t.dim.Render("·") + " " + m.cur().name
+		left += sep + "hub " + m.hubHost()
+		// Views about one device name it after the hub, so the hub never drops out.
+		if d := m.cur(); d != nil && (m.view == viewDevice || m.view == viewProcesses || m.view == viewHistory) {
+			arrow := " › "
+			if t.ascii {
+				arrow = " > "
+			}
+			left += t.dim.Render(arrow) + d.name
+		}
 	case m.report() != nil && m.report().Hostname != nil:
-		left += " " + t.dim.Render("·") + " " + *m.report().Hostname
+		left += sep + *m.report().Hostname
+	}
+	switch m.view {
+	case viewSettings:
+		left += sep + t.label.Render("Settings")
+	case viewAddDevice:
+		left += sep + t.label.Render("Add device")
 	}
 	// Tabs are named; when they don't fit, only the open one keeps its name.
 	tabs := func(compact bool) string {
@@ -447,18 +536,20 @@ func (m model) header() string {
 		}
 		return "  " + strings.Join(out, "")
 	}
-	// A long hub address or many tabs: shorten the hint first, then the tabs, then drop the
-	// hint.
+	// A long hub address or a narrow window: shorten the hint first, then the tabs, then
+	// drop the hint, then the hub or machine name, then the title, so the open view's name
+	// stays in sight.
 	for _, try := range []struct {
+		left    string
 		compact bool
 		hint    string
-	}{{false, "? help  q quit"}, {false, "?/q"}, {true, "?/q"}} {
-		l, r := left+tabs(try.compact), t.dim.Render(try.hint)
+	}{{left, false, "? help  q quit"}, {left, false, "?/q"}, {left, true, "?/q"}, {left, true, ""}, {title, true, ""}} {
+		l, r := try.left+tabs(try.compact), t.dim.Render(try.hint)
 		if lipgloss.Width(l)+1+lipgloss.Width(r) <= m.width {
 			return spread(l, r, m.width)
 		}
 	}
-	return spread(left+tabs(true), "", m.width)
+	return spread(strings.TrimPrefix(tabs(true), "  "), "", m.width)
 }
 
 // statusLine is the footer for views without their own: collection state.

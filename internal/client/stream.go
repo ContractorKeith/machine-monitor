@@ -35,15 +35,22 @@ const (
 	defaultEventMessage = "message"      // SSE's name for an event without "event:"
 )
 
-// Event is one message from the stream. Only the fields its Type uses are set; Raw always
-// holds the event's JSON, for types this struct doesn't break out (alert, alerts,
-// actionResult, energySettings, and anything a newer hub adds).
+// Event is one message from the stream. Only the fields its Type uses are set; Raw holds
+// the event's JSON, for types this struct doesn't break out (alert, alerts, actionResult,
+// energySettings, and anything a newer hub adds). A snapshot's Raw is nil: its devices are
+// already decoded, and keeping a second copy of a multi-megabyte snapshot would double it.
+//
+// Reports and status events that pile up while the consumer is busy are merged (see
+// eventQueue): a report then carries every sample since the device's last delivered report
+// in Samples (Sample is the newest), and a status carries the union of the flags, newest
+// winning.
 type Event struct {
 	Type    string
 	Devices []Device
 	ID      string
 	Device  *Device
 	Sample  *history.Point
+	Samples []history.Point // Report: every sample this event stands for, oldest first
 	Online  map[string]bool
 	Order   map[string]int
 	Raw     json.RawMessage
@@ -54,13 +61,19 @@ type Event struct {
 
 // Stream defaults.
 const (
-	// streamBuffer is how many events may wait for a slow consumer. Past that the client
-	// drops the connection rather than block reading it, then reconnects for a fresh snapshot.
+	// streamBuffer is how many events may wait for a slow consumer on top of two per device
+	// (reports and status events are merged, so a device holds one slot per connection).
+	// Past that the client drops the connection rather than block reading it, then
+	// reconnects for a fresh snapshot.
 	streamBuffer = 256
 	// maxLine caps one SSE line, and maxEvent the data of one event. A snapshot of
-	// MaxDevices with history is the largest legitimate event, at a few MB.
-	maxLine  = 32 << 20
-	maxEvent = 32 << 20
+	// MaxDevices with ten minutes of history each is the largest legitimate event: about
+	// 20 MB from 250 busy devices, so the cap leaves room for bigger reports.
+	maxLine  = maxResponse
+	maxEvent = maxResponse
+	// maxSamples caps the samples one merged report keeps: a consumer that is busy for
+	// longer than this many report intervals loses the oldest sparkline points, not memory.
+	maxSamples = 64
 	// idleTimeout drops a stream that has sent nothing for this long: the hub sends a status
 	// event every 3 s, so silence means the network or the hub is gone.
 	idleTimeout = 20 * time.Second
@@ -71,7 +84,7 @@ const (
 
 // streamConfig holds the stream's limits; tests shrink them.
 type streamConfig struct {
-	buffer             int
+	buffer             int // queue slots on top of one per device
 	maxLine            int
 	maxEvent           int
 	idle               time.Duration
@@ -95,10 +108,12 @@ func (c *Client) Stream(ctx context.Context) <-chan Event {
 }
 
 func (c *Client) streamWith(ctx context.Context, cfg streamConfig) <-chan Event {
-	out := make(chan Event, cfg.buffer)
+	out := make(chan Event)
+	q := newEventQueue()
+	go q.pump(ctx, out)
 	go func() {
-		defer close(out)
-		st := &streamState{cfg: cfg, out: out, retry: cfg.retryMin}
+		defer q.close()
+		st := &streamState{cfg: cfg, q: q, retry: cfg.retryMin}
 		delay := time.Duration(0)
 		for {
 			err := c.streamOnce(ctx, st)
@@ -142,21 +157,21 @@ func nextDelay(prev, base, limit time.Duration) time.Duration {
 // streamState carries what survives reconnects.
 type streamState struct {
 	cfg         streamConfig
-	out         chan Event
+	q           *eventQueue
+	devices     int           // devices in the last snapshot: the queue holds one slot each
 	retry       time.Duration // the hub's "retry:" or retryMin
 	lastID      string        // the last "id:", sent back as Last-Event-ID
 	gotSnapshot bool          // the current connection delivered its snapshot
 }
 
-// send delivers a client-made event, waiting for the consumer. It is only called while no
-// connection is being read, so waiting holds up nothing but the next reconnect.
+// send queues a client-made event. It never waits for the consumer, and never overflows:
+// these are few (one per connection attempt), and the backoff spaces them out.
 func (st *streamState) send(ctx context.Context, e Event) bool {
-	select {
-	case st.out <- e:
-		return true
-	case <-ctx.Done():
+	if ctx.Err() != nil {
 		return false
 	}
+	st.q.push(e, -1)
+	return true
 }
 
 // streamOnce runs one connection: proof, request, then events until it fails.
@@ -218,13 +233,12 @@ func (c *Client) streamOnce(ctx context.Context, st *streamState) error {
 		if !ok {
 			continue // not JSON, or not a shape we know: skip it, keep the stream
 		}
-		select {
-		case st.out <- e:
-		default:
-			return errOverflow
-		}
 		if e.Type == EventSnapshot {
 			st.gotSnapshot = true
+			st.devices = len(e.Devices)
+		}
+		if !st.q.push(e, st.cfg.buffer+2*st.devices) { // a reconnect may queue a second round
+			return errOverflow
 		}
 	}
 }
@@ -244,7 +258,7 @@ type wireEvent struct {
 // an "event:" name is the fallback for servers that use SSE's own field.
 func decodeEvent(ev sseEvent) (Event, bool) {
 	var w wireEvent
-	if err := json.Unmarshal([]byte(ev.data), &w); err != nil {
+	if err := json.Unmarshal(ev.data, &w); err != nil {
 		return Event{}, false
 	}
 	typ := w.Type
@@ -254,11 +268,19 @@ func decodeEvent(ev sseEvent) (Event, bool) {
 	if typ == "" || typ == EventConnected || typ == EventDisconnected {
 		return Event{}, false
 	}
-	if typ == EventSnapshot && w.Devices == nil {
-		w.Devices = []Device{}
+	raw := json.RawMessage(ev.data)
+	if typ == EventSnapshot {
+		raw = nil
+		if w.Devices == nil {
+			w.Devices = []Device{}
+		}
 	}
-	return Event{Type: typ, Devices: w.Devices, ID: w.ID, Device: w.Device, Sample: w.Sample,
-		Online: w.Online, Order: w.Order, Raw: json.RawMessage(ev.data)}, true
+	e := Event{Type: typ, Devices: w.Devices, ID: w.ID, Device: w.Device, Sample: w.Sample,
+		Online: w.Online, Order: w.Order, Raw: raw}
+	if e.Sample != nil {
+		e.Samples = []history.Point{*e.Sample}
+	}
+	return e, true
 }
 
 // ---- SSE parsing (WHATWG HTML "server-sent events") ----------------------------------------
@@ -266,7 +288,7 @@ func decodeEvent(ev sseEvent) (Event, bool) {
 // sseEvent is one dispatched message.
 type sseEvent struct {
 	name string  // "event:", or "message"
-	data string  // "data:" lines joined with "\n"
+	data []byte  // "data:" lines joined with "\n"; the event's own copy
 	id   *string // "id:", when the message set one
 }
 
@@ -313,7 +335,8 @@ func (r *sseReader) next() (sseEvent, error) {
 			if name == "" {
 				name = defaultEventMessage
 			}
-			return sseEvent{name: name, data: strings.TrimSuffix(data.String(), "\n"), id: id}, nil
+			b := data.Bytes()
+			return sseEvent{name: name, data: b[:len(b)-1], id: id}, nil // drop the last "\n"
 		}
 		if line[0] == ':' {
 			continue // comment, e.g. a keep-alive
