@@ -51,7 +51,7 @@ var ErrNotHub = errors.New("not a machine-monitor hub")
 
 // ErrBadProof means the server could not prove it holds the key: it is not the hub the key
 // belongs to. The key was not sent.
-var ErrBadProof = errors.New("the server that answered does not hold this hub's key")
+var ErrBadProof = errors.New("the server that answered didn't prove it holds this key: the key may be mistyped, or this isn't the hub it belongs to")
 
 // NewHTTPClient is the client used for hub calls: a short timeout, no proxy (hubs are on
 // the LAN or tailnet, and a proxy would see the key) and no redirects (a redirect would

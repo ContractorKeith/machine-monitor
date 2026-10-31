@@ -298,6 +298,11 @@ func TestKeyFor(t *testing.T) {
 	if k, err := KeyFor(path, "http://a:7777"); k != "s3cret" || err != nil {
 		t.Errorf("same hub: %q, %v; want the key", k, err)
 	}
+	// connect writes "hubUrl" (agent.SaveClient), upstream writes "token".
+	os.WriteFile(path, []byte(`{"hubUrl":"http://a:7777","token":"fromconnect"}`), 0o600)
+	if k, err := KeyFor(path, "http://a:7777"); k != "fromconnect" || err != nil {
+		t.Errorf("hubUrl file: %q, %v; want the key", k, err)
+	}
 	if k, err := KeyFor(path, "http://b:7777"); k != "" || err != nil {
 		t.Errorf("other hub: %q, %v; want no key", k, err)
 	}

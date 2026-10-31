@@ -38,6 +38,19 @@ func runAgent(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "machine-monitor agent: unexpected argument %q\n", fs.Arg(0))
 		return 2
 	}
+	hubURL := ""
+	if *hubFlag != "" {
+		u, linkKey, err := agent.NormalizeURL(*hubFlag)
+		if err != nil {
+			fmt.Fprintf(stderr, "machine-monitor agent: %v\n", err)
+			return 2
+		}
+		if linkKey != "" {
+			fmt.Fprintf(stderr, "machine-monitor agent: %v\n", agent.ErrKeyInURL)
+			return 2
+		}
+		hubURL = u
+	}
 	paths, err := config.Default()
 	if err != nil {
 		fmt.Fprintf(stderr, "machine-monitor agent: %v\n", err)
@@ -48,17 +61,9 @@ func runAgent(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "machine-monitor agent: %v\n", err)
 		return 1
 	}
-	hubURL, key := cl.HubURL, cl.Key
-	if *hubFlag != "" {
-		u, linkKey, err := agent.NormalizeURL(*hubFlag)
-		if err != nil {
-			fmt.Fprintf(stderr, "machine-monitor agent: %v\n", err)
-			return 2
-		}
-		hubURL = u
-		if linkKey != "" {
-			key = linkKey
-		}
+	key := cl.Key
+	if hubURL == "" {
+		hubURL = cl.HubURL
 	}
 	if *keyFlag != "" {
 		key = *keyFlag
@@ -72,11 +77,6 @@ func runAgent(args []string, stdout, stderr io.Writer) int {
 		seen = filepath.Join(filepath.Dir(paths.Client), "agent-commands.json")
 	}
 	return startAgentWith(hubURL, key, *allowPower, seen, stderr)
-}
-
-// startAgent runs the report loop, power actions off, until SIGINT or SIGTERM.
-func startAgent(hubURL, key string, stderr io.Writer) int {
-	return startAgentWith(hubURL, key, false, "", stderr)
 }
 
 // startAgentWith runs the report loop until SIGINT or SIGTERM.

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -145,4 +147,18 @@ func sha256Line(data []byte, name string) string {
 func sha256Hex(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
+}
+
+// Before the first release GitHub answers 404; update says so and exits 0 (skeptic L8).
+func TestUpdateWithNoReleaseYet(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+	oldS, oldV := updateSource, version
+	updateSource = func() update.Source { return update.Source{API: srv.URL, Download: srv.URL, Repo: update.Repo} }
+	version = "dev"
+	t.Cleanup(func() { updateSource, version = oldS, oldV })
+	code, out, errOut := runUpdateCmd(t, "--check")
+	if code != 0 || errOut != "" || !strings.Contains(out, "machine-monitor dev. No release has been published yet") {
+		t.Errorf("exit %d, stdout %q, stderr %q", code, out, errOut)
+	}
 }

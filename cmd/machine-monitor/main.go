@@ -24,9 +24,9 @@ Usage:
   machine-monitor --hub URL                  open the TUI against a hub
   machine-monitor hub [--port 7777]          run a headless hub (also monitors itself)
   machine-monitor agent --hub URL            report this machine to a hub
-  machine-monitor connect URL                pair this machine with a hub and open the TUI
+  machine-monitor connect [URL]              pair with a hub (finds LAN hubs if no URL), open the TUI
   machine-monitor status --json              print one report
-  machine-monitor export ID --range 7d       export a device's history
+  machine-monitor export ID|NAME --range 7d  export a device's history
   machine-monitor service install|uninstall  start at login
   machine-monitor update                     update to the latest release
   machine-monitor help                       show this help
@@ -91,6 +91,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		fmt.Fprintf(stderr, "machine-monitor: unknown command %q\n\n%s", name, usage)
 		return 2
+	}
+	if name == "export" { // the global --hub and --key mean the same thing here
+		if *hub != "" {
+			rest = append([]string{"--hub", *hub}, rest...)
+		}
+		if *key != "" {
+			rest = append([]string{"--key", *key}, rest...)
+		}
 	}
 	return cmd(rest, stdout, stderr)
 }

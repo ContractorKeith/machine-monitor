@@ -14,11 +14,12 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/export"
 )
 
-const exportUsage = `usage: machine-monitor export ID [--range 1h|6h|24h|7d|30d | --from TIME [--to TIME]]
-                             [--format csv|json] [--hub URL]
+const exportUsage = `usage: machine-monitor export ID|NAME [--range 1h|6h|24h|7d|30d | --from TIME [--to TIME]]
+                             [--format csv|json] [--hub URL] [--key KEY]
 
-Writes a device's 1-minute history to stdout. Without --hub it reads this machine's history
-(kept by machine-monitor hub); with --hub it asks that hub, using the key in client.json.
+Writes a device's 1-minute history to stdout. The device is its id or its name as the TUI
+shows it. Without --hub it reads this machine's history (kept by machine-monitor hub); with
+--hub it asks that hub, using the key in client.json (or --key).
 --range ends now. --from and --to take RFC 3339 (2026-10-31T14:00:00Z) or a date
 (2026-10-31); --to defaults to now and --from to 24h before --to. Without either, the range
 is the last 24h.
@@ -37,6 +38,7 @@ func runExport(args []string, stdout, stderr io.Writer) int {
 	to := fs.String("to", "", "end time")
 	format := fs.String("format", "csv", "csv or json")
 	hubURL := fs.String("hub", "", "hub to read from")
+	keyFlag := fs.String("key", "", "hub key (default: the key in client.json for that hub)")
 
 	// flag stops at the first positional, so take the ID wherever it sits among the flags.
 	var ids []string
@@ -67,15 +69,17 @@ func runExport(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(err)
 	}
-	var src export.Source = export.Local{Dir: paths.History, Now: exportNow}
+	var src export.Source = export.Local{Dir: paths.History, DevicesFile: paths.Devices, Now: exportNow}
 	if *hubURL != "" {
 		u, err := export.HubURL(*hubURL)
 		if err != nil {
 			return fail(err)
 		}
-		key, err := export.KeyFor(paths.Client, u)
-		if err != nil {
-			return fail(err)
+		key := *keyFlag
+		if key == "" {
+			if key, err = export.KeyFor(paths.Client, u); err != nil {
+				return fail(err)
+			}
 		}
 		src = export.Hub{URL: u, Key: key}
 	}
@@ -83,7 +87,11 @@ func runExport(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	w := bufio.NewWriter(stdout)
-	opts := export.Options{ID: ids[0], From: start, To: end, Format: *format, Loc: time.Local}
+	id, err := export.ResolveDevice(ctx, src, ids[0])
+	if err != nil {
+		return fail(err)
+	}
+	opts := export.Options{ID: id, From: start, To: end, Format: *format, Loc: time.Local}
 	if err := export.Run(ctx, src, opts, w); err != nil {
 		return fail(err)
 	}

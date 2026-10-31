@@ -47,3 +47,7 @@ func SaveClient(path string, c Client) error {
 	}
 	return config.WriteFile0600(path, append(b, '\n'))
 }
+
+// ErrKeyInURL is why a hub URL with ?key= is refused where it would be stored or shown.
+var ErrKeyInURL = errors.New("the hub URL carries a key (?key=); a key in a URL ends up in process lists and unit files. " +
+	"Pair instead, with: echo KEY | machine-monitor connect --key-stdin URL")
