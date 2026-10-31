@@ -715,6 +715,8 @@ func TestNormalizeKeepsIntegratedFlag(t *testing.T) {
 	}
 	if len(r.GPUs) != 3 || !r.GPUs[0].Integrated || r.GPUs[1].Integrated || r.GPUs[2].Integrated {
 		t.Fatalf("GPUs = %+v", r.GPUs)
+	}
+}
 
 // CleanText uses the shared textclean policy: lookalikes go, joiners stay (skeptic pass 3, N18).
 func TestCleanTextSharedPolicy(t *testing.T) {
