@@ -22,6 +22,11 @@ type device struct {
 	watts     *float64 // the hub's at-the-wall estimate; local mode estimates while drawing
 	cpu, mem  series
 	gpu       series
+	// Hub mode: our hub's snapshot carries no history, so the sparklines start with live
+	// samples (liveFrom is the first one's time, Unix ms) until sparkSeed fills in the
+	// recent past (seeded).
+	liveFrom float64
+	seeded   bool
 }
 
 // push records one report and its samples.
@@ -39,6 +44,9 @@ func (d *device) push(r *report.Report) {
 
 // pushPoint records one history sample from the hub.
 func (d *device) pushPoint(p history.Point) {
+	if d.liveFrom == 0 {
+		d.liveFrom = p.T
+	}
 	d.cpu.push(p.CPU)
 	d.mem.push(p.Mem)
 	d.gpu.push(p.GPU)
@@ -66,7 +74,23 @@ func fromHub(v client.Device) device {
 	for _, p := range v.History {
 		d.pushPoint(p)
 	}
+	d.seeded = len(v.History) > 0 // an upstream hub's snapshot has it already
 	return d
+}
+
+// seed puts the recent past (pts, oldest first) in front of the live samples the
+// sparklines have so far, skipping points the live ones already cover.
+func (d *device) seed(pts []history.Point) {
+	var cpu, mem, gpu series
+	for _, p := range pts {
+		if d.liveFrom == 0 || p.T < d.liveFrom {
+			cpu.push(p.CPU)
+			mem.push(p.Mem)
+			gpu.push(p.GPU)
+		}
+	}
+	d.cpu, d.mem, d.gpu = cpu.then(d.cpu), mem.then(d.mem), gpu.then(d.gpu)
+	d.seeded = true
 }
 
 // sortDevices puts devices in the hub's display order: order, then first seen, then id.

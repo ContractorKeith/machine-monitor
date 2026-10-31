@@ -83,6 +83,7 @@ type model struct {
 	// While a batch of stream events applies: devs is already this model's own copy (owned)
 	// and needs sorting at the end (dirty).
 	batching, owned, dirty bool
+	seeding                string // device whose sparkline history is being fetched (sparkSeed)
 
 	act actState // remote processes, wake and the power menu (actions.go)
 

@@ -52,6 +52,11 @@ type (
 		done bool           // the stream closed after them
 	}
 	hubDoneMsg struct{} // the stream ended for good
+	sparkMsg   struct {
+		id  string
+		pts []history.Point
+		err error
+	}
 	hubTickMsg struct{}
 	renameMsg  struct {
 		dev *client.Device
@@ -147,6 +152,7 @@ func (m model) applyBatch(evs []client.Event, done bool) (model, tea.Cmd) {
 	}
 	m.batching, m.owned, m.dirty = false, false, false
 	m.clampScroll()
+	cmds = append(cmds, m.sparkSeed())
 	switch {
 	case done:
 		m.conn.ended, m.conn.connected = true, false
@@ -200,7 +206,19 @@ func (m model) updateHub(msg tea.Msg) (model, tea.Cmd, bool) {
 		if m.conn.snapshot && m.now().Sub(m.conn.lastEvent) >= staleAfter {
 			m.conn.stale = true
 		}
-		return m, tickHub(), true
+		seed := m.sparkSeed() // before m is returned: it marks the fetch in flight
+		return m, tea.Batch(tickHub(), seed), true
+	case sparkMsg:
+		m.seeding = ""
+		if m.hasDev(msg.id) {
+			m.editDev(msg.id, func(d *device) {
+				if msg.err == nil {
+					d.seed(msg.pts)
+				}
+				d.seeded = true // on an error the sparklines fill from live reports
+			})
+		}
+		return m, nil, true
 	case renameMsg:
 		if msg.err != nil {
 			m.notice = "rename failed: " + hubErr(msg.err)
@@ -301,6 +319,31 @@ func (m *model) apply(ev client.Event) {
 		return // alerts and the rest arrive with their own views
 	}
 	m.resort()
+}
+
+// sparkSpan is how far back sparkSeed reads: a full sparkline at the 2 s report interval.
+const sparkSpan = historyLen * 2 * time.Second
+
+// sparkSeed fetches the selected device's recent history for its sparklines, when they have
+// only live samples: our hub's compact snapshot sends no history, so this reads it on
+// demand, one device at a time, as the selection reaches it. Other cards fill from reports.
+func (m *model) sparkSeed() tea.Cmd {
+	d, src := m.cur(), m.source()
+	if src == nil || d == nil || d.seeded || m.seeding != "" || !m.conn.snapshot {
+		return nil
+	}
+	id, parent := d.id, m.ctx
+	m.seeding = id
+	to := float64(m.now().UnixMilli())
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(parent, viewTimeout)
+		defer cancel()
+		res, err := src.History(ctx, id, to-float64(sparkSpan.Milliseconds()), to, historyLen)
+		if err != nil {
+			return sparkMsg{id: id, err: err}
+		}
+		return sparkMsg{id: id, pts: res.Points}
+	}
 }
 
 // removeDev drops a device, moving the selection to its neighbour.

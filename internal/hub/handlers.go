@@ -272,7 +272,12 @@ func (h *Hub) handleInfo(w http.ResponseWriter, r *http.Request) {
 
 func (h *Hub) handleDevices(w http.ResponseWriter, r *http.Request) {
 	h.mu.Lock()
-	v := h.views()
+	var v any
+	if wantsCompact(r) { // no history: see stream.go
+		v = h.compactViews()
+	} else {
+		v = h.views()
+	}
 	h.mu.Unlock()
 	sendJSON(w, http.StatusOK, v)
 }
