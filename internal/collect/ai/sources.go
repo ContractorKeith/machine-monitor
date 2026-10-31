@@ -6,6 +6,7 @@ package ai
 import (
 	"bytes"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -169,30 +171,55 @@ func (m lmsModel) name() *string {
 	return nil
 }
 
-// lmsModels asks the LM Studio CLI what is loaded. Only when LM Studio is already running:
-// `lms` starts its server otherwise.
-func (d *detector) lmsModels(ctx context.Context) []lmsModel {
+// lmsModels asks the LM Studio CLI what is loaded, and returns LM Studio's pids. Only when
+// LM Studio is already running: `lms` starts its server otherwise.
+func (d *detector) lmsModels(ctx context.Context) ([]lmsModel, []int) {
 	if len(d.lms) == 0 {
-		return nil
+		return nil, nil
 	}
-	if _, err := os.Stat(d.lms[0]); err != nil || !d.lmsRunning(ctx) {
-		return nil
+	if _, err := os.Stat(d.lms[0]); err != nil {
+		return nil, nil
+	}
+	pids := d.lmsPIDs(ctx)
+	if len(pids) == 0 {
+		return nil, nil
 	}
 	argv := append(append([]string{}, d.lms...), "ps", "--json")
 	var arr []lmsModel
 	if json.Unmarshal([]byte(runCmd(ctx, argv...)), &arr) != nil {
-		return nil
+		return nil, nil
 	}
-	return arr
+	return arr, pids
 }
 
-// lmsRunning reports whether an LM Studio app or llmster daemon process exists.
-func lmsRunning(ctx context.Context) bool {
+// lmsPIDs lists LM Studio app and llmster daemon processes.
+func lmsPIDs(ctx context.Context) []int {
 	if runtime.GOOS == "windows" {
-		out := strings.ToLower(runCmd(ctx, "tasklist", "/FO", "CSV", "/NH"))
-		return strings.Contains(out, `"lm studio.exe"`) || strings.Contains(out, `"llmster.exe"`)
+		return parseTasklist(runCmd(ctx, "tasklist", "/FO", "CSV", "/NH"), "lm studio.exe", "llmster.exe")
 	}
-	return strings.TrimSpace(runCmd(ctx, "pgrep", "-f", `llmster|LM Studio|lmstudio`)) != ""
+	var pids []int
+	for _, f := range strings.Fields(runCmd(ctx, "pgrep", "-f", `llmster|LM Studio|lmstudio`)) {
+		if pid, err := strconv.Atoi(f); err == nil && pid > 0 {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
+}
+
+// parseTasklist returns the pids of `tasklist /FO CSV /NH` rows whose image is one of names
+// (lower case).
+func parseTasklist(out string, names ...string) []int {
+	var pids []int
+	for _, line := range strings.Split(out, "\n") {
+		rec, err := csv.NewReader(strings.NewReader(line)).Read()
+		if err != nil || len(rec) < 2 || !slices.Contains(names, strings.ToLower(rec[0])) {
+			continue
+		}
+		if pid, err := strconv.Atoi(rec[1]); err == nil && pid > 0 {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
 }
 
 // comfyRunning reports whether a ComfyUI server answers on the default port.

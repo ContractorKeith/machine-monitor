@@ -43,10 +43,14 @@ type detector struct {
 	ollamaPort string
 	comfyPort  string // default ComfyUI port when a process doesn't pass --port
 	nvidiaSMI  []string
-	lms        []string // command prefix for `lms`; lms[0] must exist
-	lmsRunning func(ctx context.Context) bool
+	lms        []string                                  // command prefix for `lms`; lms[0] must exist
+	lmsPIDs    func(ctx context.Context) []int           // LM Studio / llmster processes; none when not running
 	proc       func(pid int) (argv []string, cwd string) // nil argv when unreadable
 	comfyRoots []string                                  // extra ComfyUI models dirs to size files in
+	// Windows only (nil elsewhere), as agent.ps1: GPU memory per pid from the perf counters,
+	// and the pid listening on a port, which gates the ComfyUI check.
+	gpuMem    func(ctx context.Context) map[int]float64
+	listenPID func(ctx context.Context, port string) int
 }
 
 // newDetector returns a detector wired to this machine's tools.
@@ -55,8 +59,10 @@ func newDetector() *detector {
 		host:       "127.0.0.1",
 		ollamaPort: "11434",
 		comfyPort:  "8188",
-		lmsRunning: lmsRunning,
+		lmsPIDs:    lmsPIDs,
 		proc:       procInfo,
+		gpuMem:     winGPUMem,
+		listenPID:  winListenPID,
 	}
 	home, _ := os.UserHomeDir()
 	if home != "" {
@@ -100,12 +106,24 @@ func (d *detector) detect(ctx context.Context) []report.AIGroup {
 		gpu    map[int]float64
 		ollama *report.AIGroup
 		lms    []lmsModel
+		lmsPID []int
 	)
 	wg.Add(3)
 	go func() { defer wg.Done(); gpu = d.gpuProcs(ctx) }()
 	go func() { defer wg.Done(); ollama = d.ollama(ctx) }()
-	go func() { defer wg.Done(); lms = d.lmsModels(ctx) }()
+	go func() { defer wg.Done(); lms, lmsPID = d.lmsModels(ctx) }()
 	wg.Wait()
+
+	// Windows has no per-process cmdline match; agent.ps1 reads GPU memory by pid instead.
+	var winMem map[int]float64
+	winMemOf := func(pids ...int) *float64 {
+		if winMem == nil {
+			if winMem = d.gpuMem(ctx); winMem == nil {
+				winMem = map[int]float64{}
+			}
+		}
+		return memOf(winMem, pids...)
+	}
 
 	groups := []report.AIGroup{}
 	if ollama != nil {
@@ -113,14 +131,18 @@ func (d *detector) detect(ctx context.Context) []report.AIGroup {
 	}
 	if len(lms) > 0 {
 		g := report.AIGroup{App: report.Ptr("LM Studio"), Models: []report.AIModel{}}
-		var mem float64
-		for pid, used := range gpu {
-			if argv, _ := d.proc(pid); lmsProcRe.MatchString(strings.ToLower(strings.Join(argv, " "))) {
-				mem += used
+		if d.gpuMem != nil {
+			g.Mem = winMemOf(lmsPID...)
+		} else {
+			var mem float64
+			for pid, used := range gpu {
+				if argv, _ := d.proc(pid); lmsProcRe.MatchString(strings.ToLower(strings.Join(argv, " "))) {
+					mem += used
+				}
 			}
-		}
-		if mem > 0 {
-			g.Mem = report.Ptr(mem)
+			if mem > 0 {
+				g.Mem = report.Ptr(mem)
+			}
 		}
 		for _, m := range lms {
 			g.Models = append(g.Models, report.AIModel{Name: m.name(), Size: m.SizeBytes})
@@ -153,7 +175,19 @@ func (d *detector) detect(ctx context.Context) []report.AIGroup {
 		groups = append(groups, g)
 	}
 
-	if !haveComfy && d.comfyRunning(ctx) {
+	switch {
+	case haveComfy:
+	case d.listenPID != nil: // Windows: something listens on the port and /history answers
+		if owner := d.listenPID(ctx, d.comfyPort); owner > 0 {
+			var mem *float64
+			if d.gpuMem != nil {
+				mem = winMemOf(owner)
+			}
+			if g := d.comfy(ctx, d.comfyPort, "", mem); len(g.Models) > 0 {
+				groups = append(groups, g)
+			}
+		}
+	case d.comfyRunning(ctx):
 		if g := d.comfy(ctx, d.comfyPort, "", nil); len(g.Models) > 0 {
 			groups = append(groups, g)
 		}
