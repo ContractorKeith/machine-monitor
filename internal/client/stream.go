@@ -276,6 +276,7 @@ type wireEvent struct {
 	ID      string          `json:"id"`
 	Device  *Device         `json:"device"`
 	Sample  *history.Point  `json:"sample"`
+	Samples []history.Point `json:"samples"` // our hub's merged reports: every sample, oldest first
 	Online  map[string]bool `json:"online"`
 	Order   map[string]int  `json:"order"`
 }
@@ -303,7 +304,11 @@ func decodeEvent(ev sseEvent) (Event, bool) {
 	}
 	e := Event{Type: typ, Devices: w.Devices, ID: w.ID, Device: w.Device, Sample: w.Sample,
 		Online: w.Online, Order: w.Order, Raw: raw}
-	if e.Sample != nil {
+	switch {
+	case len(w.Samples) > 0: // a report the hub merged while this client was behind
+		e.Samples = w.Samples
+		e.Sample = &e.Samples[len(e.Samples)-1]
+	case e.Sample != nil:
 		e.Samples = []history.Point{*e.Sample}
 	}
 	return e, true

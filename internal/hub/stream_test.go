@@ -7,11 +7,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ContractorKeith/machine-monitor/internal/alerts"
 	"github.com/ContractorKeith/machine-monitor/internal/history"
 )
 
@@ -19,9 +21,9 @@ func samplePoint(t float64) history.Point { return history.Point{T: t} }
 
 func ftoa(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
 
-// TestCompactCoalesces (B1): a compact stream that isn't reading keeps only each device's
-// newest report and the newest status and order, however many arrive, and is never
-// dropped for it. An upstream-mode stream is dropped after streamBuffer events
+// TestCompactCoalesces (B1): a compact stream that isn't reading keeps one report per
+// device (the newest state, carrying the newest compactSamples samples) and the newest
+// status and order, however many arrive, and is never dropped for it. An upstream-mode stream is dropped after streamBuffer events
 // (TestSlowStreamDropped).
 func TestCompactCoalesces(t *testing.T) {
 	th := newTestHub(t)
@@ -47,10 +49,11 @@ func TestCompactCoalesces(t *testing.T) {
 	var got []string
 	for _, b := range batch {
 		var ev struct {
-			Type   string
-			ID     string
-			N      int
-			Sample struct{ T float64 }
+			Type    string
+			ID      string
+			N       int
+			Sample  struct{ T float64 }
+			Samples []struct{ T float64 }
 		}
 		if err := json.Unmarshal([]byte(strings.TrimPrefix(strings.TrimSpace(string(b)), "data: ")), &ev); err != nil {
 			t.Fatal(err)
@@ -58,6 +61,16 @@ func TestCompactCoalesces(t *testing.T) {
 		switch ev.Type {
 		case "report":
 			got = append(got, ev.ID+"@"+ftoa(ev.Sample.T))
+			// The samples merged in are every other i (one device each), oldest first.
+			if n := len(ev.Samples); n != compactSamples || ev.Samples[n-1].T != ev.Sample.T {
+				t.Errorf("%s: %d samples ending %v; want %d ending with the newest", ev.ID, n, ev.Samples, compactSamples)
+			}
+			for k := 1; k < len(ev.Samples); k++ {
+				if ev.Samples[k].T != ev.Samples[k-1].T+2 {
+					t.Errorf("%s: samples %v are not consecutive", ev.ID, ev.Samples)
+					break
+				}
+			}
 		case "status":
 			got = append(got, "status@"+ftoa(float64(ev.N)))
 		default:
@@ -115,14 +128,24 @@ func TestCompactOrdering(t *testing.T) {
 }
 
 // TestCompactBacklogResyncs: when events that can't coalesce pile up past compactBacklog,
-// the stream gets a fresh snapshot in their place rather than being dropped.
+// the stream gets a fresh snapshot in their place rather than being dropped. What the
+// snapshot can't rebuild survives and follows it: the newest compactKeep alerts, action
+// results and pairings, and the newest alert and energy settings.
 func TestCompactBacklogResyncs(t *testing.T) {
 	th := newTestHub(t)
 	s := th.addStreamMode(true)
 	defer th.releaseStream(s)
-	for i := range compactBacklog + 10 {
-		th.broadcast(map[string]any{"type": "alert", "n": i})
+	th.broadcast(map[string]any{"type": "energySettings", "n": 1})
+	th.broadcast(map[string]any{"type": "paired"})
+	for i := range compactBacklog {
+		th.broadcast(map[string]any{"type": "device", "id": "dev-1", "n": i}) // renames: in the snapshot
 	}
+	th.broadcast(alerts.Message{Type: "alerts"}) // settings, from the alerts engine
+	for i := range 2 * compactKeep {
+		th.broadcast(alerts.Message{Type: "alert", Event: &alerts.Event{ID: strconv.Itoa(i)}})
+	}
+	th.broadcast(map[string]any{"type": "actionResult", "id": "dev-1"})
+	th.broadcast(map[string]any{"type": "device", "id": "dev-1"})
 	th.broadcast(reportEvent{Type: "report", ID: "dev-1"})
 	select {
 	case <-s.done:
@@ -132,8 +155,56 @@ func TestCompactBacklogResyncs(t *testing.T) {
 	th.smu.Lock()
 	batch, resync := s.pend.take()
 	th.smu.Unlock()
-	if !resync || len(batch) != 0 {
-		t.Errorf("resync = %v with %d events; want a snapshot and nothing else", resync, len(batch))
+	var got []string
+	for _, b := range batch {
+		var ev struct {
+			Type  string
+			Event struct{ ID string }
+		}
+		json.Unmarshal([]byte(strings.TrimPrefix(strings.TrimSpace(string(b)), "data: ")), &ev)
+		got = append(got, strings.TrimSuffix(ev.Type+":"+ev.Event.ID, ":"))
+	}
+	var want []string
+	want = append(want, "energySettings", "alerts")
+	for i := compactKeep + 1; i < 2*compactKeep; i++ { // the newest alerts, then the action result
+		want = append(want, "alert:"+strconv.Itoa(i))
+	}
+	want = append(want, "actionResult")
+	if !resync || !slices.Equal(got, want) {
+		t.Errorf("resync = %v, then\n%v\nwant\n%v", resync, got, want)
+	}
+}
+
+// TestCompactGzipEndsCleanly: when the hub ends a compact gzip stream (it is closing), the
+// gzip data is finished, so the client reads a clean end of stream, not "unexpected EOF".
+func TestCompactGzipEndsCleanly(t *testing.T) {
+	th := newTestHub(t)
+	srv := httptest.NewServer(th.h)
+	t.Cleanup(srv.Close)
+	tr := &http.Transport{DisableCompression: true}
+	defer tr.CloseIdleConnections()
+	req, _ := http.NewRequest("GET", srv.URL+"/api/stream?compact=1", nil)
+	req.Header.Set("Authorization", "Bearer "+th.Token())
+	req.Header.Set("Accept-Encoding", "gzip")
+	resp, err := tr.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.Header.Get("Content-Encoding") != "gzip" {
+		t.Fatalf("not gzip: %v", resp.Header)
+	}
+	zr, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.AfterFunc(100*time.Millisecond, th.closeStreams)
+	b, err := io.ReadAll(zr)
+	if err != nil {
+		t.Errorf("stream ended with %v, want a clean end", err)
+	}
+	if !strings.Contains(string(b), `"type":"snapshot"`) {
+		t.Errorf("read %q", b)
 	}
 }
 

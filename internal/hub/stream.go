@@ -22,13 +22,18 @@ package hub
 // slower than a few MB/s it never finished before the stream was dropped.
 
 import (
+	"bytes"
 	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
+
+	"github.com/ContractorKeith/machine-monitor/internal/alerts"
+	"github.com/ContractorKeith/machine-monitor/internal/history"
 )
 
 // streamBuffer is how many messages a slow client may fall behind before it is dropped. A
@@ -47,6 +52,11 @@ const (
 	// compactBacklog is how many uncoalescable events (alerts, renames, removals, action
 	// results) may wait for a compact client before they're replaced by a fresh snapshot.
 	compactBacklog = 256
+	// compactKeep is how many alerts, action results and pairings survive a resync. The
+	// TUI reloads the alert log after any snapshot, so older ones aren't lost to it.
+	compactKeep = 32
+	// compactSamples caps the samples one merged report carries: about a minute at 2 s.
+	compactSamples = 30
 )
 
 // CompactHeader is the request header (value "compact") that asks for the compact stream,
@@ -64,49 +74,96 @@ type stream struct {
 
 // pending is what a compact stream has yet to send, in order. Guarded by the hub's smu.
 //
-// A device's report waits in the slot its first waiting report took, and newer reports
-// replace its data there, so events keep the order they happened in (a report before the
-// actionResult it carried, a removal before a report that brings the device back) while
-// each device holds at most one report. Status and order events are whole-hub maps: only
-// the newest of each waits, and they go last so they reflect every report before them.
+// A device's report waits in the slot its first waiting report took; newer reports merge
+// into it (newest state, every sample), so events keep the order they happened in (a
+// report before the actionResult it carried, a removal before a report that brings the
+// device back) while each device holds one slot. Status and order events are whole-hub
+// maps: only the newest of each waits, and they go last so they reflect every report.
+//
+// When the backlog overflows, a fresh snapshot replaces what the snapshot covers
+// (registry, latest reports, online flags, order). What it doesn't cover is kept and sent
+// after it: alerts, action results and pairings (the newest compactKeep), and the newest
+// alert and energy settings.
 type pending struct {
-	queue   [][]byte       // waiting events, oldest first; nil marks a dropped report
+	queue   []entry        // waiting events, oldest first
 	reports map[string]int // device id -> index in queue of its waiting report
-	backlog int            // events in queue that aren't reports
+	backlog int            // entries in queue that aren't reports
 	status  []byte         // the newest "status" event
 	order   []byte         // the newest "order" event
-	resync  bool           // backlog overflowed: send a fresh snapshot instead
+	resync  bool           // backlog overflowed: send a fresh snapshot first
+	kept    []entry        // with resync: events the snapshot doesn't cover, oldest first
 	wake    chan struct{}  // signalled (cap 1) when something is added
 }
 
-// add queues one event for a compact client.
-func (p *pending) add(typ, id string, data []byte) {
-	if p.resync {
-		return // a snapshot is coming that covers this
-	}
+// entry is one waiting event; typ "" marks a report dropped by a removal.
+type entry struct {
+	typ  string
+	data []byte         // the event as broadcast
+	rep  *pendingReport // reports: the merged report, when more than one arrived
+}
+
+// pendingReport is a device's newest report with the samples of every report it merged.
+type pendingReport struct {
+	ev      reportEvent
+	samples []history.Point // oldest first, at most compactSamples
+}
+
+// compactReport is a merged report: upstream's shape plus "samples", every sample it
+// stands for (oldest first; "sample" is the newest). Clients that don't know "samples"
+// still get the newest state.
+type compactReport struct {
+	reportEvent
+	Samples []history.Point `json:"samples"`
+}
+
+// keptAcrossResync reports whether events of type typ carry something a snapshot doesn't.
+func keptAcrossResync(typ string) bool {
 	switch typ {
-	case "report":
+	case "alert", "actionResult", "paired", "alerts", "energySettings":
+		return true
+	}
+	return false
+}
+
+// add queues one event for a compact client. msg is the event data was marshalled from.
+func (p *pending) add(typ, id string, data []byte, msg any) {
+	switch {
+	case p.resync:
+		if keptAcrossResync(typ) {
+			p.keep(entry{typ: typ, data: data})
+		}
+	case typ == "report":
 		if i, ok := p.reports[id]; ok {
-			p.queue[i] = data
+			p.queue[i] = mergeReport(p.queue[i], data, msg)
 		} else {
 			p.reports[id] = len(p.queue)
-			p.queue = append(p.queue, data)
+			p.queue = append(p.queue, newReport(data, msg))
 		}
-	case "status":
+	case typ == "status":
 		p.status = data
-	case "order":
+	case typ == "order":
 		p.order = data
 	default:
 		if i, ok := p.reports[id]; ok && typ == "removed" {
-			p.queue[i] = nil // a later report takes a new slot, after the removal
+			p.queue[i] = entry{} // a later report takes a new slot, after the removal
 			delete(p.reports, id)
 		}
-		if p.backlog >= compactBacklog {
-			p.reset()
-			p.resync = true
-		} else {
-			p.queue = append(p.queue, data)
+		if p.backlog < compactBacklog {
+			p.queue = append(p.queue, entry{typ: typ, data: data})
 			p.backlog++
+			break
+		}
+		// Overflow: a snapshot replaces the queue; keep what it can't rebuild.
+		old := p.queue
+		p.reset()
+		p.resync = true
+		for _, e := range old {
+			if keptAcrossResync(e.typ) {
+				p.keep(e)
+			}
+		}
+		if keptAcrossResync(typ) {
+			p.keep(entry{typ: typ, data: data})
 		}
 	}
 	select {
@@ -115,19 +172,75 @@ func (p *pending) add(typ, id string, data []byte) {
 	}
 }
 
-// reset forgets everything waiting.
+// keep adds e to what survives a resync: the newest settings of each kind, and the newest
+// compactKeep alerts, action results and pairings.
+func (p *pending) keep(e entry) {
+	isSettings := func(k entry) bool { return k.typ == "alerts" || k.typ == "energySettings" }
+	switch {
+	case isSettings(e):
+		p.kept = slices.DeleteFunc(p.kept, func(k entry) bool { return k.typ == e.typ })
+	case len(p.kept)-countFunc(p.kept, isSettings) >= compactKeep: // drop the oldest event
+		i := slices.IndexFunc(p.kept, func(k entry) bool { return !isSettings(k) })
+		p.kept = slices.Delete(p.kept, i, i+1)
+	}
+	p.kept = append(p.kept, e)
+}
+
+func countFunc(es []entry, f func(entry) bool) int {
+	n := 0
+	for _, e := range es {
+		if f(e) {
+			n++
+		}
+	}
+	return n
+}
+
+// newReport is a report's entry: its data, and its sample for merging into later.
+func newReport(data []byte, msg any) entry {
+	e := entry{typ: "report", data: data}
+	if ev, ok := msg.(reportEvent); ok {
+		e.rep = &pendingReport{ev: ev, samples: []history.Point{ev.Sample}}
+	}
+	return e
+}
+
+// mergeReport folds a newer report for the same device into a waiting one: the newest
+// state, with the samples of both.
+func mergeReport(old entry, data []byte, msg any) entry {
+	e := newReport(data, msg)
+	if old.rep != nil && e.rep != nil {
+		samples := append(slices.Clone(old.rep.samples), e.rep.ev.Sample)
+		e.rep.samples = samples[max(0, len(samples)-compactSamples):]
+	}
+	return e
+}
+
+// reset forgets everything waiting except what was kept across a resync.
 func (p *pending) reset() {
 	p.reports = map[string]int{}
 	p.queue, p.backlog, p.status, p.order, p.resync = nil, 0, nil, nil, false
 }
 
 // take returns what is waiting, in the order to send it, and whether a snapshot must go
-// first; it leaves p empty.
+// first (the batch then starts with what was kept across the resync); it leaves p empty.
 func (p *pending) take() (batch [][]byte, resync bool) {
 	resync = p.resync
-	for _, data := range p.queue {
-		if data != nil {
-			batch = append(batch, data)
+	for _, e := range p.kept {
+		batch = append(batch, e.data)
+	}
+	p.kept = nil
+	for _, e := range p.queue {
+		switch {
+		case e.typ == "":
+		case e.rep != nil && len(e.rep.samples) > 1:
+			b, err := json.Marshal(compactReport{e.rep.ev, e.rep.samples})
+			if err != nil {
+				b = bytes.TrimSuffix(bytes.TrimPrefix(e.data, []byte("data: ")), []byte("\n\n"))
+			}
+			batch = append(batch, append(append([]byte("data: "), b...), '\n', '\n'))
+		default:
+			batch = append(batch, e.data)
 		}
 	}
 	if p.order != nil {
@@ -145,6 +258,8 @@ func eventKey(msg any) (typ, id string) {
 	switch m := msg.(type) {
 	case reportEvent:
 		return m.Type, m.ID
+	case alerts.Message:
+		return m.Type, ""
 	case map[string]any:
 		typ, _ = m["type"].(string)
 		id, _ = m["id"].(string)
@@ -171,7 +286,7 @@ func (h *Hub) broadcast(msg any) {
 	defer h.smu.Unlock()
 	for s := range h.streams {
 		if s.pend != nil {
-			s.pend.add(typ, id, data)
+			s.pend.add(typ, id, data, msg)
 			continue
 		}
 		select {
@@ -261,6 +376,11 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 	var out io.Writer = w
 	var gz *gzip.Writer
+	defer func() {
+		if gz != nil { // finish the gzip stream, so the client sees a clean end, not a cut-off one
+			gz.Close()
+		}
+	}()
 	if compact {
 		w.Header().Set(CompactHeader, "compact")
 		w.Header().Add("Vary", "Accept-Encoding")

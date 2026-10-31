@@ -70,3 +70,18 @@ func TestIdleCountsBytes(t *testing.T) {
 		}
 	}
 }
+
+// TestMergedReportSamples: a report our hub merged while the client was behind carries every
+// sample in "samples"; the event keeps them all, with Sample the newest. A plain upstream
+// report still gives its one sample.
+func TestMergedReportSamples(t *testing.T) {
+	e, ok := decodeEvent(sseEvent{name: "message", data: []byte(
+		`{"type":"report","id":"d","device":{"id":"d"},"sample":{"t":3},"samples":[{"t":1},{"t":2},{"t":3}]}`)})
+	if !ok || len(e.Samples) != 3 || e.Samples[0].T != 1 || e.Sample == nil || e.Sample.T != 3 {
+		t.Errorf("merged report = %+v", e)
+	}
+	e, ok = decodeEvent(sseEvent{name: "message", data: []byte(`{"type":"report","id":"d","sample":{"t":5}}`)})
+	if !ok || len(e.Samples) != 1 || e.Samples[0].T != 5 {
+		t.Errorf("upstream report = %+v", e)
+	}
+}
