@@ -53,7 +53,7 @@ cleanup() {
 			rm -f "$client"
 		fi
 	fi
-	if [ -n "${dir:-}" ]; then rm -f "$dir/.machine-monitor.new"; fi
+	if [ -n "${dir:-}" ]; then rm -f "$dir/.machine-monitor.new" "${bin:-$dir/machine-monitor}.restore"; fi
 	rm -rf "$tmp"
 	exit "$status"
 }
