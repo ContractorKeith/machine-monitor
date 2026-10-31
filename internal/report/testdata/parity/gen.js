@@ -43,7 +43,7 @@ add('non-number types', { id: ID, uptime: true, cpu: { usage: [5], threads: { a:
 add('clamps', { id: ID, uptime: 2e10, power: { cpu: 9999 }, cpu: { usage: 150, temp: -100, threads: 1e6, clockMHz: -5, cores: [-1, 101, 50] }, memory: { total: 1e19, used: -1 } });
 add('negative zero', `{"id":"${ID}","cpu":{"temp":-0,"usage":-0},"temps":[{"name":"x","value":-0.0}]}`);
 add('string coercion', { id: ID, hostname: 12345, os: true, cpu: { name: [1, [2, null], 'a', { b: 1 }] }, gpus: [{ name: { a: 1 }, vendor: 1e21 }, { name: 1e-7, vendor: 0.000001 }, { name: 123.456, vendor: -0 }, { name: 1.5e300, vendor: 2 ** 53 + 2 }] });
-add('control chars and trim', { id: ID, hostname: '\u0000\u001f host\u007f name \t\n', os: '\u00a0\u2003 Ubuntu \u3000\ufeff', cpu: { name: '\u00ad keep SHY \u00ad' } });
+add('control chars and trim', { id: ID, hostname: '\u0000\u001f host\u007f name \t\n', os: '\u00a0\u2003 Ubuntu \u3000\ufeff', cpu: { name: '\u00a1 keep SHY \u00a1' } });
 add('empty strings', { id: ID, hostname: '', os: '   ', cpu: { name: '\u0001\u0002' } });
 add('string limits', { id: ID, hostname: 'h'.repeat(100), os: 'o'.repeat(200), cpu: { name: 'é'.repeat(130) }, actionResult: { id: 'abcdef012345', ok: 'true', message: 'm'.repeat(300) } });
 add('cut leaves trailing space', { id: ID, hostname: 'a'.repeat(63) + ' b' });

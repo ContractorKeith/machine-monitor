@@ -198,7 +198,7 @@ func TestPowerMenu(t *testing.T) {
 	}
 
 	raw, _ := json.Marshal(map[string]any{"type": "actionResult", "id": ws, "name": "ws-01",
-		"result": map[string]any{"id": "0123456789ab", "ok": true, "message": "Shutting\x1b down."}})
+		"result": map[string]any{"id": "0123456789ab", "ok": true, "message": "Shutting\x1b[0m down."}})
 	m = runActs(t, m, hubMsg{client.Event{Type: client.EventActionResult, ID: ws, Raw: raw}})
 	if s := m.hubStatus(); s != "ws-01: Shutting down." {
 		t.Errorf("actionResult footer = %q", s)

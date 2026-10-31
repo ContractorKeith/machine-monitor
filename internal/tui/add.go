@@ -98,11 +98,15 @@ func (m model) updateAdd(msg tea.Msg) (model, tea.Cmd, bool) {
 		return m, nil, false
 	}
 	m.add.busy, m.add.err = false, msg2.err
+	cleanAll(msg2.code) // from the hub: the code and the addresses are drawn
+	cleanAll(msg2.info)
 	if msg2.err == nil {
 		m.add.code = msg2.code
 		ph := m.pairHub()
 		m.add.url = hubOwnPort(ph.InstallURL(msg2.info), m.hubHost(), msg2.info)
+		m.add.url = clean(m.add.url)
 		m.add.sh, m.add.ps = ph.InstallCommands(m.add.url)
+		m.add.sh, m.add.ps = clean(m.add.sh), clean(m.add.ps)
 		m.add.theirs = msg2.theirs
 		if m.add.theirs { // upstream's install.sh starts with #!/usr/bin/env bash
 			m.add.sh = strings.TrimSuffix(m.add.sh, "| sh") + "| bash"

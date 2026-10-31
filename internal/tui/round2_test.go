@@ -33,7 +33,7 @@ func TestCleanStripsTerminalControls(t *testing.T) {
 		"bad\xffutf":                                             "badutf",
 		"family 👨\u200d👩\u200d👧 ok":                              "family 👨\u200d👩\u200d👧 ok",
 		"persian می\u200cخواهم":                                  "persian می\u200cخواهم",
-		"lead\u200d trail\u200d dup a\u200d\u200db":              "lead trail dup ab",
+		"lead\u200d trail\u200d dup a\u200d\u200db":              "lead trail dup a\u200db",
 		"héllo — 日本語 🚀":                                          "héllo — 日本語 🚀",
 	} {
 		if got := clean(in); got != want {

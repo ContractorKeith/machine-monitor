@@ -385,7 +385,7 @@ func TestStringUTF16Cut(t *testing.T) {
 		{strings.Repeat("é", 70), 64, strings.Repeat("é", 64)},             // BMP: one unit each
 		{strings.Repeat("😀", 40), 64, strings.Repeat("😀", 32)},             // two units each
 		{"a" + strings.Repeat("😀", 40), 64, "a" + strings.Repeat("😀", 31)}, // pair at the cut is dropped
-		{"\xff\xfeab", 64, "\ufffd\ufffdab"},                               // invalid UTF-8 → U+FFFD
+		{"\xff\xfeab", 64, "ab"}, // invalid UTF-8 is dropped
 	} {
 		got := str(c.in, c.limit)
 		if got == nil || *got != c.want || !utf8.ValidString(*got) {
@@ -694,7 +694,7 @@ func TestCleanTextStripsBidi(t *testing.T) {
 	if got := CleanText("\u202e\u2069", 60); got != nil {
 		t.Errorf("only bidi controls = %q, want nil", *got)
 	}
-	if got := CleanText("\u2065\u202f\u2061\u00a1\u00a0x\u061b", 60); got == nil || *got != "\u2065\u202f\u2061\u00a1\u00a0x\u061b" {
+	if got := CleanText("x\u202f\u00a1\u00a0\u061b", 60); got == nil || *got != "x\u202f\u00a1\u00a0\u061b" {
 		t.Errorf("neighbouring code points must stay, got %v", got)
 	}
 }
@@ -704,5 +704,20 @@ func TestCleanTextStripsInvisibles(t *testing.T) {
 	in := "omar\u200bchy\u200c\u200d\u2060\ufeff\u061c\u0080\u009b41m\u009f!"
 	if got := CleanText(in, 60); got == nil || *got != "omarchy41m!" {
 		t.Errorf("CleanText = %v, want omarchy41m!", got)
+	}
+}
+
+// CleanText uses the shared textclean policy: lookalikes go, joiners stay (skeptic pass 3, N18).
+func TestCleanTextSharedPolicy(t *testing.T) {
+	for in, want := range map[string]string{
+		"a\u2061ㅤᅟ͏︎\U000e0041\u00adb":             "ab",
+		"👨\u200d👩\u200d👧":                          "👨\u200d👩\u200d👧",
+		"🏳️\u200d🌈":                                "🏳️\u200d🌈",
+		"می\u200cخواهم":                            "می\u200cخواهم",
+		"\x1b]8;;http://evil/\x07link\x1b]8;;\x07": "link",
+	} {
+		if got := CleanText(in, 60); got == nil || *got != want {
+			t.Errorf("CleanText(%q) = %v, want %q", in, fmtp(got), want)
+		}
 	}
 }
