@@ -52,7 +52,7 @@ func systemdEnvQuote(s string) string {
 
 func (m *Manager) installSystemd(ctx context.Context, s Spec, out io.Writer) error {
 	path, name := m.unitPath(s.Role), unitName(s.Role)
-	existed, changed, err := writeIfChanged(path, []byte(m.SystemdUnit(s)))
+	old, existed, changed, err := writeIfChanged(path, []byte(m.SystemdUnit(s)))
 	if err != nil {
 		return err
 	}
@@ -70,6 +70,10 @@ func (m *Manager) installSystemd(ctx context.Context, s Spec, out io.Writer) err
 	}
 	for _, args := range steps {
 		if _, err := m.run(ctx, "systemctl", args...); err != nil {
+			if existed && changed { // keep the old unit, and tell systemd it is current again
+				restoreFile(path, old)
+				_, _ = m.run(ctx, "systemctl", "--user", "daemon-reload")
+			}
 			return err
 		}
 		fmt.Fprintf(out, "ran systemctl %s\n", strings.Join(args, " "))

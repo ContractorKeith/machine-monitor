@@ -3,6 +3,7 @@ package power
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"regexp"
 	"sort"
@@ -31,6 +32,11 @@ var (
 
 // ErrInvalidSettings is returned by ParseSettings for anything upstream would reject.
 var ErrInvalidSettings = errors.New("invalid energy settings")
+
+// ErrOverlappingPeriods is returned by ParseSettings when two time-of-use periods share an
+// hour. Upstream accepts them but prices the overlap by the first period only, so a daily
+// total that adds every period's hours counts those hours twice.
+var ErrOverlappingPeriods = fmt.Errorf("%w: time-of-use periods must not overlap; give each hour of the day to one period", ErrInvalidSettings)
 
 // ParseSettings validates untrusted settings JSON (PUT /api/energy/settings), rounding rates
 // to 4 decimals and hours to quarter hours and sorting periods by start, as upstream's
@@ -65,6 +71,11 @@ func ParseSettings(data []byte) (Settings, error) {
 		s.TOU = append(s.TOU, Period{From: from, To: to, Rate: r})
 	}
 	sort.SliceStable(s.TOU, func(i, j int) bool { return s.TOU[i].From < s.TOU[j].From })
+	for i := 1; i < len(s.TOU); i++ {
+		if s.TOU[i].From < s.TOU[i-1].To { // sorted by start, so neighbours are enough
+			return Settings{}, ErrOverlappingPeriods
+		}
+	}
 	return s, nil
 }
 

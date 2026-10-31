@@ -106,3 +106,22 @@ func TestJSRound(t *testing.T) {
 		}
 	}
 }
+
+// An APU's GPU (named integrated by the agent) is part of the package power, even with a
+// large memory carve-out: no discrete-GPU estimate on top (skeptic pass 2, B5).
+func TestEstimateIntegratedGPUAddsNothing(t *testing.T) {
+	r := &report.Report{
+		CPU:   report.CPU{Usage: report.Ptr(10.0)},
+		Power: &report.Power{CPU: report.Ptr(15.0)},
+		GPUs: []report.GPU{{Name: report.Ptr("AMD Integrated GPU"), Usage: report.Ptr(100.0),
+			MemTotal: report.Ptr(float64(2 << 30))}},
+	}
+	b := Estimate(r)
+	if b == nil || b.GPU != 0 || b.GPUEstimated {
+		t.Fatalf("integrated GPU estimate = %+v, want none", b)
+	}
+	r.GPUs[0].Name = report.Ptr("AMD GPU")
+	if b := Estimate(r); b.GPU != 160 {
+		t.Fatalf("discrete GPU = %v W, want 160", b.GPU)
+	}
+}

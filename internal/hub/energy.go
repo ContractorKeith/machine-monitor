@@ -134,8 +134,27 @@ func (h *Hub) usage(id string, bounds []float64, hw power.HW, price *power.Setti
 	return u
 }
 
-// round1 is upstream's +v.toFixed(1).
-func round1(v float64) float64 { return math.Round(v*10) / 10 }
+// round1 is upstream's +v.toFixed(1): v's exact binary value rounded half up (0.15 is
+// 0.1499999… so it gives 0.1, and 0.25 gives 0.3), with the sign applied afterwards.
+func round1(v float64) float64 {
+	s := strconv.FormatFloat(math.Abs(v), 'f', 30, 64)
+	dot := strings.IndexByte(s, '.')
+	tenths, err := strconv.ParseInt(s[:dot]+s[dot+1:dot+2], 10, 64)
+	if err != nil { // beyond int64 tenths: no fraction left to round
+		return v
+	}
+	if s[dot+2] >= '5' {
+		tenths++
+	}
+	if tenths == 0 {
+		return 0 // JSON would print -0
+	}
+	r := float64(tenths) / 10
+	if v < 0 {
+		r = -r
+	}
+	return r
+}
 
 // usageAll totals the devices only selects (a device id, or alerts.AllDevices) over bounds.
 func (h *Hub) usageAll(bounds []float64, only string) (*power.Settings, []Usage) {

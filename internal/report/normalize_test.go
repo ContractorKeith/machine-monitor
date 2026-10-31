@@ -694,7 +694,15 @@ func TestCleanTextStripsBidi(t *testing.T) {
 	if got := CleanText("\u202e\u2069", 60); got != nil {
 		t.Errorf("only bidi controls = %q, want nil", *got)
 	}
-	if got := CleanText("\u2065\u202f\u200d", 60); got == nil || *got != "\u2065\u202f\u200d" {
+	if got := CleanText("\u2065\u202f\u2061\u00a1\u00a0x\u061b", 60); got == nil || *got != "\u2065\u202f\u2061\u00a1\u00a0x\u061b" {
 		t.Errorf("neighbouring code points must stay, got %v", got)
+	}
+}
+
+// The Arabic letter mark, zero-width characters and C1 controls go too (skeptic pass 2, B16).
+func TestCleanTextStripsInvisibles(t *testing.T) {
+	in := "omar\u200bchy\u200c\u200d\u2060\ufeff\u061c\u0080\u009b41m\u009f!"
+	if got := CleanText(in, 60); got == nil || *got != "omarchy41m!" {
+		t.Errorf("CleanText = %v, want omarchy41m!", got)
 	}
 }

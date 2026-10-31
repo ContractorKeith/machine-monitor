@@ -433,3 +433,23 @@ func TestDefaultMakesDataDirEnvAbsolute(t *testing.T) {
 		t.Errorf("DataDirEnv = %q, want an absolute path ending in rel", m.DataDirEnv)
 	}
 }
+
+// A failed update leaves the existing unit byte-identical (skeptic pass 2, B7).
+func TestSystemdFailedUpdateKeepsOldUnit(t *testing.T) {
+	ctx := context.Background()
+	m, f := testManager(t, "linux")
+	unit := filepath.Join(m.ConfigHome, "systemd", "user", "machine-monitor-hub.service")
+	s := hubSpec(t)
+	if err := m.Install(ctx, s, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(unit)
+	s.Port = 8080
+	f.replies["systemctl --user enable --now machine-monitor-hub.service"] = reply{out: "boom", err: true}
+	if err := m.Install(ctx, s, &bytes.Buffer{}); err == nil {
+		t.Fatal("install should fail")
+	}
+	if after, _ := os.ReadFile(unit); !bytes.Equal(before, after) {
+		t.Errorf("unit changed by a failed update:\n%s\nwas:\n%s", after, before)
+	}
+}
