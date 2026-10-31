@@ -1,0 +1,943 @@
+{
+ "estimate": [
+  {
+   "name": "desktop 16 threads half load, no gpu",
+   "want": {
+    "watts": 95.6,
+    "cpu": 61,
+    "gpu": 0,
+    "rest": 25,
+    "losses": 9.6,
+    "cpuMeasured": false,
+    "gpuMeasured": false,
+    "gpuEstimated": false
+   }
+  },
+  {
+   "name": "laptop 8 threads, apple integrated gpu",
+   "want": {
+    "watts": 15,
+    "cpu": 7.2,
+    "gpu": 0,
+    "rest": 6,
+    "losses": 1.8,
+    "cpuMeasured": false,
+    "gpuMeasured": false,
+    "gpuEstimated": false
+   }
+  },
+  {
+   "name": "desktop measured cpu and nvidia",
+   "want": {
+    "watts": 447.9,
+    "cpu": 65.4,
+    "gpu": 312.7,
+    "rest": 25,
+    "losses": 44.8,
+    "cpuMeasured": true,
+    "gpuMeasured": true,
+    "gpuEstimated": false
+   }
+  },
+  {
+   "name": "no usage and no measured cpu",
+   "want": null
+  },
+  {
+   "name": "empty report",
+   "want": null
+  },
+  {
+   "name": "threads unknown defaults to 8",
+   "want": {
+    "watts": 41.1,
+    "cpu": 12,
+    "gpu": 0,
+    "rest": 25,
+    "losses": 4.1,
+    "cpuMeasured": false,
+    "gpuMeasured": false,
+    "gpuEstimated": false
+   }
+  },
+  {
+   "name": "threads zero defaults to 8",
+   "want": {
+    "watts": 47.6,
+    "cpu": 17.8,
+    "gpu": 0,
+    "rest": 25,
+    "losses": 4.8,
+    "cpuMeasured": false,
+    "gpuMeasured": false,
+    "gpuEstimated": false
+   }
+  },
+  {
+   "name": "threads above 512 clamp",
+   "want": {
+    "watts": 305.6,
+    "cpu": 250,
+    "gpu": 0,
+    "rest": 25,
+    "losses": 30.6,
+    "cpuMeasured": false,
+    "gpuMeasured": false,
+    "gpuEstimated": false
+   }
+  },
+  {
+   "name": "desktop 128 threads cpuMax cap",
+   "want": {
+    "watts": 239.4,
+    "cpu": 190.5,
+    "gpu": 0,
+    "rest": 25,
+    "losses": 23.9,
+    "cpuMeasured": false,
+    "gpuMeasured": false,
+    "gpuEstimated": false
+   }
+  },
+  {
+   "name": "desktop 2 threads",
+   "want": {
+    "watts": 64.4,
+    "cpu": 33,
+    "gpu": 0,
+    "rest": 25,
+    "losses": 6.4,
+    "cpuMeasured": false,
+    "gpuMeasured": false,
+    "gpuEstimated": false
+   }
+  },
+  {
+   "name": "laptop 32 threads cpuMax cap",
+   "want": {
+    "watts": 38.9,
+    "cpu": 28.2,
+    "gpu": 0,
+    "rest": 6,
+    "losses": 4.7,
+    "cpuMeasured": false,
+    "gpuMeasured": false,
+    "gpuEstimated": false
+   }
+  },
+  {
+   "name": "laptop 4 threads",
+   "want": {
+    "watts": 19.1,
+    "cpu": 10.8,
+    "gpu": 0,
+    "rest": 6,
+    "losses": 2.3,
+    "cpuMeasured": false,
+    "gpuMeasured": false,
+    "gpuEstimated": false
+   }
+  },
+  {
+   "name": "usage above 100 clamps",
+   "want": {
+    "watts": 127.8,
+    "cpu": 90,
+    "gpu": 0,
+    "rest": 25,
+    "losses": 12.8,
+    "cpuMeasured": false,
+    "gpuMeasured": false,
+    "gpuEstimated": false
+   }
+  },
+  {
+   "name": "usage below 0 clamps",
+   "want": {
+    "watts": 41.1,
+    "cpu": 12,
+    "gpu": 0,
+    "rest": 25,
+    "losses": 4.1,
+    "cpuMeasured": false,
+    "gpuMeasured": false,
+    "gpuEstimated": false
+   }
+  },
+  {
+   "name": "form factor unknown is desktop",
+   "want": {
+    "watts": 47.8,
+    "cpu": 18,
+    "gpu": 0,
+    "rest": 25,
+    "losses": 4.8,
+    "cpuMeasured": false,
+    "gpuMeasured": false,
+    "gpuEstimated": false
+   }
+  },
+  {
+   "name": "amd discrete gpu estimated",
+   "want": {
+    "watts": 204.4,
+    "cpu": 36.5,
+    "gpu": 122.5,
+    "rest": 25,
+    "losses": 20.4,
+    "cpuMeasured": false,
+    "gpuMeasured": false,
+    "gpuEstimated": true
+   }
+  },
+  {
+   "name": "gpu exactly 2 GiB, usage unknown",
+   "want": {
+    "watts": 55.4,
+    "cpu": 14.9,
+    "gpu": 10,
+    "rest": 25,
+    "losses": 5.5,
+    "cpuMeasured": false,
+    "gpuMeasured": false,
+    "gpuEstimated": true
+   }
+  },
+  {
+   "name": "gpu just under 2 GiB is integrated",
+   "want": {
+    "watts": 44.3,
+    "cpu": 14.9,
+    "gpu": 0,
+    "rest": 25,
+    "losses": 4.4,
+    "cpuMeasured": false,
+    "gpuMeasured": false,
+    "gpuEstimated": false
+   }
+  },
+  {
+   "name": "measured and estimated gpus mixed",
+   "want": {
+    "watts": 315.3,
+    "cpu": 85.5,
+    "gpu": 173.3,
+    "rest": 25,
+    "losses": 31.5,
+    "cpuMeasured": false,
+    "gpuMeasured": true,
+    "gpuEstimated": true
+   }
+  },
+  {
+   "name": "measured gpu zero watts",
+   "want": {
+    "watts": 12.2,
+    "cpu": 4.8,
+    "gpu": 0,
+    "rest": 6,
+    "losses": 1.5,
+    "cpuMeasured": false,
+    "gpuMeasured": true,
+    "gpuEstimated": false
+   }
+  },
+  {
+   "name": "measured cpu zero, usage ignored",
+   "want": {
+    "watts": 27.8,
+    "cpu": 0,
+    "gpu": 0,
+    "rest": 25,
+    "losses": 2.8,
+    "cpuMeasured": true,
+    "gpuMeasured": false,
+    "gpuEstimated": false
+   }
+  },
+  {
+   "name": "rounding half up on positive",
+   "want": {
+    "watts": 41.4,
+    "cpu": 12.3,
+    "gpu": 0,
+    "rest": 25,
+    "losses": 4.1,
+    "cpuMeasured": true,
+    "gpuMeasured": false,
+    "gpuEstimated": false
+   }
+  },
+  {
+   "name": "rounding half toward +inf on negative",
+   "want": {
+    "watts": 6.5,
+    "cpu": -0.2,
+    "gpu": 0,
+    "rest": 6,
+    "losses": 0.8,
+    "cpuMeasured": true,
+    "gpuMeasured": false,
+    "gpuEstimated": false
+   }
+  },
+  {
+   "name": "fractional usage and threads",
+   "want": {
+    "watts": 61.7,
+    "cpu": 30.5,
+    "gpu": 0,
+    "rest": 25,
+    "losses": 6.2,
+    "cpuMeasured": false,
+    "gpuMeasured": false,
+    "gpuEstimated": false
+   }
+  }
+ ],
+ "fromSample": [
+  {
+   "name": "desktop half load",
+   "want": 95.55555555555556
+  },
+  {
+   "name": "laptop with gpu power",
+   "want": 55.34090909090909
+  },
+  {
+   "name": "cpu unknown",
+   "want": null
+  },
+  {
+   "name": "hw unknown",
+   "want": 47.55555555555555
+  },
+  {
+   "name": "gpu power unknown",
+   "want": 305.55555555555554
+  },
+  {
+   "name": "fractional load",
+   "want": 305.14
+  }
+ ],
+ "priceRegions": [
+  {
+   "code": "US",
+   "name": "United States (average)",
+   "currency": "USD",
+   "rate": 0.165
+  },
+  {
+   "code": "US-AL",
+   "name": "Alabama",
+   "currency": "USD",
+   "rate": 0.152
+  },
+  {
+   "code": "US-AK",
+   "name": "Alaska",
+   "currency": "USD",
+   "rate": 0.249
+  },
+  {
+   "code": "US-AZ",
+   "name": "Arizona",
+   "currency": "USD",
+   "rate": 0.151
+  },
+  {
+   "code": "US-AR",
+   "name": "Arkansas",
+   "currency": "USD",
+   "rate": 0.126
+  },
+  {
+   "code": "US-CA",
+   "name": "California",
+   "currency": "USD",
+   "rate": 0.316
+  },
+  {
+   "code": "US-CO",
+   "name": "Colorado",
+   "currency": "USD",
+   "rate": 0.153
+  },
+  {
+   "code": "US-CT",
+   "name": "Connecticut",
+   "currency": "USD",
+   "rate": 0.29
+  },
+  {
+   "code": "US-DE",
+   "name": "Delaware",
+   "currency": "USD",
+   "rate": 0.166
+  },
+  {
+   "code": "US-DC",
+   "name": "District of Columbia",
+   "currency": "USD",
+   "rate": 0.183
+  },
+  {
+   "code": "US-FL",
+   "name": "Florida",
+   "currency": "USD",
+   "rate": 0.15
+  },
+  {
+   "code": "US-GA",
+   "name": "Georgia",
+   "currency": "USD",
+   "rate": 0.14
+  },
+  {
+   "code": "US-HI",
+   "name": "Hawaii",
+   "currency": "USD",
+   "rate": 0.415
+  },
+  {
+   "code": "US-ID",
+   "name": "Idaho",
+   "currency": "USD",
+   "rate": 0.114
+  },
+  {
+   "code": "US-IL",
+   "name": "Illinois",
+   "currency": "USD",
+   "rate": 0.165
+  },
+  {
+   "code": "US-IN",
+   "name": "Indiana",
+   "currency": "USD",
+   "rate": 0.156
+  },
+  {
+   "code": "US-IA",
+   "name": "Iowa",
+   "currency": "USD",
+   "rate": 0.139
+  },
+  {
+   "code": "US-KS",
+   "name": "Kansas",
+   "currency": "USD",
+   "rate": 0.142
+  },
+  {
+   "code": "US-KY",
+   "name": "Kentucky",
+   "currency": "USD",
+   "rate": 0.13
+  },
+  {
+   "code": "US-LA",
+   "name": "Louisiana",
+   "currency": "USD",
+   "rate": 0.122
+  },
+  {
+   "code": "US-ME",
+   "name": "Maine",
+   "currency": "USD",
+   "rate": 0.27
+  },
+  {
+   "code": "US-MD",
+   "name": "Maryland",
+   "currency": "USD",
+   "rate": 0.186
+  },
+  {
+   "code": "US-MA",
+   "name": "Massachusetts",
+   "currency": "USD",
+   "rate": 0.303
+  },
+  {
+   "code": "US-MI",
+   "name": "Michigan",
+   "currency": "USD",
+   "rate": 0.193
+  },
+  {
+   "code": "US-MN",
+   "name": "Minnesota",
+   "currency": "USD",
+   "rate": 0.153
+  },
+  {
+   "code": "US-MS",
+   "name": "Mississippi",
+   "currency": "USD",
+   "rate": 0.133
+  },
+  {
+   "code": "US-MO",
+   "name": "Missouri",
+   "currency": "USD",
+   "rate": 0.13
+  },
+  {
+   "code": "US-MT",
+   "name": "Montana",
+   "currency": "USD",
+   "rate": 0.134
+  },
+  {
+   "code": "US-NE",
+   "name": "Nebraska",
+   "currency": "USD",
+   "rate": 0.12
+  },
+  {
+   "code": "US-NV",
+   "name": "Nevada",
+   "currency": "USD",
+   "rate": 0.153
+  },
+  {
+   "code": "US-NH",
+   "name": "New Hampshire",
+   "currency": "USD",
+   "rate": 0.245
+  },
+  {
+   "code": "US-NJ",
+   "name": "New Jersey",
+   "currency": "USD",
+   "rate": 0.194
+  },
+  {
+   "code": "US-NM",
+   "name": "New Mexico",
+   "currency": "USD",
+   "rate": 0.15
+  },
+  {
+   "code": "US-NY",
+   "name": "New York",
+   "currency": "USD",
+   "rate": 0.25
+  },
+  {
+   "code": "US-NC",
+   "name": "North Carolina",
+   "currency": "USD",
+   "rate": 0.139
+  },
+  {
+   "code": "US-ND",
+   "name": "North Dakota",
+   "currency": "USD",
+   "rate": 0.119
+  },
+  {
+   "code": "US-OH",
+   "name": "Ohio",
+   "currency": "USD",
+   "rate": 0.161
+  },
+  {
+   "code": "US-OK",
+   "name": "Oklahoma",
+   "currency": "USD",
+   "rate": 0.13
+  },
+  {
+   "code": "US-OR",
+   "name": "Oregon",
+   "currency": "USD",
+   "rate": 0.146
+  },
+  {
+   "code": "US-PA",
+   "name": "Pennsylvania",
+   "currency": "USD",
+   "rate": 0.18
+  },
+  {
+   "code": "US-RI",
+   "name": "Rhode Island",
+   "currency": "USD",
+   "rate": 0.29
+  },
+  {
+   "code": "US-SC",
+   "name": "South Carolina",
+   "currency": "USD",
+   "rate": 0.144
+  },
+  {
+   "code": "US-SD",
+   "name": "South Dakota",
+   "currency": "USD",
+   "rate": 0.13
+  },
+  {
+   "code": "US-TN",
+   "name": "Tennessee",
+   "currency": "USD",
+   "rate": 0.129
+  },
+  {
+   "code": "US-TX",
+   "name": "Texas",
+   "currency": "USD",
+   "rate": 0.153
+  },
+  {
+   "code": "US-UT",
+   "name": "Utah",
+   "currency": "USD",
+   "rate": 0.122
+  },
+  {
+   "code": "US-VT",
+   "name": "Vermont",
+   "currency": "USD",
+   "rate": 0.226
+  },
+  {
+   "code": "US-VA",
+   "name": "Virginia",
+   "currency": "USD",
+   "rate": 0.149
+  },
+  {
+   "code": "US-WA",
+   "name": "Washington",
+   "currency": "USD",
+   "rate": 0.126
+  },
+  {
+   "code": "US-WV",
+   "name": "West Virginia",
+   "currency": "USD",
+   "rate": 0.151
+  },
+  {
+   "code": "US-WI",
+   "name": "Wisconsin",
+   "currency": "USD",
+   "rate": 0.179
+  },
+  {
+   "code": "US-WY",
+   "name": "Wyoming",
+   "currency": "USD",
+   "rate": 0.133
+  },
+  {
+   "code": "CA-AB",
+   "name": "Alberta",
+   "currency": "CAD",
+   "rate": 0.25
+  },
+  {
+   "code": "CA-BC",
+   "name": "British Columbia",
+   "currency": "CAD",
+   "rate": 0.12
+  },
+  {
+   "code": "CA-MB",
+   "name": "Manitoba",
+   "currency": "CAD",
+   "rate": 0.11
+  },
+  {
+   "code": "CA-NB",
+   "name": "New Brunswick",
+   "currency": "CAD",
+   "rate": 0.14
+  },
+  {
+   "code": "CA-NL",
+   "name": "Newfoundland and Labrador",
+   "currency": "CAD",
+   "rate": 0.15
+  },
+  {
+   "code": "CA-NS",
+   "name": "Nova Scotia",
+   "currency": "CAD",
+   "rate": 0.19
+  },
+  {
+   "code": "CA-ON",
+   "name": "Ontario",
+   "currency": "CAD",
+   "rate": 0.15
+  },
+  {
+   "code": "CA-PE",
+   "name": "Prince Edward Island",
+   "currency": "CAD",
+   "rate": 0.18
+  },
+  {
+   "code": "CA-QC",
+   "name": "Quebec",
+   "currency": "CAD",
+   "rate": 0.08
+  },
+  {
+   "code": "CA-SK",
+   "name": "Saskatchewan",
+   "currency": "CAD",
+   "rate": 0.2
+  },
+  {
+   "code": "AU",
+   "name": "Australia",
+   "currency": "AUD",
+   "rate": 0.33
+  },
+  {
+   "code": "AT",
+   "name": "Austria",
+   "currency": "EUR",
+   "rate": 0.3
+  },
+  {
+   "code": "BE",
+   "name": "Belgium",
+   "currency": "EUR",
+   "rate": 0.35
+  },
+  {
+   "code": "BR",
+   "name": "Brazil",
+   "currency": "BRL",
+   "rate": 0.85
+  },
+  {
+   "code": "CN",
+   "name": "China",
+   "currency": "CNY",
+   "rate": 0.55
+  },
+  {
+   "code": "CZ",
+   "name": "Czechia",
+   "currency": "CZK",
+   "rate": 6.5
+  },
+  {
+   "code": "DK",
+   "name": "Denmark",
+   "currency": "DKK",
+   "rate": 2.6
+  },
+  {
+   "code": "FI",
+   "name": "Finland",
+   "currency": "EUR",
+   "rate": 0.2
+  },
+  {
+   "code": "FR",
+   "name": "France",
+   "currency": "EUR",
+   "rate": 0.25
+  },
+  {
+   "code": "DE",
+   "name": "Germany",
+   "currency": "EUR",
+   "rate": 0.39
+  },
+  {
+   "code": "HK",
+   "name": "Hong Kong",
+   "currency": "HKD",
+   "rate": 1.5
+  },
+  {
+   "code": "IN",
+   "name": "India",
+   "currency": "INR",
+   "rate": 8
+  },
+  {
+   "code": "IE",
+   "name": "Ireland",
+   "currency": "EUR",
+   "rate": 0.37
+  },
+  {
+   "code": "IL",
+   "name": "Israel",
+   "currency": "ILS",
+   "rate": 0.65
+  },
+  {
+   "code": "IT",
+   "name": "Italy",
+   "currency": "EUR",
+   "rate": 0.3
+  },
+  {
+   "code": "JP",
+   "name": "Japan",
+   "currency": "JPY",
+   "rate": 31
+  },
+  {
+   "code": "MX",
+   "name": "Mexico",
+   "currency": "MXN",
+   "rate": 1.5
+  },
+  {
+   "code": "NL",
+   "name": "Netherlands",
+   "currency": "EUR",
+   "rate": 0.32
+  },
+  {
+   "code": "NZ",
+   "name": "New Zealand",
+   "currency": "NZD",
+   "rate": 0.35
+  },
+  {
+   "code": "NO",
+   "name": "Norway",
+   "currency": "NOK",
+   "rate": 1.4
+  },
+  {
+   "code": "PH",
+   "name": "Philippines",
+   "currency": "PHP",
+   "rate": 12
+  },
+  {
+   "code": "PL",
+   "name": "Poland",
+   "currency": "PLN",
+   "rate": 1
+  },
+  {
+   "code": "PT",
+   "name": "Portugal",
+   "currency": "EUR",
+   "rate": 0.22
+  },
+  {
+   "code": "SG",
+   "name": "Singapore",
+   "currency": "SGD",
+   "rate": 0.3
+  },
+  {
+   "code": "ZA",
+   "name": "South Africa",
+   "currency": "ZAR",
+   "rate": 3.5
+  },
+  {
+   "code": "KR",
+   "name": "South Korea",
+   "currency": "KRW",
+   "rate": 150
+  },
+  {
+   "code": "ES",
+   "name": "Spain",
+   "currency": "EUR",
+   "rate": 0.24
+  },
+  {
+   "code": "SE",
+   "name": "Sweden",
+   "currency": "SEK",
+   "rate": 2
+  },
+  {
+   "code": "CH",
+   "name": "Switzerland",
+   "currency": "CHF",
+   "rate": 0.32
+  },
+  {
+   "code": "TW",
+   "name": "Taiwan",
+   "currency": "TWD",
+   "rate": 3
+  },
+  {
+   "code": "AE",
+   "name": "United Arab Emirates",
+   "currency": "AED",
+   "rate": 0.3
+  },
+  {
+   "code": "GB",
+   "name": "United Kingdom",
+   "currency": "GBP",
+   "rate": 0.25
+  }
+ ],
+ "tzRegions": {
+  "America/Los_Angeles": "US-CA",
+  "America/Denver": "US-CO",
+  "America/Phoenix": "US-AZ",
+  "America/Boise": "US-ID",
+  "America/Detroit": "US-MI",
+  "America/Anchorage": "US-AK",
+  "America/Juneau": "US-AK",
+  "America/Nome": "US-AK",
+  "America/Sitka": "US-AK",
+  "Pacific/Honolulu": "US-HI",
+  "America/Toronto": "CA-ON",
+  "America/Vancouver": "CA-BC",
+  "America/Edmonton": "CA-AB",
+  "America/Winnipeg": "CA-MB",
+  "America/Regina": "CA-SK",
+  "America/Halifax": "CA-NS",
+  "America/Moncton": "CA-NB",
+  "America/St_Johns": "CA-NL",
+  "America/Montreal": "CA-QC",
+  "Europe/London": "GB",
+  "Europe/Dublin": "IE",
+  "Europe/Berlin": "DE",
+  "Europe/Paris": "FR",
+  "Europe/Madrid": "ES",
+  "Europe/Rome": "IT",
+  "Europe/Amsterdam": "NL",
+  "Europe/Brussels": "BE",
+  "Europe/Vienna": "AT",
+  "Europe/Zurich": "CH",
+  "Europe/Lisbon": "PT",
+  "Europe/Warsaw": "PL",
+  "Europe/Prague": "CZ",
+  "Europe/Stockholm": "SE",
+  "Europe/Oslo": "NO",
+  "Europe/Copenhagen": "DK",
+  "Europe/Helsinki": "FI",
+  "Pacific/Auckland": "NZ",
+  "Asia/Tokyo": "JP",
+  "Asia/Seoul": "KR",
+  "Asia/Singapore": "SG",
+  "Asia/Kolkata": "IN",
+  "Asia/Calcutta": "IN",
+  "Asia/Shanghai": "CN",
+  "Asia/Hong_Kong": "HK",
+  "Asia/Taipei": "TW",
+  "America/Sao_Paulo": "BR",
+  "America/Mexico_City": "MX",
+  "Africa/Johannesburg": "ZA",
+  "Asia/Dubai": "AE",
+  "Asia/Jerusalem": "IL",
+  "Asia/Manila": "PH"
+ }
+}
