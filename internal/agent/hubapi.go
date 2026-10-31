@@ -35,6 +35,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/ContractorKeith/machine-monitor/internal/textclean"
 )
 
 // DefaultPort is the hub port added to an http:// URL that has none, as upstream.
@@ -215,12 +217,7 @@ func Connect(ctx context.Context, c *http.Client, hubURL, code string) (string, 
 
 // cleanMsg keeps a hub's error message printable and short; it comes from the network.
 func cleanMsg(s string) string {
-	s = strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) {
-			return -1
-		}
-		return r
-	}, s)
+	s = textclean.Clean(s)
 	if r := []rune(s); len(r) > 200 {
 		s = string(r[:200])
 	}

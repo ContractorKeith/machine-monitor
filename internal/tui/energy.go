@@ -793,6 +793,7 @@ func (m model) updateToday(msg tea.Msg) (model, tea.Cmd, bool) {
 		if msg.seq != m.today.seq {
 			return m, nil, true
 		}
+		cleanAll(msg.data)
 		if msg.err == nil && msg.data != nil {
 			price, _ := m.priceSettings()
 			if msg.data.Settings != nil {

@@ -279,17 +279,7 @@ func actionResultNotice(raw json.RawMessage) string {
 	if ev.Result.Message != nil && *ev.Result.Message != "" {
 		msg = *ev.Result.Message
 	}
-	return printable(ev.Name + ": " + msg)
-}
-
-// printable drops control characters from text that came over the network.
-func printable(s string) string {
-	return strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) {
-			return -1
-		}
-		return r
-	}, s)
+	return clean(ev.Name + ": " + msg)
 }
 
 func capitalize(s string) string {

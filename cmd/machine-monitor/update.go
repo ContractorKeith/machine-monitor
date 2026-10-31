@@ -12,6 +12,7 @@ import (
 
 	"github.com/ContractorKeith/machine-monitor/internal/hub"
 	"github.com/ContractorKeith/machine-monitor/internal/service"
+	"github.com/ContractorKeith/machine-monitor/internal/textclean"
 	"github.com/ContractorKeith/machine-monitor/internal/update"
 )
 
@@ -123,12 +124,5 @@ func printNotes(w io.Writer, rel update.Release) {
 	fmt.Fprintln(w)
 }
 
-// printable drops control characters (terminal escapes) from text fetched over the network.
-func printable(s string) string {
-	return strings.Map(func(r rune) rune {
-		if r < 0x20 && r != '\t' || r == 0x7f || (r >= 0x80 && r < 0xa0) {
-			return -1
-		}
-		return r
-	}, s)
-}
+// printable makes text fetched over the network safe to print (see internal/textclean).
+func printable(s string) string { return textclean.Clean(s) }

@@ -166,6 +166,7 @@ func (m model) updateViews(msg tea.Msg) (model, tea.Cmd, bool) {
 		if msg.seq != m.hv.seq {
 			return m, nil, true
 		}
+		cleanAll(msg.res)
 		m.hv.err = msg.err
 		if msg.err == nil {
 			m.hv.res, m.hv.resID = msg.res, msg.id
@@ -188,6 +189,7 @@ func (m model) updateViews(msg tea.Msg) (model, tea.Cmd, bool) {
 		if msg.seq != m.ev.seq {
 			return m, nil, true
 		}
+		cleanAll(msg.data)
 		m.ev.err = msg.err
 		if msg.err == nil {
 			m.ev.data = msg.data

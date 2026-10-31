@@ -196,6 +196,7 @@ func (m model) tailscaleReader() func(ctx context.Context) (*tailscale.Status, e
 func (m model) updateSettings(msg tea.Msg) (model, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case priceLoadedMsg:
+		cleanAll(msg.s)
 		m.set.priceErr = msg.err
 		if msg.err == nil {
 			m.set.price, m.set.priceSet = msg.s, true
@@ -212,6 +213,7 @@ func (m model) updateSettings(msg tea.Msg) (model, tea.Cmd, bool) {
 		return m, m.fetchToday(), true
 	case remoteMsg:
 		m.set.tsBusy = false
+		cleanAll(msg.st) // /api/remote is drawn in the Tailscale row
 		m.set.ts, m.set.tsErr = msg.st, msg.err
 		return m, nil, true
 	}
@@ -227,6 +229,7 @@ func (m *model) applyEnergySettings(ev client.Event) {
 
 // applyPrice makes s the price in force: the hub's in hub mode, this machine's otherwise.
 func (m *model) applyPrice(s *power.Settings) {
+	cleanAll(s) // the currency is drawn in Energy and Settings
 	if m.multi() {
 		m.set.price, m.set.priceSet = s, true
 		if m.ev.data != nil { // the Energy view prices with it at once

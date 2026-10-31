@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"github.com/ContractorKeith/machine-monitor/internal/textclean"
 	"io"
 	"math"
 	"math/big"
@@ -222,8 +223,8 @@ func normalizeProcesses(v any) []Process {
 	return out
 }
 
-// CleanText is upstream's cleanText: v as JS String() renders it, without control
-// characters (and, beyond upstream, bidi override and format characters), trimmed, cut to limit UTF-16 code units. nil for null or an empty result.
+// CleanText is upstream's cleanText: v as JS String() renders it, cleaned by the shared
+// textclean policy (beyond upstream: escape sequences, bidi, invisible characters), trimmed, cut to limit UTF-16 code units. nil for null or an empty result.
 // v is a value from encoding/json (decoded with or without UseNumber).
 func CleanText(v any, limit int) *string { return str(v, limit) }
 
@@ -260,28 +261,12 @@ func str(v any, limit int) *string {
 	if v == nil {
 		return nil
 	}
-	s := strings.Map(func(r rune) rune {
-		if r <= 0x1f || r == 0x7f || isBidiFormat(r) {
-			return -1
-		}
-		return r
-	}, jsString(v))
+	s := textclean.Strip(jsString(v))
 	s = strings.TrimFunc(s, isJSSpace)
 	if s == "" {
 		return nil
 	}
 	return Ptr(cutUTF16(s, limit))
-}
-
-// isBidiFormat reports the invisible format and control characters CleanText strips beyond
-// upstream: LRM/RLM (U+200E, U+200F), the Arabic letter mark (U+061C), the embeddings and
-// overrides (U+202A–U+202E), the isolates (U+2066–U+2069), the zero-width characters
-// (U+200B–U+200D, U+2060, U+FEFF) and the C1 controls (U+0080–U+009F, where U+009B is CSI to
-// some terminals). A U+202E in a hostname or process name reverses the text after it on
-// screen; zero-width characters make lookalike names.
-func isBidiFormat(r rune) bool {
-	return r == 0x061c || (r >= 0x200b && r <= 0x200f) || (r >= 0x202a && r <= 0x202e) ||
-		r == 0x2060 || (r >= 0x2066 && r <= 0x2069) || r == 0xfeff || (r >= 0x80 && r <= 0x9f)
 }
 
 // cutUTF16 keeps the first limit UTF-16 code units of s, never splitting a surrogate pair.
