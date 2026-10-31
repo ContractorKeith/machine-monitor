@@ -11,18 +11,46 @@ import (
 )
 
 // TestSchtasksHelperProcess is the task's payload, not a test: the integration test runs
-// this binary as `-test.run=^TestSchtasksHelperProcess$ <marker>`. It writes the marker
-// file and stays up long enough for /Query to see the task running.
+// a copy of this binary as `-test.run=^TestSchtasksHelperProcess$ <heartbeat>`. It
+// rewrites the heartbeat file every 200ms for up to a minute, so the test can see both
+// that it started and that /End stopped it.
 func TestSchtasksHelperProcess(t *testing.T) {
 	if flag.NArg() != 1 {
 		t.Skip("only runs as the scheduled task's payload")
 	}
-	os.WriteFile(flag.Arg(0), []byte("started"), 0o600)
-	time.Sleep(20 * time.Second)
+	for range 300 {
+		os.WriteFile(flag.Arg(0), []byte(time.Now().Format(time.RFC3339Nano)), 0o600)
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// copyFile copies src to dst.
+func copyFile(t *testing.T, src, dst string) {
+	t.Helper()
+	b, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst, b, 0o700); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// beating reports whether the heartbeat file changes within 2s.
+func beating(path string) bool {
+	first, _ := os.ReadFile(path)
+	for range 10 {
+		time.Sleep(200 * time.Millisecond)
+		if b, _ := os.ReadFile(path); string(b) != string(first) {
+			return true
+		}
+	}
+	return false
 }
 
 // TestSchtasksLogonTaskIntegration creates a real logon task through the same XML and
-// schtasks calls as install, runs it once through conhost --headless, and deletes it.
+// schtasks calls as install, runs it once through conhost --headless, checks /End stops
+// it (reinstall relies on that), and deletes it.
 func TestSchtasksLogonTaskIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("creates a real scheduled task")
@@ -44,11 +72,15 @@ func TestSchtasksLogonTaskIntegration(t *testing.T) {
 		}
 	})
 
-	exe, err := os.Executable()
+	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	marker := filepath.Join(t.TempDir(), "started")
+	// Run a copy so a payload that outlives the test can't lock go test's own binary.
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "payload.exe")
+	copyFile(t, self, exe)
+	marker := filepath.Join(dir, "heartbeat")
 	xml := m.taskXML("machine-monitor integration test", []string{exe, "-test.run=^TestSchtasksHelperProcess$", marker})
 	if err := m.createTask(ctx, name, xml); err != nil {
 		t.Fatalf("create: %v\n%s", err, xml)
@@ -78,5 +110,22 @@ func TestSchtasksLogonTaskIntegration(t *testing.T) {
 	}
 	if !sawRunning {
 		t.Error("/Query never reported the task as Running while its command ran")
+	}
+
+	if _, err := m.run(ctx, "schtasks", "/End", "/TN", name); err != nil {
+		t.Fatalf("end: %v", err)
+	}
+	stopped := false
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
+		if !beating(marker) {
+			stopped = true
+			break
+		}
+	}
+	if !stopped {
+		t.Error("/End left the task's command running")
+	}
+	if _, state := m.queryTask(ctx, name); state == "Running" {
+		t.Errorf("/Query still reports Running after /End")
 	}
 }
