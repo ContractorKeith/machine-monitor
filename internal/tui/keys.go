@@ -4,7 +4,8 @@ import "charm.land/bubbles/v2/key"
 
 // keyMap is every binding; it also feeds the ? help screen.
 type keyMap struct {
-	Dashboard, Device, Processes, Alerts, Next    key.Binding
+	Dashboard, Device, Processes, History, Energy key.Binding
+	Alerts, Next                                  key.Binding
 	Help, Quit                                    key.Binding
 	Up, Down, PageUp, PageDown, Top, Bottom       key.Binding
 	Filter, Sort, Reverse, Clear                  key.Binding
@@ -28,6 +29,8 @@ func newKeyMap(hub bool) keyMap {
 		Dashboard: key.NewBinding(key.WithKeys("1"), key.WithHelp("1", "dashboard")),
 		Device:    key.NewBinding(key.WithKeys("2"), key.WithHelp("2", "device")),
 		Processes: key.NewBinding(key.WithKeys("3"), key.WithHelp("3", "processes")),
+		History:   key.NewBinding(key.WithKeys("4"), key.WithHelp("4", "history")),
+		Energy:    key.NewBinding(key.WithKeys("5"), key.WithHelp("5", "energy")),
 		Alerts:    key.NewBinding(key.WithKeys("6"), key.WithHelp("6", "alerts")),
 		Next:      key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next view")),
 		Help:      key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
@@ -53,7 +56,7 @@ func (k keyMap) ShortHelp() []key.Binding {
 // FullHelp implements help.KeyMap: one column per group.
 func (k keyMap) FullHelp() [][]key.Binding {
 	groups := [][]key.Binding{
-		{k.Dashboard, k.Device, k.Processes, k.Alerts, k.Next, k.Help, k.Quit},
+		{k.Dashboard, k.Device, k.Processes, k.History, k.Energy, k.Alerts, k.Next, k.Help, k.Quit},
 		{k.Up, k.Down, k.PageUp, k.PageDown, k.Top, k.Bottom},
 	}
 	if k.hub {

@@ -12,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/ContractorKeith/machine-monitor/internal/client"
+	"github.com/ContractorKeith/machine-monitor/internal/power"
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
@@ -25,14 +26,16 @@ const (
 	viewDashboard view = iota
 	viewDevice
 	viewProcesses
+	viewHistory
+	viewEnergy
 	viewAlerts
 	viewCount
 )
 
-var viewNames = [viewCount]string{"Dashboard", "Device", "Processes", "Alerts"}
+var viewNames = [viewCount]string{"Dashboard", "Device", "Processes", "History", "Energy", "Alerts"}
 
 // viewKeys are the number keys, which follow PLAN §7 even where a view isn't built yet.
-var viewKeys = [viewCount]string{"1", "2", "3", "6"}
+var viewKeys = [viewCount]string{"1", "2", "3", "4", "5", "6"}
 
 // Messages.
 type (
@@ -80,6 +83,10 @@ type model struct {
 
 	al alertsUI // the Alerts view and the banner (alerts.go)
 
+	hv    histState      // the History view (history.go)
+	ev    energyState    // the Energy view (energy.go)
+	guess power.Settings // price guessed from the time zone, until one is saved
+
 	procs       []report.Process
 	visible     []report.Process // procs filtered and sorted; refreshProcs keeps it current
 	procsErr    error
@@ -122,6 +129,8 @@ func New(o Options) tea.Model {
 		width: 80, height: 24,
 		procSort: sortCPU, filter: f,
 		ctx: context.Background(), rename: rn,
+		hv: histState{rng: histDefaultRange, cursor: 1}, ev: energyState{rng: energyDefaultRange},
+		guess: power.DefaultSettings(),
 	}
 }
 
@@ -184,6 +193,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if next, cmd, ok := m.updateHub(msg); ok {
 		return next, cmd
 	}
+	if next, cmd, ok := m.updateViews(msg); ok {
+		return next, cmd
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -195,6 +207,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.collectErr = msg.err
 		if msg.r != nil {
 			r := msg.r
+			m.recordLocal(r)
 			m.sel = localID
 			m.editDev(localID, func(d *device) {
 				d.name, d.online = str(r.Hostname), true
@@ -275,6 +288,10 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.switchTo(viewDevice)
 	case key.Matches(msg, k.Processes):
 		return m.switchTo(viewProcesses)
+	case key.Matches(msg, k.History):
+		return m.switchTo(viewHistory)
+	case key.Matches(msg, k.Energy):
+		return m.switchTo(viewEnergy)
 	case key.Matches(msg, k.Alerts):
 		return m.switchTo(viewAlerts)
 	case key.Matches(msg, k.Next):
@@ -293,16 +310,25 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.scrollDevice(msg)
 	case viewProcesses:
 		return m.procKey(msg)
+	case viewHistory:
+		return m.historyKey(msg)
+	case viewEnergy:
+		return m.energyKey(msg)
 	case viewAlerts:
 		return m.alertsKey(msg)
 	}
 	return m, nil
 }
 
-// switchTo changes view and closes help; opening Processes fetches the list at once.
+// switchTo changes view and closes help; opening Processes, History, Energy or Alerts
+// reads its data at once.
 func (m model) switchTo(v view) (tea.Model, tea.Cmd) {
 	m.view, m.showHelp = v, false
-	return m, tea.Batch(m.maybeProcs(), m.maybeLoadAlerts())
+	// Each starter bumps state through m, so call them before returning m.
+	procs := m.maybeProcs()
+	alerts := m.maybeLoadAlerts()
+	open := m.openView()
+	return m, tea.Batch(procs, alerts, open)
 }
 
 // bodyHeight is the rows between the header (and the alert banner) and the footer.
@@ -343,6 +369,9 @@ func (m *model) clampScroll() {
 		m.procOffset = m.procCursor - rows + 1
 	}
 	m.procOffset = max(0, min(m.procOffset, max(0, n-rows)))
+	if m.view == viewEnergy {
+		m.clampEnergy()
+	}
 }
 
 // View renders the frame: header, the current view, footer, clipped to the window.
@@ -373,6 +402,10 @@ func (m model) render() string {
 		body, foot = strings.Join(lines[min(m.deviceScroll, end):end], "\n"), m.deviceFooter(len(lines))
 	case m.view == viewProcesses:
 		body, foot = m.processes(), m.procFooter()
+	case m.view == viewHistory:
+		body, foot = m.historyView(), m.historyFooter()
+	case m.view == viewEnergy:
+		body, foot = m.energyView(), m.energyFooter()
 	case m.view == viewAlerts:
 		body, foot = m.alertsView(), m.alertsFooter()
 	}

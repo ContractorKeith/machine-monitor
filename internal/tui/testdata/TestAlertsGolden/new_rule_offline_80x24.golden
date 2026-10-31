@@ -1,4 +1,4 @@
-machine-monitor · hub hub.lan:7777   1  2  3  6 Alerts                       ?/q
+machine-monitor · hub hub.lan:7777   1  2  3  4  5  6 Alerts                 ?/q
 New rule                                                                        
                                                                                 
 ▶ Type               ◀ Offline ▶                                                

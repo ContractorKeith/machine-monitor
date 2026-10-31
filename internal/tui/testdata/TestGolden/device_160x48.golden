@@ -1,4 +1,4 @@
-machine-monitor · ws-01   1 Dashboard  2 Device  3 Processes  6 Alerts                                                                            ? help  q quit
+machine-monitor · ws-01   1 Dashboard  2 Device  3 Processes  4 History  5 Energy  6 Alerts                                                       ? help  q quit
 System                                                                                                                                                          
   Host          ws-01                                                                                                                                           
   OS            Ubuntu 24.04.1 LTS · Precision 7960                                                                                                             

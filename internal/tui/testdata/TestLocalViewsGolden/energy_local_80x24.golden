@@ -1,0 +1,24 @@
+machine-monitor · ws-01   1  2  3  4  5 Energy  6                            ?/q
+Electricity                                               24 h  7 days  30 days 
+Drawing now  484 W      $1.92 a day at this rate                                
+Energy used  0.90 kWh   since Oct 31 10:00                                      
+Cost         $0.15      at $0.165/kWh                                           
+Per month    $53.95     ≈ 327 kWh at the recent average                         
+Electricity price $0.165/kWh · Typical home rate for United States (average).   
+                                                                                
+Energy per hour                                                          ■ ws-01
+    1 kWh                                                                       
+                                                                                
+  0.5 kWh                                                              ▃▃ ▁▁    
+                                                                       ██ ██    
+    0 kWh                                                              ██ ██ ▁▁ 
+          13h  15h   17h   19h   21h   23h   01h  03h   05h   07h   09h   11h   
+                                                                                
+Device                        Now  Average     Peak     Energy      Cost  Share 
+■ ws-01                     484 W    484 W    484 W   0.90 kWh     $0.15   100% 
+All devices                 484 W                     0.90 kWh     $0.15        
+                                                                                
+Usage                                                                           
+Device                  Online CPU avg/pk GPU avg/pk  Mem Temp CPU/GPU      Down
+■ ws-01               1.9 h 8%    50%/79%    91%/91%  37%    72° / 86°  80.6 GiB
+[ ] range · ↑/↓ scroll · 1–22 of 25                                             

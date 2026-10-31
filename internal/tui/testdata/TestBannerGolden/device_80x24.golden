@@ -1,4 +1,4 @@
-machine-monitor · ws-01   1 Dashboard  2 Device  3 Processes  6 Alerts       ?/q
+machine-monitor · ws-01   1  2 Device  3  4  5  6                            ?/q
  ⚠ studio: GPU load 99% · Above 95% for 5 min. (+1 more)  esc dismiss · 6 alerts
 System                                                                          
   Host          ws-01                                                           
