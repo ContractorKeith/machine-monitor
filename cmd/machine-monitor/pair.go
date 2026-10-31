@@ -74,11 +74,17 @@ func runPair(args []string, stdout, stderr io.Writer) int {
 	hubURL := "http://" + addr
 	hc := localHubClient(key)
 
-	// SIGHUP (terminal closed, SSH dropped) and SIGPIPE (stdout piped to a reader that quit,
-	// as `pair | head -1`) end the run like Ctrl+C, so its code is cancelled (skeptic report
-	// N3). Without SIGPIPE here, Go would die on the first write to the closed pipe.
+	// SIGHUP (terminal closed, SSH dropped) ends the run like Ctrl+C, so its code is
+	// cancelled (skeptic report N3). So does stdout's reader quitting (`pair | head -1`):
+	// with SIGPIPE caught, a write to the closed pipe fails with EPIPE instead of killing
+	// the process (os/signal), and quitOnError turns that failure into a stop. Windows has no
+	// SIGPIPE; the write just fails there.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGPIPE)
 	defer stop()
+	ctx, quit := context.WithCancel(ctx)
+	defer quit()
+	tty := isTerminal(stdout) // before the wrap: it looks for an *os.File
+	stdout = &quitOnError{w: stdout, quit: quit}
 	// The owner ties the code to this run's stream: if the run dies without cancelling
 	// (SIGKILL, a crash), the hub ends the code when the stream closes.
 	ob := make([]byte, 16)
@@ -112,7 +118,6 @@ func runPair(args []string, stdout, stderr io.Writer) int {
 
 	fmt.Fprintf(stdout, "Pairing code: %s %s\n", code[:3], code[3:])
 	fmt.Fprintf(stdout, "On the new device, run: machine-monitor connect %s\n", hubAddress(*port))
-	tty := isTerminal(stdout)
 	clearLine := func() {
 		if tty {
 			fmt.Fprint(stdout, "\r\033[K")
@@ -178,6 +183,20 @@ func runPair(args []string, stdout, stderr io.Writer) int {
 			}
 		}
 	}
+}
+
+// quitOnError passes writes to w, and calls quit once one fails.
+type quitOnError struct {
+	w    io.Writer
+	quit func()
+}
+
+func (q *quitOnError) Write(b []byte) (int, error) {
+	n, err := q.w.Write(b)
+	if err != nil {
+		q.quit()
+	}
+	return n, err
 }
 
 // errNotHub is a program on the port that can't prove, for this very connection, that it is

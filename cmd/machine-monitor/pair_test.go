@@ -49,16 +49,25 @@ func pairHub(t *testing.T) (*hub.Hub, *httptest.Server, string) {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(h.Handler())
-	t.Cleanup(func() { srv.Close(); h.Close() })
+	// Drop connections first: a pair a failed test left running holds its stream open,
+	// and srv.Close would wait on it for ever.
+	t.Cleanup(func() { srv.CloseClientConnections(); srv.Close(); h.Close() })
 	u, _ := url.Parse(srv.URL)
 	return h, srv, u.Port()
 }
 
 // startPair runs `pair --port port` in the background.
 func startPair(port string) (out, errOut *syncBuffer, rc chan int) {
-	out, errOut, rc = &syncBuffer{}, &syncBuffer{}, make(chan int, 1)
-	go func() { rc <- run([]string{"pair", "--port", port}, out, errOut) }()
+	out = &syncBuffer{}
+	errOut, rc = startPairTo(port, out)
 	return out, errOut, rc
+}
+
+// startPairTo runs `pair --port port` in the background with stdout out.
+func startPairTo(port string, out io.Writer) (errOut *syncBuffer, rc chan int) {
+	errOut, rc = &syncBuffer{}, make(chan int, 1)
+	go func() { rc <- run([]string{"pair", "--port", port}, out, errOut) }()
+	return errOut, rc
 }
 
 func waitExit(t *testing.T, rc chan int, errOut *syncBuffer) int {
@@ -66,7 +75,7 @@ func waitExit(t *testing.T, rc chan int, errOut *syncBuffer) int {
 	select {
 	case c := <-rc:
 		return c
-	case <-time.After(15 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatalf("pair didn't finish; stderr %q", errOut.String())
 		return 0
 	}
@@ -101,42 +110,81 @@ func TestPairPrintsCodeUntilUsed(t *testing.T) {
 	}
 }
 
-// TestPairSignalsCancelCode is skeptic report N3: a pair stopped by SIGHUP (terminal
-// closed, SSH dropped) or SIGPIPE (`pair | head -1`) left its code live, so the next pair
-// refused for up to 10 minutes. Both must end the run's code, as Ctrl+C does.
-func TestPairSignalsCancelCode(t *testing.T) {
+// closedPipe is stdout piped to a reader that quit after the first line (`pair | head -1`):
+// every write after the one that finishes that line fails with EPIPE.
+type closedPipe struct {
+	syncBuffer
+	closed bool
+}
+
+func (p *closedPipe) Write(b []byte) (int, error) {
+	p.mu.Lock()
+	closed := p.closed
+	p.mu.Unlock()
+	if closed {
+		return 0, syscall.EPIPE
+	}
+	n, err := p.syncBuffer.Write(b)
+	p.mu.Lock()
+	p.closed = strings.Contains(p.b.String(), "\n")
+	p.mu.Unlock()
+	return n, err
+}
+
+// newCodeAllowed asks the hub for an exclusive code: only possible when none is live.
+func newCodeAllowed(t *testing.T, h *hub.Hub, srv *httptest.Server) {
+	t.Helper()
+	req, _ := http.NewRequest("POST", srv.URL+"/api/pair/code", strings.NewReader(`{"replace":false}`))
+	req.Header.Set("Authorization", "Bearer "+h.Token())
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("a new code: %d %s", resp.StatusCode, body)
+	}
+}
+
+// TestPairStopsWhenStdoutCloses is skeptic report N3: `pair | head -1` left its code live,
+// so the next pair refused for up to 10 minutes. A failed write to stdout must end the run
+// and cancel the code. (A real broken pipe gives the same EPIPE: pair catches SIGPIPE, and
+// on Windows the write just fails.)
+func TestPairStopsWhenStdoutCloses(t *testing.T) {
+	h, srv, port := pairHub(t)
+	out := &closedPipe{}
+	errOut, rc := startPairTo(port, out)
+	if c := waitExit(t, rc, errOut); c != 1 {
+		t.Fatalf("exit %d; stdout %q, stderr %q", c, out.String(), errOut.String())
+	}
+	if !strings.Contains(out.String(), "Pairing code") {
+		t.Fatalf("no code before the pipe closed: %q", out.String())
+	}
+	newCodeAllowed(t, h, srv)
+}
+
+// TestPairSighupCancelsCode is skeptic report N3: a pair stopped by SIGHUP (terminal
+// closed, SSH dropped) left its code live. It must end the run's code, as Ctrl+C does.
+func TestPairSighupCancelsCode(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("no SIGHUP or SIGPIPE on Windows")
+		t.Skip("no SIGHUP on Windows")
 	}
-	for _, sig := range []os.Signal{syscall.SIGHUP, syscall.SIGPIPE} {
-		t.Run(sig.String(), func(t *testing.T) {
-			h, srv, port := pairHub(t)
-			out, errOut, rc := startPair(port)
-			for deadline := time.Now().Add(10 * time.Second); !strings.Contains(out.String(), "Pairing code"); time.Sleep(20 * time.Millisecond) {
-				if time.Now().After(deadline) {
-					t.Fatalf("no code: stdout %q, stderr %q", out.String(), errOut.String())
-				}
-			}
-			self, _ := os.FindProcess(os.Getpid())
-			if err := self.Signal(sig); err != nil {
-				t.Fatal(err)
-			}
-			if c := waitExit(t, rc, errOut); c != 1 {
-				t.Fatalf("exit %d after %v; stdout %q", c, sig, out.String())
-			}
-			req, _ := http.NewRequest("POST", srv.URL+"/api/pair/code", strings.NewReader(`{"replace":false}`))
-			req.Header.Set("Authorization", "Bearer "+h.Token())
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				t.Fatal(err)
-			}
-			body, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			if resp.StatusCode != 200 {
-				t.Fatalf("a new code after %v: %d %s", sig, resp.StatusCode, body)
-			}
-		})
+	h, srv, port := pairHub(t)
+	out, errOut, rc := startPair(port)
+	for deadline := time.Now().Add(10 * time.Second); !strings.Contains(out.String(), "Pairing code"); time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("no code: stdout %q, stderr %q", out.String(), errOut.String())
+		}
 	}
+	self, _ := os.FindProcess(os.Getpid())
+	if err := self.Signal(syscall.SIGHUP); err != nil {
+		t.Fatal(err)
+	}
+	if c := waitExit(t, rc, errOut); c != 1 {
+		t.Fatalf("exit %d after SIGHUP; stdout %q", c, out.String())
+	}
+	newCodeAllowed(t, h, srv)
 }
 
 func TestPairCodeExpiresLocally(t *testing.T) {
