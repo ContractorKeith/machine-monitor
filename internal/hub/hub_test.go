@@ -312,7 +312,7 @@ func (f fakeCollector) Collect(context.Context) (*report.Report, error) {
 func TestHubMonitorsItself(t *testing.T) {
 	clk := &clock{t: time.Now()}
 	h, err := New(Options{Paths: config.At(t.TempDir()), Now: clk.Now, Hostname: "testbox",
-		Collector: fakeCollector{"hub-self"}, Interval: 5 * time.Millisecond})
+		Collector: fakeCollector{"hub-self"}, Interval: 5 * time.Millisecond, Agent: "machine-monitor/test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,14 +323,20 @@ func TestHubMonitorsItself(t *testing.T) {
 	for {
 		h.mu.Lock()
 		d := h.registry["hub-self"]
-		name := ""
+		name, agent := "", ""
 		if d != nil {
 			name = d.Name // read under the lock: ingest writes it
+			if l := h.latest["hub-self"]; l != nil {
+				agent = l.Report.Agent
+			}
 		}
 		h.mu.Unlock()
 		if d != nil {
 			if name != "hubhost" {
 				t.Errorf("name %q", name)
+			}
+			if agent != "machine-monitor/test" {
+				t.Errorf("agent %q: the hub's own reports carry Options.Agent", agent)
 			}
 			break
 		}

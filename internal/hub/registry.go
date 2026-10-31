@@ -363,6 +363,9 @@ func (h *Hub) collectLoop(ctx context.Context) {
 		}
 		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		r, err := h.opt.Collector.Collect(cctx)
+		if err == nil && r != nil && h.opt.Agent != "" {
+			r.Agent = h.opt.Agent
+		}
 		if err == nil && r != nil && h.opt.Procs != nil {
 			r.Features = append(r.Features, "procs")
 			if wantProcs {

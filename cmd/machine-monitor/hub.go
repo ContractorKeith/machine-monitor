@@ -46,7 +46,7 @@ func runHub(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	logger := log.New(stderr, "", log.LstdFlags)
-	h, err := hub.New(hub.Options{Paths: paths, Port: *port, Collector: collect.New(),
+	h, err := hub.New(hub.Options{Paths: paths, Port: *port, Collector: collect.New(), Agent: "machine-monitor/" + version,
 		Procs: tui.SystemProcesses().Processes, Logf: logger.Printf})
 	if err != nil {
 		fmt.Fprintf(stderr, "machine-monitor hub: %v\n", err)
