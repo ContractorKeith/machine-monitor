@@ -3,6 +3,7 @@ package hub
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -17,7 +18,9 @@ import (
 )
 
 // fakeBinary stands in for machine-monitor: it records each call's arguments.
-const fakeBinary = "#!/bin/sh\necho \"$*\" >> \"$HOME/calls.log\"\n"
+// connect also records what it read on stdin.
+const fakeBinary = "#!/bin/sh\necho \"$*\" >> \"$HOME/calls.log\"\n" +
+	"if [ \"$1\" = connect ]; then cat >> \"$HOME/stdin.log\"; fi\n"
 
 // withRelease points the installers at a fake release of version.
 func withRelease(t *testing.T, version string) *updatetest.Release {
@@ -114,9 +117,25 @@ func TestInstallFromDevBuild(t *testing.T) {
 func TestInstallHubURL(t *testing.T) {
 	withRelease(t, "1.2.3")
 	th := newTestHub(t)
-	w := th.req("GET", "/install.sh", th.Token(), "", "Host", "testbox.local:7777", "X-Forwarded-Proto", "https")
-	if !strings.Contains(w.Body.String(), "HUB='https://testbox.local:7777'") {
-		t.Fatalf("hub URL not taken from Host and X-Forwarded-Proto:\n%s", w.Body)
+	https := func(remote string) bool {
+		w := th.req("GET", "/install.sh", th.Token(), "", "Host", "testbox.local:7777",
+			"X-Forwarded-Proto", "https", "RemoteAddr", remote)
+		if !strings.Contains(w.Body.String(), "://testbox.local:7777'") {
+			t.Fatalf("hub URL not taken from Host:\n%s", w.Body)
+		}
+		return strings.Contains(w.Body.String(), "HUB='https://testbox.local:7777'")
+	}
+	if https("127.0.0.1:50000") {
+		t.Error("X-Forwarded-Proto honoured with no trusted proxy configured")
+	}
+	th.mu.Lock()
+	th.cfg.extra = map[string]json.RawMessage{"trustedProxies": json.RawMessage(`["127.0.0.1", "100.64.0.0/10"]`)}
+	th.mu.Unlock()
+	if !https("127.0.0.1:50000") || !https("100.100.1.2:50000") {
+		t.Error("X-Forwarded-Proto ignored from a trusted proxy")
+	}
+	if https("10.0.0.5:50000") {
+		t.Error("X-Forwarded-Proto honoured from an untrusted address")
 	}
 	if w := th.req("GET", "/install.sh", th.Token(), "", "Host", "[::1]'x"); w.Code == 200 {
 		t.Fatalf("odd Host accepted: %d", w.Code)
@@ -142,6 +161,11 @@ func TestFillTemplateQuoting(t *testing.T) {
 
 // installRun is the documented one-liner, curl ... | bash, against a live hub, in a temp HOME.
 func installRun(t *testing.T, th *testHub) (home, hubURL string, out []byte, err error) {
+	return installRunKey(t, th, th.Token())
+}
+
+// installRunKey is installRun with the given key in the Authorization header.
+func installRunKey(t *testing.T, th *testHub, key string) (home, hubURL string, out []byte, err error) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("install.sh is for Linux and macOS")
@@ -158,10 +182,10 @@ func installRun(t *testing.T, th *testHub) (home, hubURL string, out []byte, err
 	os.Mkdir(tmp, 0o700)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "bash", "-c", `set -o pipefail; curl -fsSL -H "Authorization: Bearer $KEY" "$URL/install.sh" | bash`)
+	cmd := exec.CommandContext(ctx, "bash", "-c", `curl -fsSL --fail-with-body -H "Authorization: Bearer $KEY" "$URL/install.sh" | sh`)
 	cmd.Dir = home
 	cmd.Env = []string{"HOME=" + home, "TMPDIR=" + tmp, "PATH=" + os.Getenv("PATH"),
-		"KEY=" + th.Token(), "URL=" + srv.URL}
+		"KEY=" + key, "URL=" + srv.URL}
 	out, err = cmd.CombinedOutput()
 	if left, _ := os.ReadDir(tmp); len(left) > 0 {
 		t.Errorf("installer left %d temp entries", len(left))
@@ -185,10 +209,16 @@ func TestInstallShEndToEnd(t *testing.T) {
 		t.Fatalf("binary not executable: %v", fi.Mode())
 	}
 	calls, _ := os.ReadFile(filepath.Join(home, "calls.log"))
-	want := "connect --no-agent " + hub + "/?key=" + th.Token() + "\n" +
+	want := "connect --no-agent --key-stdin " + hub + "\n" +
 		"service install --role agent --hub " + hub + "\n"
 	if string(calls) != want {
 		t.Fatalf("binary called with\n%s\nwant\n%s\ninstaller output:\n%s", calls, want, out)
+	}
+	if in, _ := os.ReadFile(filepath.Join(home, "stdin.log")); string(in) != th.Token()+"\n" {
+		t.Fatalf("connect read %q on stdin, want the key", in)
+	}
+	if strings.Contains(string(calls), th.Token()) {
+		t.Fatal("the key is in the binary's arguments")
 	}
 
 	// Running it again replaces the binary in place.
@@ -216,10 +246,59 @@ func TestInstallShRefusesBadChecksum(t *testing.T) {
 	}
 }
 
+// The documented one-liner fails when the hub refuses: curl --fail-with-body hands sh the
+// hub's error script (or its JSON 401), and sh exits non-zero.
+func TestInstallShFailsLoudlyOnHubError(t *testing.T) {
+	rel := withRelease(t, "1.2.5")
+	key, cert := updatetest.NewCA(t)
+	rel.Sign(update.WorkflowIdentity(update.Repo)("v1.2.5"), key, cert)
+	th := newTestHub(t)
+	home, _, out, err := installRun(t, th)
+	if err == nil || !strings.Contains(string(out), "verified checksums") {
+		t.Fatalf("hub 502: err %v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(home, "calls.log")); err == nil {
+		t.Error("ran the binary after a hub error")
+	}
+	if _, _, out, err := installRunKey(t, th, "wrong"); err == nil {
+		t.Fatalf("wrong key: pipeline succeeded\n%s", out)
+	}
+}
+
+// A script cut off mid-download runs nothing: all of it is inside main, called last.
+func TestInstallShTruncatedRunsNothing(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("install.sh is for Linux and macOS")
+	}
+	withRelease(t, "1.2.3")
+	th := newTestHub(t)
+	full := th.keyed("GET", "/install.sh", "").Body.String()
+	if !strings.HasSuffix(full, "\nmain \"$@\"\n") {
+		t.Fatal("install.sh doesn't end by calling main")
+	}
+	for _, cut := range []int{len(full) / 3, len(full) / 2, len(full) - len("main \"$@\"\n")} {
+		home := t.TempDir()
+		cmd := exec.Command("sh")
+		cmd.Stdin = strings.NewReader(full[:cut])
+		cmd.Dir = home
+		cmd.Env = []string{"HOME=" + home, "PATH=" + os.Getenv("PATH")}
+		out, _ := cmd.CombinedOutput()
+		if strings.Contains(string(out), "Downloading") {
+			t.Errorf("cut at %d of %d: the install started:\n%s", cut, len(full), out)
+		}
+		if entries, _ := os.ReadDir(home); len(entries) > 0 {
+			t.Errorf("cut at %d: wrote %d entries in HOME", cut, len(entries))
+		}
+	}
+}
+
 func TestInstallShShellCheck(t *testing.T) {
 	sc, err := exec.LookPath("shellcheck")
+	if err == nil {
+		err = exec.Command(sc, "--version").Run() // a version-manager shim may be unconfigured
+	}
 	if err != nil {
-		t.Skip("no shellcheck")
+		t.Skip("no working shellcheck")
 	}
 	if out, err := exec.Command(sc, "-s", "sh", "install.sh").CombinedOutput(); err != nil {
 		t.Fatalf("shellcheck install.sh:\n%s", out)

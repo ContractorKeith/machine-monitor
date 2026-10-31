@@ -3,11 +3,15 @@ package update_test
 import (
 	"bytes"
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ContractorKeith/machine-monitor/internal/update"
 	"github.com/ContractorKeith/machine-monitor/internal/update/updatetest"
@@ -193,5 +197,21 @@ func TestVerifyRealSigstoreBundle(t *testing.T) {
 	}
 	if err := update.DefaultTrust(update.Repo).Verify(sums, bundle, "v2.19.0"); err == nil {
 		t.Fatal("accepted another repo's signature")
+	}
+}
+
+func TestRateLimitMessage(t *testing.T) {
+	reset := time.Now().Add(20 * time.Minute).Truncate(time.Second)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-RateLimit-Remaining", "0")
+		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(reset.Unix(), 10))
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+	src := update.Source{API: srv.URL, Download: srv.URL, Repo: update.Repo, Client: srv.Client()}
+	_, err := src.Latest(context.Background())
+	want := "GitHub API rate limit reached; it resets at " + reset.Format("15:04 MST")
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %v, want %q", err, want)
 	}
 }

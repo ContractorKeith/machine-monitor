@@ -169,6 +169,9 @@ func (s Source) Fetch(ctx context.Context, url string, limit int64) ([]byte, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		if resp.Header.Get("X-RateLimit-Remaining") == "0" {
+			return nil, rateLimitError(resp.Header.Get("X-RateLimit-Reset"))
+		}
 		return nil, fmt.Errorf("GET %s: HTTP %d", url, resp.StatusCode)
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
@@ -179,6 +182,16 @@ func (s Source) Fetch(ctx context.Context, url string, limit int64) ([]byte, err
 		return nil, fmt.Errorf("GET %s: larger than %d bytes", url, limit)
 	}
 	return b, nil
+}
+
+// rateLimitError explains GitHub's unauthenticated API limit (60 requests an hour per IP).
+// reset is the X-RateLimit-Reset header: Unix seconds.
+func rateLimitError(reset string) error {
+	n, err := strconv.ParseInt(reset, 10, 64)
+	if err != nil {
+		return errors.New("GitHub API rate limit reached; try again in an hour")
+	}
+	return fmt.Errorf("GitHub API rate limit reached; it resets at %s", time.Unix(n, 0).Format("15:04 MST"))
 }
 
 // Newer reports whether release version latest is newer than current. Both may carry a

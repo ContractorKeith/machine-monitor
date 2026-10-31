@@ -14,8 +14,10 @@ package hub
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"regexp"
 	"sort"
 	"strings"
@@ -56,7 +58,7 @@ func (h *Hub) handleInstall(w http.ResponseWriter, r *http.Request) {
 			sendText(w, status, "echo '"+shQuote("machine-monitor install: "+msg)+"' >&2; exit 1\n")
 		}
 	}
-	hubURL := hubURLFor(r)
+	hubURL := h.hubURLFor(r)
 	if !installHostRE.MatchString(r.Host) {
 		fail(http.StatusBadRequest, "unusable Host header")
 		return
@@ -122,13 +124,40 @@ func verifiedSums(ctx context.Context, tag string) (map[string]string, error) {
 var installHostRE = regexp.MustCompile(`^[A-Za-z0-9.\-]+(:[0-9]+)?$|^\[[0-9A-Fa-f:.%]+\](:[0-9]+)?$`)
 
 // hubURLFor is the hub origin as the client addressed it (the guard already checked Host).
-// Behind `tailscale serve` the request arrives with X-Forwarded-Proto: https.
-func hubURLFor(r *http.Request) string {
+// Behind `tailscale serve` or another HTTPS proxy the request arrives with
+// X-Forwarded-Proto: https; that header is honoured only from a proxy listed in
+// config.json "trustedProxies", since anyone else could send it.
+func (h *Hub) hubURLFor(r *http.Request) string {
 	proto := "http"
-	if r.Header.Get("X-Forwarded-Proto") == "https" {
+	if r.Header.Get("X-Forwarded-Proto") == "https" && h.trustedProxy(r.RemoteAddr) {
 		proto = "https"
 	}
 	return proto + "://" + r.Host
+}
+
+// trustedProxy reports whether remoteAddr matches an address or CIDR prefix in config.json
+// "trustedProxies" (e.g. ["127.0.0.1", "::1"] for tailscale serve). None by default.
+func (h *Hub) trustedProxy(remoteAddr string) bool {
+	h.mu.Lock()
+	raw := h.cfg.extra["trustedProxies"]
+	h.mu.Unlock()
+	var list []string
+	if raw == nil || json.Unmarshal(raw, &list) != nil {
+		return false
+	}
+	ip, ok := remoteIP(remoteAddr)
+	if !ok {
+		return false
+	}
+	for _, s := range list {
+		if p, err := netip.ParsePrefix(s); err == nil && p.Contains(ip) {
+			return true
+		}
+		if a, err := netip.ParseAddr(s); err == nil && a.Unmap() == ip {
+			return true
+		}
+	}
+	return false
 }
 
 // fillTemplate replaces each __NAME__ in tmpl with its value, quoted for the single-quoted

@@ -19,7 +19,7 @@ installs it in your home directory, pairs with the hub and starts the agent at l
 Linux and macOS (installs to `~/.local/bin`):
 
 ```sh
-curl -fsSL -H "Authorization: Bearer HUB_KEY" http://HUB:7777/install.sh | sh
+curl -fsSL --fail-with-body -H "Authorization: Bearer HUB_KEY" http://HUB:7777/install.sh | sh
 ```
 
 Windows PowerShell 5.1 or 7 (installs to `%LOCALAPPDATA%\Programs\machine-monitor`):
@@ -29,15 +29,24 @@ irm -Headers @{Authorization='Bearer HUB_KEY'} http://HUB:7777/install.ps1 | iex
 ```
 
 `HUB_KEY` is the key the hub prints when it starts. The hub must be a release build, not one
-you built yourself.
+you built yourself. Keep `--fail-with-body`: it passes the hub's error message to `sh`, so a
+refused install fails loudly instead of silently doing nothing.
 
-### Homebrew (macOS, Linux)
+Behind an HTTPS proxy such as `tailscale serve`, list the proxy's address in the hub's
+`config.json` as `"trustedProxies": ["127.0.0.1", "::1"]` so the installer links to the
+`https://` address; `X-Forwarded-Proto` from anywhere else is ignored.
+
+### Homebrew (macOS)
 
 ```sh
 brew install --cask contractorkeith/tap/machine-monitor
 ```
 
+On Linux, use the one-line installer or a manual install.
+
 ### Scoop (Windows)
+
+The manifest is published from the first release on:
 
 ```powershell
 scoop install https://raw.githubusercontent.com/ContractorKeith/machine-monitor/main/packaging/scoop/machine-monitor.json
@@ -86,7 +95,7 @@ machine-monitor service install --role hub  # or start it at login
 
 ```sh
 machine-monitor connect --no-agent http://HUB:7777                 # asks for a pairing code
-machine-monitor connect --no-agent "http://HUB:7777/?key=HUB_KEY"  # or pairs with the key
+echo HUB_KEY | machine-monitor connect --no-agent --key-stdin http://HUB:7777  # or the key
 machine-monitor service install --role agent --hub http://HUB:7777
 ```
 

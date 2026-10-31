@@ -89,6 +89,12 @@ scoops:
       email: ContractorKeith@users.noreply.github.com
     commit_msg_template: "chore: scoop manifest for {{ .ProjectName }} {{ .Tag }}"
 
+# release.yml publishes the draft after checking the signature. The cask and Scoop manifest
+# are pushed while it is still a draft, so their download links work once it is published.
+release:
+  draft: true
+  replace_existing_draft: true
+
 changelog:
   use: github
   sort: asc
