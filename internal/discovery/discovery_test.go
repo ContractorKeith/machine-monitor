@@ -208,3 +208,46 @@ func TestReplyShape(t *testing.T) {
 		t.Errorf("reply without impl: %s", b)
 	}
 }
+
+// Two responders (ours twice here; ours and upstream's in the field) share one UDP port.
+func TestRespondersShareAPort(t *testing.T) {
+	first := startResponder(t, "one", 7777)
+	second, err := Respond(first.String(), "two", 7777)
+	if err != nil {
+		t.Fatalf("second bind of %s: %v", first, err)
+	}
+	defer second.Close()
+	if got := second.Addr().(*net.UDPAddr).AddrPort(); got != first {
+		t.Fatalf("second bound %s, want %s", got, first)
+	}
+	// The OS picks which socket gets a unicast probe; either way someone answers.
+	hubs, err := probe(500*time.Millisecond, []netip.AddrPort{first})
+	if err != nil || len(hubs) == 0 {
+		t.Fatalf("no reply on the shared port: %v %v", hubs, err)
+	}
+}
+
+// A long or junk-filled hostname is cleaned before it goes out, so the reply stays under
+// upstream's 512-byte limit and carries the name clients would show anyway.
+func TestReplyNameCleaned(t *testing.T) {
+	addr := startResponder(t, strings.Repeat("<é\"\\", 200)+strings.Repeat("x", 600), 7777)
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.WriteToUDPAddrPort([]byte(Probe), addr)
+	conn.SetReadDeadline(time.Now().Add(time.Second))
+	buf := make([]byte, 4096)
+	n, _, err := conn.ReadFromUDPAddrPort(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n > maxReply {
+		t.Fatalf("reply is %d bytes, over %d", n, maxReply)
+	}
+	var r Reply
+	if err := json.Unmarshal(buf[:n], &r); err != nil || r.Name != strings.Repeat("x", 64) {
+		t.Fatalf("reply %s: %v", buf[:n], err)
+	}
+}

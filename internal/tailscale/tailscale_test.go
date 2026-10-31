@@ -39,14 +39,14 @@ func TestParseStatus(t *testing.T) {
 				`"httpsUrl":"https://studio.tail0000.ts.net","urls":["https://studio.tail0000.ts.net","http://100.101.102.103:7777","http://studio.tail0000.ts.net:7777"],"tailnet":"example.com"}`},
 		{"running, serve points elsewhere", "running.json", "serve-other.json",
 			`{"installed":true,"running":true,"state":"Running","ip":"100.101.102.103","dnsName":"studio.tail0000.ts.net",` +
-				`"urls":["http://100.101.102.103:7777","http://studio.tail0000.ts.net:7777"],"tailnet":"example.com"}`},
+				`"httpsUrl":null,"urls":["http://100.101.102.103:7777","http://studio.tail0000.ts.net:7777"],"tailnet":"example.com"}`},
 		{"running, no serve config", "running.json", "",
 			`{"installed":true,"running":true,"state":"Running","ip":"100.101.102.103","dnsName":"studio.tail0000.ts.net",` +
-				`"urls":["http://100.101.102.103:7777","http://studio.tail0000.ts.net:7777"],"tailnet":"example.com"}`},
+				`"httpsUrl":null,"urls":["http://100.101.102.103:7777","http://studio.tail0000.ts.net:7777"],"tailnet":"example.com"}`},
 		{"not logged in", "needs-login.json", "",
-			`{"installed":true,"running":false,"state":"NeedsLogin"}`},
+			`{"installed":true,"running":false,"state":"NeedsLogin","ip":null,"dnsName":null,"httpsUrl":null,"urls":[],"tailnet":null}`},
 		{"stopped keeps identity, no urls", "stopped.json", "serve.json",
-			`{"installed":true,"running":false,"state":"Stopped","ip":"100.101.102.103","dnsName":"studio.tail0000.ts.net","tailnet":"example.com"}`},
+			`{"installed":true,"running":false,"state":"Stopped","ip":"100.101.102.103","dnsName":"studio.tail0000.ts.net","httpsUrl":null,"urls":[],"tailnet":"example.com"}`},
 	}
 	for _, c := range cases {
 		var serve []byte
@@ -62,7 +62,7 @@ func TestParseStatus(t *testing.T) {
 func TestParseStatusDaemonDown(t *testing.T) {
 	// tailscaled not running: the CLI prints an error to stderr and nothing to stdout.
 	for _, out := range []string{"", "failed to connect to local tailscaled", "{"} {
-		if got := asJSON(t, parseStatus([]byte(out), nil, 7777)); got != `{"installed":true,"running":false,"state":"NotRunning"}` {
+		if got := asJSON(t, parseStatus([]byte(out), nil, 7777)); got != `{"installed":true,"running":false,"state":"NotRunning","ip":null,"dnsName":null,"httpsUrl":null,"urls":[],"tailnet":null}` {
 			t.Errorf("%q: %s", out, got)
 		}
 	}
@@ -74,7 +74,7 @@ func TestNotInstalled(t *testing.T) {
 	if Installed() {
 		t.Fatal("Installed() with no CLI")
 	}
-	if got := asJSON(t, Read(context.Background(), 7777)); got != `{"installed":false,"running":false}` {
+	if got := asJSON(t, Read(context.Background(), 7777)); got != `{"installed":false,"running":false,"state":null,"ip":null,"dnsName":null,"httpsUrl":null,"urls":[],"tailnet":null}` {
 		t.Errorf("Read: %s", got)
 	}
 	if got := PeerURLs(context.Background(), 7777); got != nil {
@@ -137,7 +137,7 @@ func TestRunFakeCLI(t *testing.T) {
 	defer func(c func() [][]string) { candidates = c }(candidates)
 	candidates = func() [][]string { return [][]string{{exe}} }
 	t.Setenv("MM_SECRET", "x")
-	if got := asJSON(t, Read(context.Background(), 7777)); got != `{"installed":true,"running":false,"state":"NeedsLogin"}` {
+	if got := asJSON(t, Read(context.Background(), 7777)); got != `{"installed":true,"running":false,"state":"NeedsLogin","ip":null,"dnsName":null,"httpsUrl":null,"urls":[],"tailnet":null}` {
 		t.Errorf("Read: %s", got)
 	}
 }
@@ -148,4 +148,33 @@ func mustAbs(t *testing.T, p string) string {
 		t.Fatal(err)
 	}
 	return a
+}
+
+// With none of the allow-listed variables set, the child must still get an empty
+// environment, not the parent's (a nil exec.Cmd.Env inherits everything).
+func TestRunStripsEnvWithEmptyAllowList(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script CLI")
+	}
+	if env := strippedEnv(); env == nil {
+		t.Fatal("strippedEnv() is nil")
+	}
+	exe := filepath.Join(t.TempDir(), "tailscale")
+	script := "#!/bin/sh\n" + `if [ -n "$MM_SENTINEL" ]; then echo leaked; else echo clean; fi` + "\n"
+	if err := os.WriteFile(exe, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	defer func(c func() [][]string) { candidates = c }(candidates)
+	candidates = func() [][]string { return [][]string{{exe}} }
+	for _, k := range allowedEnv {
+		t.Setenv(k, "") // restores the original value after the test
+		os.Unsetenv(k)
+	}
+	t.Setenv("MM_SENTINEL", "secret")
+	if env := strippedEnv(); env == nil || len(env) != 0 {
+		t.Fatalf("strippedEnv() = %#v, want empty non-nil", env)
+	}
+	if got := string(run(context.Background(), "status")); got != "clean\n" {
+		t.Errorf("child saw parent env: %q", got)
+	}
 }

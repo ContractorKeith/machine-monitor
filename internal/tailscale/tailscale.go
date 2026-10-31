@@ -30,17 +30,17 @@ const (
 	maxPeers   = 40 // PeerURLs cap, as upstream
 )
 
-// Status is this machine's Tailscale state, in upstream's JSON shape. Fields other than
-// Installed and Running are omitted when unknown.
+// Status is this machine's Tailscale state, in upstream's JSON shape: every key is always
+// present, with null for unknown values and [] for no URLs.
 type Status struct {
 	Installed bool     `json:"installed"`
 	Running   bool     `json:"running"`
-	State     *string  `json:"state,omitempty"`    // BackendState: Running, NeedsLogin, Stopped, NotRunning...
-	IP        *string  `json:"ip,omitempty"`       // first tailnet IPv4
-	DNSName   *string  `json:"dnsName,omitempty"`  // MagicDNS name without the trailing dot
-	HTTPSURL  *string  `json:"httpsUrl,omitempty"` // https://<name> when `tailscale serve` already proxies to the hub
-	URLs      []string `json:"urls,omitempty"`     // where the hub is reachable on the tailnet, best first
-	Tailnet   *string  `json:"tailnet,omitempty"`
+	State     *string  `json:"state"`    // BackendState: Running, NeedsLogin, Stopped, NotRunning...
+	IP        *string  `json:"ip"`       // first tailnet IPv4
+	DNSName   *string  `json:"dnsName"`  // MagicDNS name without the trailing dot
+	HTTPSURL  *string  `json:"httpsUrl"` // https://<name> when `tailscale serve` already proxies to the hub
+	URLs      []string `json:"urls"`     // where the hub is reachable on the tailnet, best first; never nil
+	Tailnet   *string  `json:"tailnet"`
 }
 
 // rawStatus is the part of `tailscale status --json` we read.
@@ -71,7 +71,7 @@ func Installed() bool { _, _, ok := cli(); return ok }
 // {installed:false}; a CLI whose daemon isn't answering gives state "NotRunning".
 func Read(ctx context.Context, hubPort int) Status {
 	if !Installed() {
-		return Status{}
+		return Status{URLs: []string{}}
 	}
 	out := run(ctx, "status", "--json")
 	var serve []byte
@@ -95,9 +95,9 @@ func PeerURLs(ctx context.Context, hubPort int) []string {
 func parseStatus(statusJSON, serveJSON []byte, hubPort int) Status {
 	var j rawStatus
 	if json.Unmarshal(statusJSON, &j) != nil {
-		return Status{Installed: true, State: ptr("NotRunning")}
+		return Status{Installed: true, State: ptr("NotRunning"), URLs: []string{}}
 	}
-	st := Status{Installed: true, Running: j.BackendState == "Running"}
+	st := Status{Installed: true, Running: j.BackendState == "Running", URLs: []string{}}
 	if j.BackendState != "" {
 		st.State = ptr(j.BackendState)
 	}
@@ -241,10 +241,14 @@ func run(ctx context.Context, args ...string) []byte {
 	return out.Bytes()
 }
 
-// strippedEnv keeps only what the CLI needs to find its socket and config.
+// allowedEnv is the parent environment the CLI may see.
+var allowedEnv = []string{"PATH", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "ProgramData", "SystemRoot", "TEMP", "TMP", "TMPDIR", "XDG_RUNTIME_DIR"}
+
+// strippedEnv keeps only what the CLI needs to find its socket and config. Never nil:
+// os/exec treats a nil Env as "inherit the whole parent environment".
 func strippedEnv() []string {
-	var env []string
-	for _, k := range []string{"PATH", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "ProgramData", "SystemRoot", "TEMP", "TMP", "TMPDIR", "XDG_RUNTIME_DIR"} {
+	env := []string{}
+	for _, k := range allowedEnv {
 		if v, ok := os.LookupEnv(k); ok {
 			env = append(env, k+"="+v)
 		}

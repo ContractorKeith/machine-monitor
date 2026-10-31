@@ -8,6 +8,7 @@
 package discovery
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"math"
@@ -55,17 +56,17 @@ type Responder struct {
 }
 
 // Respond listens on addr (":7778" in production) and answers each exact probe from a
-// private or loopback IPv4 sender with a Reply naming this hub and its HTTP port.
+// private or loopback IPv4 sender with a Reply naming this hub and its HTTP port. name is
+// cleaned the way clients clean it, which also keeps the reply under upstream's 512 bytes.
+// The port is bound with address reuse, as upstream, so an upstream hub or a second
+// instance can share it.
 func Respond(addr, name string, hubPort int) (*Responder, error) {
-	ua, err := net.ResolveUDPAddr("udp4", addr)
+	pc, err := (&net.ListenConfig{Control: reuseAddr}).ListenPacket(context.Background(), "udp4", addr)
 	if err != nil {
 		return nil, err
 	}
-	conn, err := net.ListenUDP("udp4", ua)
-	if err != nil {
-		return nil, err
-	}
-	reply, _ := json.Marshal(Reply{App: App, Name: name, Port: hubPort, Impl: Impl})
+	conn := pc.(*net.UDPConn)
+	reply, _ := json.Marshal(Reply{App: App, Name: cleanName(name), Port: hubPort, Impl: Impl})
 	r := &Responder{conn: conn, done: make(chan struct{})}
 	go func() {
 		defer close(r.done)
@@ -152,6 +153,15 @@ func probe(timeout time.Duration, to []netip.AddrPort) ([]Hub, error) {
 // nameJunk matches what upstream strips from names: anything but [A-Za-z0-9_ .()'-].
 var nameJunk = regexp.MustCompile(`[^A-Za-z0-9_ .()'-]`)
 
+// cleanName strips nameJunk and caps the result at 64 characters, as upstream clients do.
+func cleanName(name string) string {
+	name = nameJunk.ReplaceAllString(name, "")
+	if len(name) > 64 {
+		name = name[:64] // ASCII only after the strip, so bytes are chars
+	}
+	return name
+}
+
 // parseReply validates one reply. Replies come from anyone on the LAN: accept only
 // app "device-monitor", an integer port 1-65535 and a string name, which is sanitized.
 func parseReply(b []byte, from netip.Addr) (Hub, bool) {
@@ -170,10 +180,7 @@ func parseReply(b []byte, from netip.Addr) (Hub, bool) {
 	if !ok || r["app"] != App {
 		return Hub{}, false
 	}
-	name = nameJunk.ReplaceAllString(name, "")
-	if len(name) > 64 {
-		name = name[:64] // ASCII only after the strip, so bytes are chars
-	}
+	name = cleanName(name)
 	if name == "" {
 		name = from.String()
 	}
@@ -212,14 +219,14 @@ func isVirtual(a netip.Addr) bool {
 	return b[0] == 172 && b[1] >= 16 && b[1] <= 31
 }
 
-// broadcastAddresses is 255.255.255.255 plus the directed broadcast of every non-loopback
-// IPv4 interface address, deduplicated.
+// broadcastAddresses is 255.255.255.255 plus the directed broadcast of every IPv4 address
+// on an interface that is up and not loopback, deduplicated.
 func broadcastAddresses() []netip.Addr {
 	out := []netip.Addr{netip.AddrFrom4([4]byte{255, 255, 255, 255})}
 	seen := map[netip.Addr]bool{out[0]: true}
 	ifaces, _ := net.Interfaces()
 	for _, ifi := range ifaces {
-		if ifi.Flags&net.FlagLoopback != 0 {
+		if ifi.Flags&net.FlagLoopback != 0 || ifi.Flags&net.FlagUp == 0 {
 			continue
 		}
 		addrs, _ := ifi.Addrs()
