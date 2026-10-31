@@ -46,6 +46,8 @@ func (h *Hub) Handler() http.Handler {
 	key("PUT /api/order", h.handleOrder)
 	key("PATCH /api/devices/{id}", h.handleRename)
 	key("DELETE /api/devices/{id}", h.handleRemove)
+	key("GET /install.sh", h.handleInstall)
+	key("GET /install.ps1", h.handleInstall)
 	// Everything else, including a known path with the wrong method, is a JSON 404, as upstream.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusNotFound, errorBody("not found"))

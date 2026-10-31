@@ -8,8 +8,10 @@ and Linux. It is a clean-room Go reimplementation of the ideas in
 feature-parity matrix in `docs/PLAN.md` shipped on all three OSes.
 
 ## Status
-M0 skeleton: module, CLI stubs, CI, goreleaser and the shared contracts (`report`,
-`collect`, `config`). No collectors, hub or TUI yet. Last touched 2026-10-31.
+Through M4 plus M5 history/export and M8: collectors, local and connected TUI, hub, agent and
+pairing, history, power, alerts, discovery, tailscale, `service`, hub-served installers
+(`/install.sh`, `/install.ps1`), `update`, and signed goreleaser releases (`release.yml`).
+Last touched 2026-10-31.
 
 ## Pointers
 - `docs/PLAN.md` — the build plan: architecture, feature matrix, milestones, acceptance.
@@ -23,7 +25,10 @@ gofmt -l . && go vet ./... && staticcheck ./...    # staticcheck v0.8.2 (go inst
 for os in linux darwin windows; do for a in amd64 arm64; do
   GOOS=$os GOARCH=$a CGO_ENABLED=0 go build ./... || echo "FAIL $os/$a"; done; done
 go run github.com/goreleaser/goreleaser/v2@v2.19.0 check
+go run github.com/goreleaser/goreleaser/v2@v2.19.0 release --snapshot --clean --skip=sign
 ```
+Releases: push a `v*` tag; `.github/workflows/release.yml` builds, signs `checksums.txt` with
+cosign keyless and publishes. Installer tests run ShellCheck and PowerShell when on PATH.
 
 ## Package ownership
 One owner per package; change another package's exported API only through its owner's task.
