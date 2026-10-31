@@ -1,0 +1,12 @@
+{
+  "SELECT Caption FROM Win32_OperatingSystem": [{"Caption": "Microsoft Windows 11 Pro"}],
+  "SELECT Name, MaxClockSpeed FROM Win32_Processor": [{"Name": "AMD Ryzen 9 7950X 16-Core Processor            ", "MaxClockSpeed": 4501}],
+  "SELECT ChassisTypes FROM Win32_SystemEnclosure": [{"ChassisTypes": [3]}],
+  "SELECT PercentProcessorPerformance FROM Win32_PerfFormattedData_Counters_ProcessorInformation WHERE Name = '_Total'": [{"PercentProcessorPerformance": 112}],
+  "SELECT DeviceID, VolumeName, Size, FreeSpace FROM Win32_LogicalDisk WHERE DriveType = 3": [
+    {"DeviceID": "C:", "VolumeName": "Windows", "Size": 1999599939584, "FreeSpace": 1250000000000},
+    {"DeviceID": "D:", "VolumeName": "", "Size": 4000650883072, "FreeSpace": 3000000000000},
+    {"DeviceID": "E:", "VolumeName": "Empty reader", "Size": 0, "FreeSpace": 0}
+  ],
+  "SELECT DiskReadBytesPersec, DiskWriteBytesPersec FROM Win32_PerfRawData_PerfDisk_PhysicalDisk WHERE Name = '_Total'": [{"DiskReadBytesPersec": 987654321000, "DiskWriteBytesPersec": 123456789000}]
+}

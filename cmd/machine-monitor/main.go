@@ -37,7 +37,7 @@ var commands = map[string]func(args []string, stdout, stderr io.Writer) int{
 	"hub":     stub("hub"),
 	"agent":   stub("agent"),
 	"connect": stub("connect"),
-	"status":  stub("status"),
+	"status":  runStatus,
 	"export":  stub("export"),
 	"service": stub("service"),
 	"update":  stub("update"),

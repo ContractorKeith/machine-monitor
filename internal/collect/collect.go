@@ -4,9 +4,11 @@
 //
 // A Collector returns one fresh Report per call. The caller (TUI, agent, hub) calls it about
 // every 2 s from a single goroutine. Rates (CPU usage, net, disk I/O) are deltas since the
-// previous call, so the first call may leave them nil. New returns the collector for this OS;
-// the per-OS files (collect_linux.go, collect_darwin.go, collect_windows.go) own the core
-// metrics: id, host, CPU, memory, disks, I/O, network, form factor.
+// previous call, so the first call leaves them nil. New returns the collector for this OS.
+// The core metrics (id, host, CPU, memory, disks, I/O, network, form factor, MACs) come from
+// a per-OS source (oslinux.go, osmacos.go, oswindows.go) that reads through small seams:
+// gopsutil, an fs.FS, recorded commands, WMI. Those files build on every OS so their tests
+// run anywhere; collect_<os>.go only wires the real seams.
 //
 // # Probes
 //

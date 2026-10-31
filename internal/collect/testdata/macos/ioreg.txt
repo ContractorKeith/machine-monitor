@@ -1,0 +1,8 @@
++-o J314sAP  <class IOPlatformExpertDevice, id 0x100000214, registered, matched, active, busy 0 (0 ms), retain 39>
+    {
+      "IOPolledInterface" = "AppleARMWatchdogTimerHibernateHandler is not serializable"
+      "IOPlatformUUID" = "1B2C3D4E-5F60-7182-93A4-B5C6D7E8F901"
+      "model" = <"MacBookPro18,3">
+      "IOPlatformSerialNumber" = "C02ABCDEFGH"
+    }
+

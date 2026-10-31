@@ -6,6 +6,9 @@ import (
 	"testing"
 )
 
+// built lists the commands that are no longer stubs; each has its own test.
+var built = map[string]bool{"status": true}
+
 type runCase struct {
 	args        []string
 	code        int
@@ -24,6 +27,9 @@ func TestRun(t *testing.T) {
 		{[]string{"--bogus"}, 2, "", "flag provided but not defined"},
 	}
 	for name := range commands {
+		if built[name] {
+			continue
+		}
 		tests = append(tests, runCase{[]string{name, "x"}, 2, "", name + ": not built yet"})
 	}
 	for _, tt := range tests {
