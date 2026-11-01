@@ -12,10 +12,13 @@ import (
 
 	"github.com/ContractorKeith/machine-monitor/internal/collect"
 	_ "github.com/ContractorKeith/machine-monitor/internal/collect/all" // register probes
+	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
 // statusGap is the time between the two samples status takes, so usage and rates are real.
 const statusGap = time.Second
+
+var statusCollector = collect.New
 
 // runStatus prints one report of this machine: machine-monitor status --json.
 func runStatus(args []string, stdout, stderr io.Writer) int {
@@ -35,7 +38,7 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	c := collect.New()
+	c := statusCollector()
 	if _, err := c.Collect(ctx); err != nil {
 		fmt.Fprintf(stderr, "machine-monitor status: %v\n", err)
 		return 1
@@ -52,6 +55,16 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	r.Agent = "machine-monitor/" + version
+	raw, err := json.Marshal(r)
+	if err == nil {
+		var normalized report.Report
+		normalized, err = report.Normalize(raw)
+		r = &normalized
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "machine-monitor status: %v\n", err)
+		return 1
+	}
 
 	enc := json.NewEncoder(stdout)
 	enc.SetIndent("", "  ")

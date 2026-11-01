@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ContractorKeith/machine-monitor/internal/agent"
 	"github.com/ContractorKeith/machine-monitor/internal/history"
 	"github.com/charmbracelet/x/exp/golden"
 )
@@ -162,6 +163,9 @@ func fakeHub(t *testing.T, dir, key string, requests *int) *httptest.Server {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/info", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"app":"device-monitor","proof":%q}`, agent.Proof(key, r.URL.Query().Get("nonce")))
+	})
 	mux.HandleFunc("GET /api/history/{id}", func(w http.ResponseWriter, r *http.Request) {
 		*requests++
 		if r.Header.Get("Authorization") != "Bearer "+key {
@@ -245,9 +249,9 @@ func TestHubErrors(t *testing.T) {
 		id   string
 		want string
 	}{
-		{Hub{URL: srv.URL, Key: "wrong"}, "box-1", "The hub at " + srv.URL + " is locked and this machine has no key for it. Pair with it first: machine-monitor connect " + srv.URL},
+		{Hub{URL: srv.URL, Key: "wrong"}, "box-1", "Could not verify the hub at " + srv.URL},
 		{Hub{URL: srv.URL, Key: "right"}, "ghost", `There is no device "ghost" on the hub at ` + srv.URL + "."},
-		{Hub{URL: "http://127.0.0.1:1", Key: "right"}, "box-1", "Could not reach the hub at http://127.0.0.1:1:"},
+		{Hub{URL: "http://127.0.0.1:1", Key: "right"}, "box-1", "Could not verify the hub at http://127.0.0.1:1"},
 	}
 	for _, tt := range tests {
 		_, err := export(t, tt.hub, tt.id, "7d", "csv")

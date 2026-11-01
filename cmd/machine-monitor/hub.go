@@ -59,6 +59,11 @@ func runHub(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, key)
 		return 0
 	}
+	// A terminal hangup must not kill a headless hub or abandon its pending history.
+	// Keep settings and pairings in place; configuration changes require a restart.
+	hangups := make(chan os.Signal, 1)
+	signal.Notify(hangups, syscall.SIGHUP)
+	defer signal.Stop(hangups)
 	logger := log.New(stderr, "", log.LstdFlags)
 	h, err := hub.New(hub.Options{Paths: paths, Port: *port, Collector: collect.New(), Agent: "machine-monitor/" + version,
 		Procs: tui.SystemProcesses().Processes, Logf: logger.Printf,

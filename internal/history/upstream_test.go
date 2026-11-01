@@ -146,7 +146,11 @@ func TestMatchesUpstream(t *testing.T) {
 	}
 	for _, w := range want {
 		wb, _ := os.ReadFile(w)
-		gb, err := os.ReadFile(filepath.Join(dir, filepath.Base(w)))
+		var first line
+		if err := json.Unmarshal(bytes.SplitN(wb, []byte("\n"), 2)[0], &first); err != nil || first.ID == nil {
+			t.Fatalf("fixture ID: %v", err)
+		}
+		gb, err := os.ReadFile(s.file(*first.ID))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -200,10 +204,14 @@ func TestReadsUpstreamFiles(t *testing.T) {
 	if r := s.Query("host b/weird:id", last.From, last.To, 1200); len(r.Points) == 0 {
 		t.Fatal("no points for host b/weird:id")
 	}
-	// Nothing was expired or duplicated, so load left the files alone.
+	// Collision-prone legacy filenames migrate; their NDJSON contents stay unchanged.
 	for _, w := range want {
 		wb, _ := os.ReadFile(w)
-		gb, _ := os.ReadFile(filepath.Join(dir, filepath.Base(w)))
+		var first line
+		if err := json.Unmarshal(bytes.SplitN(wb, []byte("\n"), 2)[0], &first); err != nil || first.ID == nil {
+			t.Fatalf("fixture ID: %v", err)
+		}
+		gb, _ := os.ReadFile(s.file(*first.ID))
 		if !bytes.Equal(gb, wb) {
 			t.Errorf("load rewrote %s", filepath.Base(w))
 		}

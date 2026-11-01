@@ -130,7 +130,11 @@ func (h *Hub) usage(id string, bounds []float64, hw power.HW, price *power.Setti
 		u.Stats[k] = s
 	}
 	for k, v := range bytes {
-		u.Bytes[k] = int64(math.Floor(v + 0.5))
+		if v >= math.MaxInt64 {
+			u.Bytes[k] = math.MaxInt64
+		} else {
+			u.Bytes[k] = int64(math.Floor(v + 0.5))
+		}
 	}
 	return u
 }

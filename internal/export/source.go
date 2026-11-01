@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ContractorKeith/machine-monitor/internal/agent"
 	"github.com/ContractorKeith/machine-monitor/internal/client"
 	"github.com/ContractorKeith/machine-monitor/internal/history"
 )
@@ -50,17 +51,42 @@ func (l Local) Points(_ context.Context, id string, from, to time.Time) ([]histo
 type Hub struct {
 	URL    string       // e.g. http://192.168.1.10:7777
 	Key    string       // hub key, sent as a Bearer token; empty sends none
-	Client *http.Client // nil means a client with a 30 s timeout
+	Client *http.Client // optional transport seam; proxying and redirects are always disabled
+}
+
+// connection proves the hub before either export endpoint can send its key.
+func (h Hub) connection(ctx context.Context) (*http.Client, error) {
+	c := agent.NewHTTPClient()
+	c.Timeout = 30 * time.Second
+	if h.Client != nil {
+		*c = *h.Client
+		if tr, ok := c.Transport.(*http.Transport); ok {
+			tr = tr.Clone()
+			tr.Proxy = nil
+			c.Transport = tr
+		} else if c.Transport == nil {
+			c.Transport = agent.NewHTTPClient().Transport
+		}
+	}
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	if h.Key != "" {
+		if err := agent.Prove(ctx, c, strings.TrimRight(h.URL, "/"), h.Key); err != nil {
+			c.CloseIdleConnections()
+			return nil, sentence("Could not verify the hub at %s; the key was not sent: %v.", h.URL, err)
+		}
+	}
+	return c, nil
 }
 
 // Points fetches id's minutes in [from, to]. The hub downsamples to at most 3000 points per
 // request, so Points asks for minute-aligned windows of at most 3000 minutes with one point
 // per minute, which the hub returns undownsampled, and joins them.
 func (h Hub) Points(ctx context.Context, id string, from, to time.Time) ([]history.Point, error) {
-	client := h.Client
-	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+	client, err := h.connection(ctx)
+	if err != nil {
+		return nil, err
 	}
+	defer client.CloseIdleConnections()
 	base := strings.TrimRight(h.URL, "/")
 	fromMS, toMS := unixMS(from), unixMS(to)
 	var out []history.Point
@@ -207,10 +233,11 @@ func (l Local) Devices(_ context.Context) ([]NamedDevice, error) {
 
 // Devices asks the hub for its devices (GET /api/devices).
 func (h Hub) Devices(ctx context.Context) ([]NamedDevice, error) {
-	client := h.Client
-	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+	client, err := h.connection(ctx)
+	if err != nil {
+		return nil, err
 	}
+	defer client.CloseIdleConnections()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(h.URL, "/")+"/api/devices?compact=1", nil) // names only: skip the history (upstream ignores it)
 	if err != nil {
 		return nil, err

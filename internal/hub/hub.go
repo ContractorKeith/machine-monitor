@@ -200,6 +200,9 @@ func newHub(opt Options) (*Hub, error) {
 	} else if err != nil {
 		h.logf("hub: history: %v (skipped)", err)
 	}
+	for _, warning := range h.history.Warnings() {
+		h.logf("hub: %s", warning)
+	}
 	h.remote = tailscale.Status{URLs: []string{}}
 	h.alerts = alerts.New(alerts.Options{
 		Paths:     opt.Paths,

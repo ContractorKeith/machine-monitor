@@ -131,7 +131,7 @@ func TestExportKeyHandling(t *testing.T) {
 	}
 	errOut.Reset()
 	if rc := run([]string{"export", "id-1", "--hub", srv.URL, "--key", "ffffffffffffffff"}, &out, &errOut); rc != 1 ||
-		!strings.Contains(errOut.String(), "refused the key") || strings.Contains(errOut.String(), "has no key for it") {
+		!strings.Contains(errOut.String(), "key was not sent") || strings.Contains(errOut.String(), "has no key for it") {
 		t.Errorf("wrong key: exit %d, %q", rc, errOut.String())
 	}
 	local := strings.Replace(srv.URL, "127.0.0.1", "localhost", 1)

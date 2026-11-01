@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -1138,6 +1139,20 @@ func (l *logs) count(sub string) int {
 		}
 	}
 	return n
+}
+
+func TestCorruptHistoryLogsSkippedRecords(t *testing.T) {
+	paths := config.At(t.TempDir())
+	os.MkdirAll(paths.History, 0o700)
+	if err := os.WriteFile(filepath.Join(paths.History, "dev.ndjson"), []byte("{bad}\n[]\n{\"id\":"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var l logs
+	th := openTestHub(t, paths, &clock{t: time.Unix(1e9, 0)}, func(o *Options) { o.Logf = l.Logf })
+	if l.count("dev.ndjson") != 1 || l.count("skipped 3") != 1 {
+		t.Fatalf("missing recovery warning: %q", l.lines)
+	}
+	th.postReport("working", nil)
 }
 
 func TestUnreadableHistoryIsSkipped(t *testing.T) {

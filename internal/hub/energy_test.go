@@ -1,6 +1,43 @@
 package hub
 
-import "testing"
+import (
+	"encoding/json"
+	"fmt"
+	"math"
+	"testing"
+)
+
+func TestClampedRatesDoNotOverflowUsage(t *testing.T) {
+	th := newTestHub(t)
+	th.postReport("rates", func(m map[string]any) {
+		m["net"] = map[string]any{"rx": 1e100, "tx": 1e100}
+		m["diskIO"] = map[string]any{"read": 1e100, "write": 1e100}
+	})
+	var body struct {
+		Devices []Usage `json:"devices"`
+	}
+	ms := th.Hub.now().UnixMilli()
+	from := ms / 60000 * 60000
+	w := th.keyed("GET", fmt.Sprintf("/api/energy?bounds=%d,%d", from-60000, from+60000), "")
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range body.Devices {
+		if d.ID == "rates" {
+			if len(d.Bytes) != 4 {
+				t.Fatalf("missing byte totals: %v", d.Bytes)
+			}
+			for _, k := range []string{"rx", "tx", "dr", "dw"} {
+				n := d.Bytes[k]
+				if n != math.MaxInt64 {
+					t.Errorf("%s bytes = %d; want saturation", k, n)
+				}
+			}
+			return
+		}
+	}
+	t.Fatal("missing rates device")
+}
 
 // Stats avg/peak are upstream's toFixed(1), which rounds the exact binary value (B15).
 func TestRound1MatchesToFixed(t *testing.T) {

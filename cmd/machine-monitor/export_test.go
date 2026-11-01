@@ -69,6 +69,10 @@ func TestExport(t *testing.T) {
 func fakeExportHub(t *testing.T, key string) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/info" {
+			fmt.Fprintf(w, `{"app":"device-monitor","proof":%q}`, agent.Proof(key, r.URL.Query().Get("nonce")))
+			return
+		}
 		if r.Header.Get("Authorization") != "Bearer "+key {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
