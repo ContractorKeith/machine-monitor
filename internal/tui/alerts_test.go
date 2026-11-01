@@ -392,7 +392,10 @@ func TestAlertsEditorAgainstHub(t *testing.T) {
 	tm := teatest.NewTestModel(t, probe{New(o), ch}, teatest.WithInitialTermSize(100, 30))
 	waitUntil(t, tm, ch, synced)
 	tm.Type("6")
-	m := waitUntil(t, tm, ch, func(m model) bool { return m.al.loaded })
+	// Startup may already have loaded alerts; wait for the fetch on entering this view too.
+	m := waitUntil(t, tm, ch, func(m model) bool {
+		return m.view == viewAlerts && m.al.loaded && !m.al.loading
+	})
 	if len(m.al.cfg.Rules) != 4 {
 		t.Fatalf("defaults: %d rules", len(m.al.cfg.Rules))
 	}
@@ -476,6 +479,26 @@ func TestAlertsEditorAgainstHub(t *testing.T) {
 		t.Fatalf("banner %+v, bells %d", m.al.banner, m.al.bells)
 	}
 	finish(t, tm)
+}
+
+// An older fetch can finish while a new rule's save is in flight. Selection must
+// follow the accepted rule, rather than being clamped against the old rule list.
+func TestNewAlertSelectionAfterPendingLoad(t *testing.T) {
+	f := alertsFixture()
+	m := alertsModel(t, f, 100, 30)
+	old := client.Alerts{Settings: cloneSettings(m.al.cfg)}
+	m, _ = send(t, m, keyMsg("a"))
+	next, cmd := m.Update(keyMsg("enter"))
+	m = next.(model)
+	if cmd == nil {
+		t.Fatal("save did not start")
+	}
+	next, _ = m.Update(alertsLoadedMsg{a: &old})
+	m, _ = settle(t, next.(model), cmd)
+	last := len(m.al.cfg.Rules) - 1
+	if m.al.notice != "saved" || m.al.cursor != last || m.al.cfg.Rules[last].ID == "" {
+		t.Fatalf("after save: notice %q, cursor %d, rules %+v", m.al.notice, m.al.cursor, m.al.cfg.Rules)
+	}
 }
 
 // settingsEvent is the hub's alerts event with the first n of s's rules.

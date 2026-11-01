@@ -53,9 +53,10 @@ type (
 		err error
 	}
 	alertsSavedMsg struct {
-		s      alerts.Settings
-		active []alerts.Active
-		err    error
+		s        alerts.Settings
+		selectID string // new rule to select after the hub accepts it
+		active   []alerts.Active
+		err      error
 	}
 	alertsTestMsg struct {
 		d   alerts.Delivery
@@ -151,6 +152,11 @@ func (m model) updateAlerts(msg tea.Msg) (model, tea.Cmd, bool) {
 		}
 		m.al.active, m.al.loaded = msg.active, true
 		m.setRules(msg.s)
+		if msg.selectID != "" {
+			if i := slices.IndexFunc(msg.s.Rules, func(r alerts.Rule) bool { return r.ID == msg.selectID }); i >= 0 {
+				m.al.cursor = i
+			}
+		}
 		m.al.notice = "saved"
 		m.clampAlerts()
 		return m, nil, true
@@ -408,11 +414,15 @@ func (m model) saveAlerts(s alerts.Settings) (model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	var selectID string
+	if m.al.form.open && m.al.form.rule == -1 {
+		selectID = parsed.Rules[len(parsed.Rules)-1].ID
+	}
 	m.al.form.open = false
 	m.al.notice = "saving…"
 	return m, m.alertsCall(func(ctx context.Context, a AlertsHub) tea.Msg {
 		got, active, err := a.SetAlerts(ctx, parsed)
-		return alertsSavedMsg{got, active, err}
+		return alertsSavedMsg{s: got, selectID: selectID, active: active, err: err}
 	})
 }
 
@@ -692,11 +702,7 @@ func (m model) saveRule() (tea.Model, tea.Cmd) {
 	} else {
 		s.Rules = append(s.Rules, r)
 	}
-	next, cmd := m.saveAlerts(s)
-	if f.rule < 0 && !next.al.form.open { // select the new rule
-		next.al.cursor = len(s.Rules) - 1
-	}
-	return next, cmd
+	return m.saveAlerts(s)
 }
 
 // saveChannels builds the channels from the form and saves them with the rules.
