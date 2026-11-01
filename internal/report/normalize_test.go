@@ -694,8 +694,8 @@ func TestCleanTextStripsBidi(t *testing.T) {
 	if got := CleanText("\u202e\u2069", 60); got != nil {
 		t.Errorf("only bidi controls = %q, want nil", *got)
 	}
-	if got := CleanText("x\u202f\u00a1\u00a0\u061b", 60); got == nil || *got != "x\u202f\u00a1\u00a0\u061b" {
-		t.Errorf("neighbouring code points must stay, got %v", got)
+	if got := CleanText("x\u202f\u00a1\u00a0\u061b", 60); got == nil || *got != "x ¡ ؛" {
+		t.Errorf("neighbouring punctuation stays and blanks normalize, got %v", got)
 	}
 }
 

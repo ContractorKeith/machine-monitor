@@ -24,16 +24,16 @@ func TestClean(t *testing.T) {
 		{"line separators", "a b c", "a b c"},
 		{"mongolian", "a\u180e᠋b", "ab"},
 		{"invalid utf8", "a\xffb\xc3", "ab"},
-		{"neighbours stay", "\u2064x\u202f\u00a1\u00a0\u061b", "x\u202f\u00a1\u00a0\u061b"},
+		{"neighbours stay", "\u2064x\u202f\u00a1\u00a0\u061b", "x ¡ ؛"},
 		{"family zwj", "👨\u200d👩\u200d👧", "👨\u200d👩\u200d👧"},
 		{"rainbow flag", "🏳️\u200d🌈", "🏳️\u200d🌈"},
 		{"persian zwnj", "می\u200cخواهم", "می\u200cخواهم"},
 		{"malayalam chillu", "ന്\u200d", "ന്\u200d"},
 		{"leading joiner", "\u200dab", "ab"},
 		{"trailing joiner", "ab\u200d", "ab"},
-		{"repeated joiners", "a\u200d\u200d\u200cb", "a\u200cb"},
+		{"repeated joiners", "a\u200d\u200d\u200cb", "ab"},
 		{"joiner by space", "a \u200d b", "a  b"},
-		{"joiner after bidi", "a\u202e\u200db", "a\u200db"},
+		{"joiner after bidi", "a\u202e\u200db", "ab"},
 		{"stray fe0f", "a️b", "ab"},
 		{"keycap", "1️⃣", "1️⃣"},
 		{"heart", "❤️", "❤️"},
@@ -60,5 +60,45 @@ func TestCleanPlainIsFree(t *testing.T) {
 func TestStrip(t *testing.T) {
 	if got := Strip("a\tb\nc d\x1b[1me"); got != "abcde" {
 		t.Errorf("Strip = %q", got)
+	}
+}
+
+func TestCleanHiddenJoinerNeighbor(t *testing.T) {
+	for _, s := range []string{"a\u200d\u115f", "a\u200c\u3164", "a\u200d\ufe0f"} {
+		if got := Clean(s); got != "a" {
+			t.Errorf("Clean(%q) = %q", s, got)
+		}
+	}
+}
+func TestCleanBlankLookalikes(t *testing.T) {
+	for _, r := range []rune{'\u2800', '\u00a0', '\u1680', '\u2000', '\u2007', '\u202f', '\u205f', '\u3000'} {
+		s := "a" + string(r) + "b"
+		if Clean(s) != "a b" || Strip(s) != "a b" {
+			t.Errorf("blank U+%04X not normalized", r)
+		}
+	}
+}
+func FuzzCleanIdempotent(f *testing.F) {
+	for _, s := range []string{"a\u200d\u115f", "a\u200d\ufe0f", "ന്\u200d", "👨\u200d👩", "a\u2800b", "a\xff\u200d\u3164"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		for _, clean := range []func(string) string{Clean, Strip} {
+			once := clean(s)
+			if twice := clean(once); once != twice {
+				t.Fatalf("%q -> %q -> %q", s, once, twice)
+			}
+		}
+	})
+}
+
+func TestCleanLatinJoiners(t *testing.T) {
+	for in, want := range map[string]string{
+		"a\u200db": "ab", "a\u200cb": "ab", "y\u200d4": "y4",
+		"e\u0301\u200db": "e\u0301b", "a\u0301\u200c": "a\u0301", // a mark on a Latin base
+	} {
+		if got := Clean(in); got != want {
+			t.Errorf("Clean(%q)=%q, want %q", in, got, want)
+		}
 	}
 }

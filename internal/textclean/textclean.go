@@ -12,8 +12,8 @@
 //     U+FFF9–U+FFFB, the tag characters and variation selectors in U+E0000–U+E0FFF;
 //   - invalid UTF-8.
 //
-// Kept on purpose: U+200D (ZWJ) and U+200C (ZWNJ) between letters, marks or emoji, and after
-// a mark (Malayalam chillu, Persian words); U+FE0F after a symbol or digit (emoji
+// Kept on purpose: U+200D (ZWJ) in emoji sequences; ZWJ and U+200C (ZWNJ) between
+// joining-script letters and after a combining mark (Malayalam chillu, Persian words); U+FE0F after a symbol or digit (emoji
 // presentation). A joiner that leads, repeats or follows anything else goes.
 package textclean
 
@@ -37,10 +37,24 @@ func apply(s string, spaces bool) string {
 	if !Needs(s) {
 		return s
 	}
-	rs := []rune(decode(ansi.Strip(s)))
+	// Resolve unconditional removals first: joiners must see their final neighbors.
+	var filtered []rune
+	for _, r := range decode(ansi.Strip(s)) {
+		if r == '\t' || r == '\n' || r == '\r' || r == 0x2028 || r == 0x2029 {
+			if spaces {
+				filtered = append(filtered, ' ')
+			}
+		} else if !unicode.IsControl(r) && !hidden(r) {
+			if blank(r) {
+				r = ' '
+			}
+			filtered = append(filtered, r)
+		}
+	}
+	rs := filtered
 	var b strings.Builder
 	b.Grow(len(s))
-	var prev rune // the last rune written
+	var prev, base rune // the last rune written, and the last one that isn't a mark
 	for i, r := range rs {
 		switch {
 		case r == '\t' || r == '\n' || r == '\r' || r == 0x2028 || r == 0x2029:
@@ -50,13 +64,16 @@ func apply(s string, spaces bool) string {
 			r = ' '
 		case unicode.IsControl(r), hidden(r):
 			continue
-		case isJoiner(r) && !joinerOK(prev, rs, i):
+		case isJoiner(r) && !joinerOK(prev, base, rs, i):
 			continue
 		case r == 0xfe0f && !emojiBase(prev):
 			continue
 		}
 		b.WriteRune(r)
 		prev = r
+		if !unicode.IsMark(r) {
+			base = r
+		}
 	}
 	return b.String()
 }
@@ -80,7 +97,7 @@ func Needs(s string) bool {
 		case r < 0x20 || r == 0x7f || r >= 0x80 && r <= 0x9f:
 			return true
 		case r < 0x80:
-		case hidden(r), isJoiner(r), r == 0xfe0f, r == 0x2028, r == 0x2029:
+		case blank(r), hidden(r), isJoiner(r), r == 0xfe0f, r == 0x2028, r == 0x2029:
 			return true
 		}
 	}
@@ -112,27 +129,42 @@ func hidden(r rune) bool {
 	return false
 }
 
-// visible reports a rune a joiner may sit next to: a letter, mark, number, symbol or emoji.
-func visible(r rune) bool {
-	return unicode.IsLetter(r) || unicode.IsMark(r) || unicode.IsNumber(r) ||
-		unicode.IsSymbol(r) || r >= 0x1f000 && r <= 0x1faff || r == 0xfe0f
-}
-
-// joinerOK reports whether the joiner at rs[i] stays: after a visible rune (not another
-// joiner) it needs a visible rune after it, except right after a mark, where a trailing
-// joiner shapes the letter (Malayalam chillu).
-func joinerOK(prev rune, rs []rune, i int) bool {
-	if prev == 0 || isJoiner(prev) || !visible(prev) {
+// joinerOK preserves shaping marks and joining-script letters, and ZWJ emoji
+// sequences. Latin letters and digits never need an invisible joiner. After a mark,
+// the letter the mark sits on (base) decides: "é" + ZWJ is a lookalike, a virama is not.
+func joinerOK(prev, base rune, rs []rune, i int) bool {
+	if unicode.IsMark(prev) && prev != 0xfe0f {
+		return joiningLetter(base) && (i+1 == len(rs) || !isJoiner(rs[i+1]))
+	}
+	if i+1 == len(rs) {
 		return false
 	}
-	if i+1 >= len(rs) {
-		return unicode.IsMark(prev)
-	}
 	next := rs[i+1]
-	return visible(next) || unicode.IsMark(prev) && !isJoiner(next)
+	if rs[i] == 0x200d && (emojiRune(prev) || prev == 0xfe0f) && emojiRune(next) {
+		return true
+	}
+	return joiningLetter(prev) && joiningLetter(next)
+}
+
+func emojiRune(r rune) bool {
+	return r >= 0x1f000 && r <= 0x1faff || r >= 0x2600 && r <= 0x27bf
+}
+
+func joiningLetter(r rune) bool {
+	if !unicode.IsLetter(r) {
+		return false
+	}
+	return unicode.In(r, unicode.Arabic, unicode.Syriac, unicode.Thaana,
+		unicode.Nko, unicode.Mandaic, unicode.Mongolian, unicode.Devanagari,
+		unicode.Bengali, unicode.Gurmukhi, unicode.Gujarati, unicode.Oriya,
+		unicode.Tamil, unicode.Telugu, unicode.Kannada, unicode.Malayalam,
+		unicode.Sinhala, unicode.Myanmar, unicode.Khmer)
 }
 
 // emojiBase reports whether U+FE0F may follow r: a symbol or a digit, #, * (keycaps).
 func emojiBase(r rune) bool {
 	return unicode.IsSymbol(r) || r >= 0x1f000 && r <= 0x1faff || unicode.IsDigit(r) || r == '#' || r == '*' || r == 0xa9 || r == 0xae
 }
+
+// blank normalizes Unicode spacing and blank glyphs to an ordinary space.
+func blank(r rune) bool { return r != ' ' && (unicode.IsSpace(r) || r == 0x2800) }
