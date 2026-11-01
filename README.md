@@ -111,6 +111,9 @@ machine-monitor hub --show-key              # print the key
 machine-monitor pair                        # a one-time pairing code for connect, valid 10 minutes
 ```
 
+A SIGHUP leaves the hub running with its current settings and pairings. Restart the hub
+after editing its configuration; SIGINT and SIGTERM stop it and flush pending history.
+
 **An agent** on each other machine. The one-line installer above does all of this; by hand:
 
 ```sh

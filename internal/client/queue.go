@@ -69,6 +69,7 @@ func (q *eventQueue) push(e Event, limit int) bool {
 	}
 	q.items = append(q.items, &e)
 	q.live++
+	q.compact()
 	select {
 	case q.wake <- struct{}{}:
 	default:
@@ -100,24 +101,33 @@ func (q *eventQueue) pop() (e Event, ok bool, closed bool) {
 	return Event{}, false, q.closed
 }
 
-// compact reclaims delivered slots once they are most of the slice. Indexes shift by head.
+// compact reclaims delivered and superseded slots even while the consumer is blocked.
 func (q *eventQueue) compact() {
-	if q.head < 64 || q.head < len(q.items)/2 {
+	if len(q.items) < 64 || len(q.items) <= 2*q.live {
 		return
 	}
-	n := copy(q.items, q.items[q.head:])
+	positions := make(map[int]int, q.live)
+	n := 0
+	for i := q.head; i < len(q.items); i++ {
+		if q.items[i] != nil {
+			positions[i] = n
+			q.items[n] = q.items[i]
+			n++
+		}
+	}
 	clear(q.items[n:])
 	q.items = q.items[:n]
 	for id, i := range q.reports {
-		if i < q.head {
-			delete(q.reports, id) // already delivered: nothing to merge into
+		if pos, ok := positions[i]; ok {
+			q.reports[id] = pos
 		} else {
-			q.reports[id] = i - q.head
+			delete(q.reports, id) // already delivered: nothing to merge into
 		}
 	}
 	if q.status >= 0 {
-		q.status -= q.head
-		if q.status < 0 {
+		if pos, ok := positions[q.status]; ok {
+			q.status = pos
+		} else {
 			q.status = -1
 		}
 	}

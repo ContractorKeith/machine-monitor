@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"math"
@@ -116,9 +117,13 @@ type Store struct {
 	minutes map[string][]Point // id -> 1-minute points (last 30 days)
 	pending map[string]*pending
 
-	unwritten map[string]*retry                       // id -> minutes whose append failed, oldest first
-	write     func(f *os.File, b []byte) (int, error) // f.Write; replaced in tests to inject short writes
-	failKind  string                                  // write failure last returned by Add; "" when writes work
+	unwritten      map[string]*retry                       // id -> minutes whose append failed, oldest first
+	write          func(f *os.File, b []byte) (int, error) // f.Write; replaced in tests to inject short writes
+	failKind       string                                  // write failure last returned by Add; "" when writes work
+	warnings       []string                                // recovery diagnostics from Open; immutable after loading
+	needsRewrite   map[string]bool                         // failed migrations must persist the full loaded history
+	migrationPeers map[string][]string                     // IDs whose legacy source would be replaced by this ID
+	sources        map[string]bool                         // original files retained until migration completes
 }
 
 // Open loads every <id>.ndjson in dir (config.Paths.History), creating dir if needed. It
@@ -138,14 +143,25 @@ func Open(dir string, now func() time.Time) (*Store, error) {
 
 func (s *Store) nowMS() float64 { return float64(s.now().UnixMilli()) }
 
-// safeName maps an id to its file name stem: anything outside [a-zA-Z0-9_-] becomes "_".
+// safeName escapes bytes outside [a-z0-9_-], including the escape marker itself.
+// Lower-case machine IDs keep their filenames; escaping upper case also prevents
+// collisions on case-insensitive filesystems. Windows device names need an escape too.
 func safeName(id string) string {
-	return strings.Map(func(r rune) rune {
-		if r == '_' || r == '-' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' {
-			return r
+	var b strings.Builder
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if c == '_' || c == '-' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' {
+			b.WriteByte(c)
+		} else {
+			fmt.Fprintf(&b, "~%02x", c)
 		}
-		return '_'
-	}, id)
+	}
+	name := b.String()
+	reserved := name == "con" || name == "prn" || name == "aux" || name == "nul" || len(name) == 4 && (strings.HasPrefix(name, "com") || strings.HasPrefix(name, "lpt")) && name[3] >= '1' && name[3] <= '9'
+	if reserved {
+		return fmt.Sprintf("~%02x%s", name[0], name[1:])
+	}
+	return name
 }
 
 func (s *Store) file(id string) string { return filepath.Join(s.dir, safeName(id)+".ndjson") }
@@ -158,30 +174,90 @@ type line struct {
 
 func (s *Store) load() error {
 	files, err := readFiles(s.dir, s.nowMS()-keepMS)
+	rewrite := map[string]bool{}
+	s.needsRewrite = rewrite
+	originals := map[string]bool{}
+	s.sources = originals
+	sourceGroups := map[string]int{}
 	for _, f := range files {
-		if len(f.pts) == 0 {
-			if rerr := os.Remove(f.path); rerr != nil {
-				err = errors.Join(err, rerr)
-			}
+		sourceGroups[f.path]++
+	}
+	for _, f := range files {
+		originals[f.path] = true
+		if f.skipped > 0 {
+			s.warnings = append(s.warnings, fmt.Sprintf("history: %s: skipped %d corrupt or truncated record(s)", f.path, f.skipped))
+		}
+		if f.shadowed || len(f.pts) == 0 {
 			continue
 		}
-		s.minutes[f.id] = f.pts
-		if f.dirty {
-			if werr := s.rewrite(f.id); werr != nil {
-				err = errors.Join(err, werr)
+		s.minutes[f.id] = mergeMinutes(append(s.minutes[f.id], f.pts...))
+		if f.dirty || f.path != s.file(f.id) {
+			rewrite[f.id] = true
+		}
+	}
+	s.migrationPeers = map[string][]string{}
+	for _, f := range files {
+		if sourceGroups[f.path] > 1 && f.path == s.file(f.id) {
+			for _, peer := range files {
+				if peer.path == f.path && peer.id != f.id {
+					s.migrationPeers[f.id] = append(s.migrationPeers[f.id], peer.id)
+				}
 			}
 		}
+	}
+	// Finish every canonical file before removing a legacy file. If a write fails,
+	// keep all sources; a completed canonical file wins on retry, preventing double counts.
+	failed := false
+	for _, protectSource := range []bool{false, true} {
+		if failed {
+			break
+		}
+		for id := range rewrite {
+			// A mixed legacy file can itself be one ID's canonical filename. Do not
+			// replace it until the other devices' canonical files are safely written.
+			if (sourceGroups[s.file(id)] > 1) != protectSource {
+				continue
+			}
+			if werr := s.rewrite(id); werr != nil {
+				err = errors.Join(err, werr)
+				failed = true
+			}
+		}
+	}
+	if !failed {
+		err = errors.Join(err, s.cleanupSources())
 	}
 	return err
 }
 
+// Retire legacy sources only after their complete device histories are durable.
+func (s *Store) cleanupSources() error {
+	for id := range s.minutes {
+		delete(s.sources, s.file(id))
+	}
+	var errs []error
+	for path := range s.sources {
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			errs = append(errs, err)
+		} else {
+			delete(s.sources, path)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// Warnings reports recovered corrupt records without making readable history an error.
+func (s *Store) Warnings() []string { return slices.Clone(s.warnings) }
+
 // file is one parsed <id>.ndjson: the minutes still within 30 days, merged, and whether the
 // file on disk differs from them (expired lines, duplicate minutes or a partial last line).
 type file struct {
-	path  string
-	id    string
-	pts   []Point
-	dirty bool
+	path     string
+	id       string
+	pts      []Point
+	dirty    bool
+	skipped  int
+	shadowed bool // a canonical file already holds this ID's migrated history
 }
 
 // readFiles parses every <id>.ndjson in dir, dropping rows before cutoff, without changing
@@ -204,51 +280,94 @@ func readFiles(dir string, cutoff float64) ([]file, error) {
 			errs = append(errs, err)
 			continue
 		}
-		f := parseFile(data, cutoff)
-		f.path = path
-		if f.id == "" {
-			f.id = strings.TrimSuffix(name, ".ndjson") // no id in the rows: use the file name
+		for _, f := range parseFiles(data, cutoff, strings.TrimSuffix(name, ".ndjson")) {
+			f.path = path
+			files = append(files, f)
 		}
-		files = append(files, f)
+	}
+	canonical := map[string]bool{}
+	for _, f := range files {
+		if len(f.pts) > 0 && filepath.Base(f.path) == safeName(f.id)+".ndjson" {
+			canonical[f.id] = true
+		}
+	}
+	for i := range files {
+		f := &files[i]
+		f.shadowed = canonical[f.id] && filepath.Base(f.path) != safeName(f.id)+".ndjson"
 	}
 	return files, errors.Join(errs...)
 }
 
-// parseFile reads one file's rows, as upstream's loader does: rows before cutoff and bad
-// JSON are skipped, and a row with the same minute as the one before is merged into it. id is
-// the id of the last point's row, or "" when it has none.
-func parseFile(data []byte, cutoff float64) file {
-	lines := bytes.Split(data, []byte("\n"))
-	var pts []Point
-	var lastID *string // id of the last kept point, as upstream tracks it
-	merged := false
-	for _, b := range lines {
+// parseFiles separates rows by device before merging minutes, including legacy files
+// shared by colliding IDs. Invalid records are recovered where possible and counted.
+func parseFiles(data []byte, cutoff float64, fallback string) []file {
+	groups := map[string][]Point{}
+	skipped := 0
+	dirty := len(data) > 0 && data[len(data)-1] != '\n'
+	for _, b := range bytes.Split(data, []byte("\n")) {
 		if len(b) == 0 {
 			continue
 		}
+		valid := json.Valid(b)
+		if !valid {
+			skipped++
+			dirty = true
+		}
 		l, ok := parseLine(b)
-		if !ok || !(l.T >= cutoff) {
+		if !ok {
+			if valid {
+				skipped++
+				dirty = true
+			}
 			continue
 		}
-		if n := len(pts); n > 0 && pts[n-1].T == l.T {
-			pts[n-1] = merge(pts[n-1], l.Point)
-			merged = true
-			if l.ID != nil {
-				lastID = l.ID
-			}
+		if !(l.T >= cutoff) {
+			dirty = true
+			continue
+		}
+		id := fallback
+		if l.ID != nil && *l.ID != "" {
+			id = *l.ID
+		}
+		groups[id] = append(groups[id], l.Point)
+	}
+	if len(groups) == 0 {
+		return []file{{id: fallback, dirty: dirty, skipped: skipped}}
+	}
+	ids := make([]string, 0, len(groups))
+	for id := range groups {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	var out []file
+	for _, id := range ids {
+		pts := mergeMinutes(groups[id])
+		out = append(out, file{id: id, pts: pts, dirty: dirty || len(groups) > 1 || len(pts) != len(groups[id])})
+	}
+	out[0].skipped = skipped
+	return out
+}
+
+// mergeMinutes never combines records belonging to different device IDs.
+func mergeMinutes(pts []Point) []Point {
+	slices.SortStableFunc(pts, func(a, b Point) int {
+		if a.T < b.T {
+			return -1
+		}
+		if a.T > b.T {
+			return 1
+		}
+		return 0
+	})
+	out := pts[:0]
+	for _, p := range pts {
+		if n := len(out); n > 0 && out[n-1].T == p.T {
+			out[n-1] = merge(out[n-1], p)
 		} else {
-			pts = append(pts, l.Point)
-			lastID = l.ID
+			out = append(out, p)
 		}
 	}
-	f := file{pts: pts}
-	if lastID != nil {
-		f.id = *lastID
-	}
-	// A partial last line is left by a crash mid-append; the next append would run into it.
-	partial := len(data) > 0 && data[len(data)-1] != '\n'
-	f.dirty = merged || partial || len(pts) < len(lines)-1
-	return f
+	return out
 }
 
 // rowStart begins every row encodeLine writes.
@@ -294,8 +413,8 @@ func ReadDir(dir string, now func() time.Time) (*Snapshot, error) {
 		return snap, nil
 	}
 	for _, f := range files {
-		if len(f.pts) > 0 {
-			snap.minutes[f.id] = f.pts
+		if len(f.pts) > 0 && !f.shadowed {
+			snap.minutes[f.id] = mergeMinutes(append(snap.minutes[f.id], f.pts...))
 		}
 	}
 	return snap, err
@@ -327,6 +446,22 @@ func encodeLine(id string, p Point) []byte {
 
 // rewrite replaces id's file with its in-memory minutes. Caller holds mu (or is load).
 func (s *Store) rewrite(id string) error {
+	// A hub may keep collecting after migration fails. Preserve the mixed source
+	// until all peers have their own complete file, including when this ID reports first.
+	for _, peer := range s.migrationPeers[id] {
+		if s.needsRewrite[peer] {
+			if len(s.migrationPeers[peer]) > 0 {
+				return fmt.Errorf("history: overlapping legacy migration sources for %s and %s", id, peer)
+			}
+			if err := s.writeMinutes(peer); err != nil {
+				return err
+			}
+		}
+	}
+	return s.writeMinutes(id)
+}
+
+func (s *Store) writeMinutes(id string) error {
 	var buf bytes.Buffer
 	for _, p := range s.minutes[id] {
 		buf.Write(encodeLine(id, p))
@@ -334,6 +469,7 @@ func (s *Store) rewrite(id string) error {
 	err := config.WriteFile0600(s.file(id), buf.Bytes())
 	if err == nil {
 		delete(s.unwritten, id) // the file now holds every minute in memory
+		delete(s.needsRewrite, id)
 	}
 	return err
 }
@@ -453,6 +589,9 @@ func (s *Store) commit(id string, pend *pending) error {
 		s.minutes[id] = append([]Point(nil), mins[i:]...)
 		return s.rewrite(id)
 	}
+	if s.needsRewrite[id] {
+		return s.rewrite(id)
+	}
 	return s.appendRetrying(id, p)
 }
 
@@ -557,9 +696,21 @@ func (s *Store) Query(id string, from, to, maxPoints float64) Result {
 func (s *Store) Remove(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Complete pending migrations first: a retained legacy file could otherwise
+	// resurrect the removed device, or removal could unlink another device's source.
+	for pendingID := range s.needsRewrite {
+		if err := s.rewrite(pendingID); err != nil {
+			return err
+		}
+	}
+	if err := s.cleanupSources(); err != nil {
+		return err
+	}
 	delete(s.raw, id)
 	delete(s.minutes, id)
 	delete(s.pending, id)
+	delete(s.needsRewrite, id)
+	delete(s.migrationPeers, id)
 	if err := os.Remove(s.file(id)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}

@@ -1,6 +1,6 @@
 # machine-monitor — Build Plan
 
-Status: M0–M8 built and three review fix rounds merged (2026-10-31); remaining items are GitHub issues. Written 2026-10-31 from a full read of
+Status: M0–M8 built; three review fix rounds merged and a fourth repair round addresses #75–#81 (2026-11-01). Native macOS/Windows release acceptance and the known open items remain. Written 2026-10-31 from a full read of
 [Forward-Future/device-monitor](https://github.com/Forward-Future/device-monitor) at commit
 `c3a4c41` (v1.2.29).
 

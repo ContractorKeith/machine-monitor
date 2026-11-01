@@ -8,10 +8,12 @@ and Linux. It is a clean-room Go reimplementation of the ideas in
 feature-parity matrix in `docs/PLAN.md` shipped on all three OSes.
 
 ## Status
-M0–M8 built, followed by three skeptic-review fix rounds (#45–#49, #56–#59, #64–#66).
-The final targeted check at `6ee69c8` judged it ready to tag `v0.1.0` for real-world
-testing on macOS and Windows; only Low findings remain (#71) plus #43. No release
-is tagged yet. Last touched 2026-10-31.
+M0–M8 built, followed by four skeptic-review repair rounds. The fourth round addresses
+#75–#81: export credential checks, collision-safe history migration, normalized status,
+bounded client queues, safe byte totals, hub hangups and history recovery warnings.
+Known open items remain #71 (lows), #43 (per-device keys) and #73 (macOS test flake).
+No release is tagged. Native macOS/Windows release acceptance remains outstanding.
+Last touched 2026-11-01.
 
 ## Pointers
 - `docs/PLAN.md` — the build plan: architecture, feature matrix, milestones, acceptance.
