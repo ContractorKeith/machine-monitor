@@ -19,6 +19,7 @@ package hub
 
 import (
 	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"math/big"
 	"net/http"
@@ -27,6 +28,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
 // Pairing limits. PairTTL is upstream's; upstream's 5 tries were for everyone together.
@@ -214,6 +217,11 @@ func (h *Hub) handlePair(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusBadRequest, errorBody(err.Error()))
 		return
 	}
+	device, _ := body["deviceId"].(string)
+	if device != "" && !report.ValidID(device) {
+		sendJSON(w, http.StatusBadRequest, errorBody("invalid device id"))
+		return
+	}
 	given := digitsOnly(fmt.Sprint(body["code"]))
 	client, _ := h.clientAddr(r)
 	src := sourceKey(client)
@@ -254,8 +262,37 @@ func (h *Hub) handlePair(w http.ResponseWriter, r *http.Request) {
 	p.code = ""
 	id := p.id
 	p.mu.Unlock()
+	reply := map[string]string{"token": h.Token()}
+	if device != "" {
+		b := make([]byte, 32)
+		if _, err := rand.Read(b); err != nil {
+			sendJSON(w, 500, errorBody("internal error"))
+			return
+		}
+		key := hex.EncodeToString(b)
+		h.mu.Lock()
+		if h.cfg.DeviceKeys == nil {
+			h.cfg.DeviceKeys = map[string]string{}
+		}
+		old := h.cfg.DeviceKeys[device]
+		h.cfg.DeviceKeys[device] = key
+		err := h.saveConfig()
+		if err != nil {
+			if old == "" {
+				delete(h.cfg.DeviceKeys, device)
+			} else {
+				h.cfg.DeviceKeys[device] = old
+			}
+		}
+		h.mu.Unlock()
+		if err != nil {
+			sendJSON(w, 500, errorBody("could not save device key"))
+			return
+		}
+		reply["deviceKey"] = key
+	}
 	h.broadcast(map[string]any{"type": "paired", "id": id})
-	sendJSON(w, http.StatusOK, map[string]string{"token": h.Token()})
+	sendJSON(w, http.StatusOK, reply)
 }
 
 // digitsOnly drops everything but ASCII digits. A missing code (JSON null) reads as "".

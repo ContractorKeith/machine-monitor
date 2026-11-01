@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/x/term"
 
 	"github.com/ContractorKeith/machine-monitor/internal/agent"
+	"github.com/ContractorKeith/machine-monitor/internal/collect"
 	"github.com/ContractorKeith/machine-monitor/internal/config"
 	"github.com/ContractorKeith/machine-monitor/internal/discovery"
 	"github.com/ContractorKeith/machine-monitor/internal/tui"
@@ -115,6 +116,7 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	c := agent.NewHTTPClient()
+	enrolled := &agent.DeviceCredentials{}
 	if key != "" { // dashboard link
 		if !agent.ValidKey(key) {
 			return fail(1, "that link carries an unusable key")
@@ -126,15 +128,18 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 			return fail(1, "%s: %v", hubURL, err)
 		}
 	} else {
-		if key, err = pairLoop(ctx, in, c, hubURL, *codeFlag, stdout); err != nil {
+		if key, err = pairLoop(ctx, in, c, hubURL, *codeFlag, stdout, enrolled); err != nil {
 			return fail(1, "%v", err)
 		}
 	}
 
+	if old, err := agent.LoadClient(paths.Client); err == nil && old.HubURL == hubURL && enrolled.DeviceKey == "" {
+		enrolled.DeviceKey = old.DeviceKey
+	}
 	if old, err := agent.LoadClient(paths.Client); err == nil && old.HubURL != "" && old.HubURL != hubURL {
 		fmt.Fprintf(stdout, "Replacing the pairing with %s.\n", old.HubURL)
 	}
-	if err := agent.SaveClient(paths.Client, agent.Client{HubURL: hubURL, Key: key}); err != nil {
+	if err := agent.SaveClient(paths.Client, agent.Client{HubURL: hubURL, Key: key, DeviceKey: enrolled.DeviceKey}); err != nil {
 		return fail(1, "save %s: %v", paths.Client, err)
 	}
 	fmt.Fprintf(stdout, "Paired with %s (saved in %s).\n", hubURL, paths.Client)
@@ -194,7 +199,14 @@ func chooseHub(in *bufio.Reader, stdout, stderr io.Writer) (string, int) {
 
 // pairLoop pairs with code, or prompts for one until it works, the hub kills the code, or
 // stdin ends. A code given with --code is tried once.
-func pairLoop(ctx context.Context, in *bufio.Reader, c *http.Client, hubURL, code string, stdout io.Writer) (string, error) {
+func pairLoop(ctx context.Context, in *bufio.Reader, c *http.Client, hubURL, code string, stdout io.Writer, enrollment ...*agent.DeviceCredentials) (string, error) {
+	if len(enrollment) > 0 {
+		r, err := collect.New().Collect(ctx)
+		if err != nil {
+			return "", err
+		}
+		enrollment[0].DeviceID = r.ID
+	}
 	prompt := code == ""
 	for {
 		if prompt {
@@ -204,7 +216,7 @@ func pairLoop(ctx context.Context, in *bufio.Reader, c *http.Client, hubURL, cod
 			}
 		}
 		pctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		key, err := agent.Connect(pctx, c, hubURL, code)
+		key, err := agent.Connect(pctx, c, hubURL, code, enrollment...)
 		cancel()
 		var pe *agent.PairError
 		if err == nil || !prompt || !errors.As(err, &pe) || !pe.Retry {

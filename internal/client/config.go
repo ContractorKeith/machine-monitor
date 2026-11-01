@@ -13,8 +13,9 @@ import (
 // Config is client.json: the hub this machine connects to and its key (PLAN §5). Agents and
 // the connected TUI share it.
 type Config struct {
-	Hub string `json:"hub"`
-	Key string `json:"key"`
+	Hub       string `json:"hub"`
+	Key       string `json:"key"`
+	DeviceKey string `json:"deviceKey,omitempty"`
 }
 
 // LoadConfig reads client.json. A missing file is an empty Config. Upstream's names for the
@@ -28,15 +29,16 @@ func LoadConfig(path string) (Config, error) {
 		return Config{}, err
 	}
 	var raw struct {
-		Hub    string `json:"hub"`
-		HubURL string `json:"hubUrl"`
-		Key    string `json:"key"`
-		Token  string `json:"token"`
+		Hub       string `json:"hub"`
+		HubURL    string `json:"hubUrl"`
+		Key       string `json:"key"`
+		Token     string `json:"token"`
+		DeviceKey string `json:"deviceKey"`
 	}
 	if err := json.Unmarshal(b, &raw); err != nil {
 		return Config{}, fmt.Errorf("%s: %w", path, err)
 	}
-	c := Config{Hub: raw.Hub, Key: raw.Key}
+	c := Config{Hub: raw.Hub, Key: raw.Key, DeviceKey: raw.DeviceKey}
 	if c.Hub == "" {
 		c.Hub = raw.HubURL
 	}

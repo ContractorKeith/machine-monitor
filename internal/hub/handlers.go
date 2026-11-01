@@ -221,6 +221,11 @@ func (h *Hub) handleReport(w http.ResponseWriter, r *http.Request) {
 	// loopback could then send another reportFailMax big bodies after each one. Keyed
 	// agents get through the peek anyway.
 	reply, err := h.ingest(raw)
+	if errors.Is(err, errDeviceKey) {
+		fail()
+		sendJSON(w, http.StatusUnauthorized, errorBody("bad device key"))
+		return
+	}
 	if err != nil {
 		sendJSON(w, http.StatusBadRequest, errorBody(err.Error()))
 		return

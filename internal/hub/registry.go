@@ -233,6 +233,8 @@ func (h *Hub) deviceLock(id string) *sync.Mutex {
 	return l
 }
 
+var errDeviceKey = errors.New("bad device key")
+
 // ingest takes one raw report body (already authenticated) through Normalize into the
 // registry, history, power estimate, SSE and alerts. Reports for one device are applied one
 // at a time, in full, so LastSeen, history samples and "report" events stay in order.
@@ -260,6 +262,14 @@ func (h *Hub) ingest(raw []byte) (reportReply, error) {
 	latest := &Latest{Report: r, ReceivedAt: now, PowerEst: est}
 
 	h.mu.Lock()
+	var auth struct {
+		DeviceKey string `json:"deviceKey"`
+	}
+	_ = json.Unmarshal(raw, &auth)
+	if key := h.cfg.DeviceKeys[r.ID]; key != "" && !safeEqual(key, auth.DeviceKey) {
+		h.mu.Unlock()
+		return reportReply{}, errDeviceKey
+	}
 	d := h.registry[r.ID]
 	if d == nil {
 		if len(h.registry) >= MaxDevices {

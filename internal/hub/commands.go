@@ -2,17 +2,14 @@ package hub
 
 // Remote actions (PLAN §3 rows 24–25, M7): POST /api/devices/:id/action. "wake" sends
 // Wake-on-LAN packets from the hub to the device's stored MACs. "sleep", "restart" and
-// "shutdown" are queued for the device's next report, HMAC-signed with the hub key, and
+// "shutdown" are queued for the device's next report, HMAC-signed with the device key (hub key for legacy devices), and
 // only for a device whose agent advertises the action (it runs with --allow-power-actions).
 //
 // Upstream signs "device-monitor-cmd:<id>:<action>". Here the signature also covers the
 // device id and the time the command was queued, so an agent can refuse a command copied
 // from another device's reply or replayed after its TTL; see SignCommand.
 //
-// What the signature does not do: the key is the hub token, which every paired agent and
-// TUI holds. It stops someone on the network path who lacks the key from injecting or
-// altering a command, but any key holder can sign a valid command for any device. Per-device
-// keys are issue #43.
+// Enrolled devices use a private per-device key; legacy devices use the hub token.
 //
 // Ported from Forward-Future/device-monitor server.js (commands, /api/devices/:id/action)
 // @ c3a4c41 (MIT, © 2026 Matt): https://github.com/Forward-Future/device-monitor
@@ -144,7 +141,12 @@ func (h *Hub) handleAction(w http.ResponseWriter, r *http.Request) {
 // and its queued commands still within CommandTTL that its report allows (actions), signed.
 // The queue is emptied either way: a command is delivered at most once.
 func (h *Hub) replyFor(id string, actions []string) reportReply {
-	key := h.Token()
+	h.mu.Lock()
+	key := h.cfg.DeviceKeys[id]
+	if key == "" {
+		key = h.cfg.Token
+	}
+	h.mu.Unlock()
 	now := h.now()
 	rep := reportReply{OK: true}
 	h.act.mu.Lock()
