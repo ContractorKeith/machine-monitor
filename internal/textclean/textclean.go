@@ -37,7 +37,21 @@ func apply(s string, spaces bool) string {
 	if !Needs(s) {
 		return s
 	}
-	rs := []rune(decode(ansi.Strip(s)))
+	// Resolve unconditional removals first: joiners must see their final neighbors.
+	var filtered []rune
+	for _, r := range decode(ansi.Strip(s)) {
+		if r == '\t' || r == '\n' || r == '\r' || r == 0x2028 || r == 0x2029 {
+			if spaces {
+				filtered = append(filtered, ' ')
+			}
+		} else if !unicode.IsControl(r) && !hidden(r) {
+			if blank(r) {
+				r = ' '
+			}
+			filtered = append(filtered, r)
+		}
+	}
+	rs := filtered
 	var b strings.Builder
 	b.Grow(len(s))
 	var prev rune // the last rune written
@@ -80,7 +94,7 @@ func Needs(s string) bool {
 		case r < 0x20 || r == 0x7f || r >= 0x80 && r <= 0x9f:
 			return true
 		case r < 0x80:
-		case hidden(r), isJoiner(r), r == 0xfe0f, r == 0x2028, r == 0x2029:
+		case blank(r), hidden(r), isJoiner(r), r == 0xfe0f, r == 0x2028, r == 0x2029:
 			return true
 		}
 	}
@@ -129,10 +143,13 @@ func joinerOK(prev rune, rs []rune, i int) bool {
 		return unicode.IsMark(prev)
 	}
 	next := rs[i+1]
-	return visible(next) || unicode.IsMark(prev) && !isJoiner(next)
+	return (visible(next) && next != 0xfe0f) || unicode.IsMark(prev) && !isJoiner(next)
 }
 
 // emojiBase reports whether U+FE0F may follow r: a symbol or a digit, #, * (keycaps).
 func emojiBase(r rune) bool {
 	return unicode.IsSymbol(r) || r >= 0x1f000 && r <= 0x1faff || unicode.IsDigit(r) || r == '#' || r == '*' || r == 0xa9 || r == 0xae
 }
+
+// blank normalizes Unicode spacing and blank glyphs to an ordinary space.
+func blank(r rune) bool { return r != ' ' && (unicode.IsSpace(r) || r == 0x2800) }

@@ -24,7 +24,7 @@ func TestClean(t *testing.T) {
 		{"line separators", "a b c", "a b c"},
 		{"mongolian", "a\u180e᠋b", "ab"},
 		{"invalid utf8", "a\xffb\xc3", "ab"},
-		{"neighbours stay", "\u2064x\u202f\u00a1\u00a0\u061b", "x\u202f\u00a1\u00a0\u061b"},
+		{"neighbours stay", "\u2064x\u202f\u00a1\u00a0\u061b", "x ¡ ؛"},
 		{"family zwj", "👨\u200d👩\u200d👧", "👨\u200d👩\u200d👧"},
 		{"rainbow flag", "🏳️\u200d🌈", "🏳️\u200d🌈"},
 		{"persian zwnj", "می\u200cخواهم", "می\u200cخواهم"},
@@ -61,4 +61,33 @@ func TestStrip(t *testing.T) {
 	if got := Strip("a\tb\nc d\x1b[1me"); got != "abcde" {
 		t.Errorf("Strip = %q", got)
 	}
+}
+
+func TestCleanHiddenJoinerNeighbor(t *testing.T) {
+	for _, s := range []string{"a\u200d\u115f", "a\u200c\u3164", "a\u200d\ufe0f"} {
+		if got := Clean(s); got != "a" {
+			t.Errorf("Clean(%q) = %q", s, got)
+		}
+	}
+}
+func TestCleanBlankLookalikes(t *testing.T) {
+	for _, r := range []rune{'\u2800', '\u00a0', '\u1680', '\u2000', '\u2007', '\u202f', '\u205f', '\u3000'} {
+		s := "a" + string(r) + "b"
+		if Clean(s) != "a b" || Strip(s) != "a b" {
+			t.Errorf("blank U+%04X not normalized", r)
+		}
+	}
+}
+func FuzzCleanIdempotent(f *testing.F) {
+	for _, s := range []string{"a\u200d\u115f", "a\u200d\ufe0f", "ന്\u200d", "👨\u200d👩", "a\u2800b", "a\xff\u200d\u3164"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		for _, clean := range []func(string) string{Clean, Strip} {
+			once := clean(s)
+			if twice := clean(once); once != twice {
+				t.Fatalf("%q -> %q -> %q", s, once, twice)
+			}
+		}
+	})
 }

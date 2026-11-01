@@ -291,15 +291,15 @@ func TestReplyLimiter(t *testing.T) {
 	if l.allow(src(0)) {
 		t.Fatal("one source over its limit")
 	}
-	// New sources in one /24 share that network's budget.
+	// New sources in one /24 can use their fallback after the shared budget runs out.
 	n := 0
 	for i := 1; i < 256; i++ {
 		if l.allow(src(i)) {
 			n++
 		}
 	}
-	if n+replyPerSource != replyPerNetwork {
-		t.Fatalf("%d replies to 255 new sources in one /24; want %d", n, replyPerNetwork-replyPerSource)
+	if n != 255 {
+		t.Fatalf("%d replies to 255 new sources in one /24; want %d", n, 255)
 	}
 	if !l.allow(src(256)) { // 10.0.1.0: another /24
 		t.Fatal("another network refused")
@@ -427,5 +427,42 @@ func TestTwoHubsOnOneMachine(t *testing.T) {
 	hubs, err := probe(500*time.Millisecond, []netip.AddrPort{a, b, a})
 	if err != nil || len(hubs) != 2 {
 		t.Fatalf("got %+v, %v; want both hubs", hubs, err)
+	}
+}
+
+func TestReplySameNetworkFlood(t *testing.T) {
+	now := time.Unix(1000, 0)
+	l := newReplyLimiter(func() time.Time { return now })
+	for tick := 0; tick < 10000; tick++ {
+		now = now.Add(2 * time.Millisecond)
+		l.allow(netip.AddrFrom4([4]byte{127, 0, 0, byte(2 + tick%13)}))
+		if tick == 4000 || tick == 7000 {
+			if !l.allow(netip.MustParseAddr("127.0.0.1")) {
+				t.Fatal("same-/24 prober starved")
+			}
+		}
+	}
+	// Successful replies alone allocate entries, bounded by the total rate and idle window.
+	for i := 0; i < 100000; i++ {
+		l.allow(netip.AddrFrom4([4]byte{10, byte(i >> 16), byte(i >> 8), byte(i)}))
+	}
+	if len(l.per) > replyTotal*31 || len(l.nets) > replyTotal*31 {
+		t.Fatal("unbounded limiter state")
+	}
+}
+
+func TestReplyLimiterHardCap(t *testing.T) {
+	now := time.Unix(1000, 0)
+	l := newReplyLimiter(func() time.Time { return now })
+	for i := 0; i < replyMaxTracked; i++ {
+		a := netip.AddrFrom4([4]byte{10, byte(i >> 16), byte(i >> 8), byte(i)})
+		l.per[a] = &bucket{seen: now}
+	}
+	if l.allow(netip.MustParseAddr("192.168.1.1")) || len(l.per) != replyMaxTracked {
+		t.Fatal("source cap exceeded")
+	}
+	now = now.Add(replyIdle)
+	if !l.allow(netip.MustParseAddr("192.168.1.1")) {
+		t.Fatal("idle entries did not expire")
 	}
 }

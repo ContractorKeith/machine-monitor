@@ -37,9 +37,9 @@ const (
 	// Reply limits, so the responder can't be used to reflect traffic at a spoofed source,
 	// and a flood can't hide the hub from everyone else (skeptic report N2). Each source has
 	// a token bucket of replyPerSource replies that refills at replySourceRate a second, and
-	// each network (/24 for IPv4, /64 for IPv6) one of replyPerNetwork a second, so a flood
-	// from one network, even from a new address each probe, uses up only that network's
-	// share. replyTotal caps every reply together, well above what any LAN needs, to bound
+	// each network (/24 for IPv4, /64 for IPv6) one of replyPerNetwork a second.
+	// A per-source fallback allows one reply every five seconds even if neighbors
+	// exhaust that network budget. replyTotal caps every reply together, well above what any LAN needs, to bound
 	// the work and memory a flood spread over many networks can cost. A client's probe
 	// reaches a hub a few times at most (255.255.255.255 plus a directed broadcast per
 	// network).
@@ -47,6 +47,7 @@ const (
 	replySourceRate = 2.0              // replies a second, per source
 	replyPerNetwork = 25               // replies a second, per /24 or /64
 	replyTotal      = 500              // replies a second in all
+	replyMaxTracked = replyTotal * 60  // hard cap even when rejected probes keep old entries active
 	replyIdle       = 30 * time.Second // a source or network silent this long is forgotten
 )
 
@@ -118,9 +119,8 @@ func Respond(addr, name string, hubPort int) (*Responder, error) {
 	return r, nil
 }
 
-// replyLimiter holds the reply token buckets: per source, per network and in all. Only
-// sources and networks that have been answered are tracked, so the maps hold at most about
-// replyTotal*replyIdle entries however many addresses a flood uses.
+// replyLimiter tracks only answered sources and networks, with explicit map caps
+// as well as idle expiry. Rejected probes cannot grow memory without bound.
 type replyLimiter struct {
 	now    func() time.Time
 	mu     sync.Mutex
@@ -132,9 +132,16 @@ type replyLimiter struct {
 
 // bucket is one token bucket.
 type bucket struct {
+	tokens  float64
+	at      time.Time // last refill
+	seen    time.Time // last probe
+	reserve bucketReserve
+}
+
+// bucketReserve keeps one reply per source available despite a busy network.
+type bucketReserve struct {
 	tokens float64
-	at     time.Time // last refill
-	seen   time.Time // last probe
+	at     time.Time
 }
 
 // take refills b to now (at rate, up to burst) and spends a token if one is there.
@@ -174,7 +181,7 @@ func lookup[K comparable](m map[K]*bucket, k K, now time.Time, burst float64) *b
 	if b := m[k]; b != nil && now.Sub(b.seen) < replyIdle {
 		return b
 	}
-	return &bucket{tokens: burst, at: now}
+	return &bucket{tokens: burst, at: now, reserve: bucketReserve{tokens: 1, at: now}}
 }
 
 // allow reports whether a reply to from is within the limits, and if so spends it.
@@ -196,20 +203,33 @@ func (l *replyLimiter) allow(from netip.Addr) bool {
 		}
 	}
 	nk := network(from)
+	if l.per[from] == nil && len(l.per) >= replyMaxTracked ||
+		l.nets[nk] == nil && len(l.nets) >= replyMaxTracked {
+		return false
+	}
 	src := lookup(l.per, from, now, replyPerSource)
 	nb := lookup(l.nets, nk, now, replyPerNetwork)
-	// Check every bucket before spending from any, so a refused probe costs nothing.
-	ok := src.take(now, replySourceRate, replyPerSource, false) &&
-		nb.take(now, replyPerNetwork, replyPerNetwork, false) &&
+	// The shared network budget limits rotating traffic. Each admitted source also
+	// gets one fallback reply every five seconds, so neighbors cannot starve it.
+	// Only successful replies create entries; explicit caps bound memory.
+	src.reserve.tokens = min(1, src.reserve.tokens+max(0, now.Sub(src.reserve.at).Seconds())/5)
+	src.reserve.at = now
+	sourceOK := src.take(now, replySourceRate, replyPerSource, false)
+	networkOK := nb.take(now, replyPerNetwork, replyPerNetwork, false)
+	ok := sourceOK && (networkOK || src.reserve.tokens >= 1) &&
 		l.total.take(now, replyTotal, replyTotal, false)
 	if _, tracked := l.per[from]; ok || tracked {
-		l.per[from] = src // a tracked flood stays tracked while it probes
+		l.per[from] = src
 	}
 	if !ok {
 		return false
 	}
 	src.tokens--
-	nb.tokens--
+	if networkOK {
+		nb.tokens--
+	} else {
+		src.reserve.tokens--
+	}
 	l.total.tokens--
 	l.nets[nk] = nb
 	return true
