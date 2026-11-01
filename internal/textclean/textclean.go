@@ -54,7 +54,7 @@ func apply(s string, spaces bool) string {
 	rs := filtered
 	var b strings.Builder
 	b.Grow(len(s))
-	var prev rune // the last rune written
+	var prev, base rune // the last rune written, and the last one that isn't a mark
 	for i, r := range rs {
 		switch {
 		case r == '\t' || r == '\n' || r == '\r' || r == 0x2028 || r == 0x2029:
@@ -64,13 +64,16 @@ func apply(s string, spaces bool) string {
 			r = ' '
 		case unicode.IsControl(r), hidden(r):
 			continue
-		case isJoiner(r) && !joinerOK(prev, rs, i):
+		case isJoiner(r) && !joinerOK(prev, base, rs, i):
 			continue
 		case r == 0xfe0f && !emojiBase(prev):
 			continue
 		}
 		b.WriteRune(r)
 		prev = r
+		if !unicode.IsMark(r) {
+			base = r
+		}
 	}
 	return b.String()
 }
@@ -127,10 +130,11 @@ func hidden(r rune) bool {
 }
 
 // joinerOK preserves shaping marks and joining-script letters, and ZWJ emoji
-// sequences. Latin letters and digits never need an invisible joiner.
-func joinerOK(prev rune, rs []rune, i int) bool {
+// sequences. Latin letters and digits never need an invisible joiner. After a mark,
+// the letter the mark sits on (base) decides: "é" + ZWJ is a lookalike, a virama is not.
+func joinerOK(prev, base rune, rs []rune, i int) bool {
 	if unicode.IsMark(prev) && prev != 0xfe0f {
-		return i+1 == len(rs) || !isJoiner(rs[i+1])
+		return joiningLetter(base) && (i+1 == len(rs) || !isJoiner(rs[i+1]))
 	}
 	if i+1 == len(rs) {
 		return false

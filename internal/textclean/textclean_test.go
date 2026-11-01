@@ -93,13 +93,12 @@ func FuzzCleanIdempotent(f *testing.F) {
 }
 
 func TestCleanLatinJoiners(t *testing.T) {
-	for _, s := range []string{"a\u200db", "a\u200cb", "y\u200d4"} {
-		want := "ab"
-		if s[0] == 'y' {
-			want = "y4"
-		}
-		if got := Clean(s); got != want {
-			t.Errorf("Clean(%q)=%q, want %q", s, got, want)
+	for in, want := range map[string]string{
+		"a\u200db": "ab", "a\u200cb": "ab", "y\u200d4": "y4",
+		"e\u0301\u200db": "e\u0301b", "a\u0301\u200c": "a\u0301", // a mark on a Latin base
+	} {
+		if got := Clean(in); got != want {
+			t.Errorf("Clean(%q)=%q, want %q", in, got, want)
 		}
 	}
 }
