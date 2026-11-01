@@ -266,7 +266,7 @@ func (h *Hub) handlePair(w http.ResponseWriter, r *http.Request) {
 	if device != "" {
 		b := make([]byte, 32)
 		if _, err := rand.Read(b); err != nil {
-			sendJSON(w, 500, errorBody("internal error"))
+			sendJSON(w, http.StatusInternalServerError, errorBody("internal error"))
 			return
 		}
 		key := hex.EncodeToString(b)
@@ -286,7 +286,7 @@ func (h *Hub) handlePair(w http.ResponseWriter, r *http.Request) {
 		}
 		h.mu.Unlock()
 		if err != nil {
-			sendJSON(w, 500, errorBody("could not save device key"))
+			sendJSON(w, http.StatusInternalServerError, errorBody("could not save device key"))
 			return
 		}
 		reply["deviceKey"] = key

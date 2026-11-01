@@ -26,17 +26,25 @@ type macSource struct {
 
 func (macSource) platform() string { return report.PlatformMacOS }
 
-func (s macSource) static(ctx context.Context) staticInfo {
-	id := ioregUUID(s.out(ctx, "/usr/sbin/ioreg", "-rd1", "-c", "IOPlatformExpertDevice"))
+func (s macSource) deviceID(ctx context.Context) string {
+	if id := ioregUUID(s.out(ctx, "/usr/sbin/ioreg", "-rd1", "-c", "IOPlatformExpertDevice")); id != "" {
+		return id
+	}
+	return s.hostName(ctx)
+}
+
+func (s macSource) hostName(ctx context.Context) string {
 	host := firstLine(s.out(ctx, "/usr/sbin/scutil", "--get", "ComputerName"))
 	if host == "" {
 		h, _ := s.hostname()
 		host, _, _ = strings.Cut(h, ".") // hostname -s
 	}
-	if id == "" {
-		id = host
-	}
+	return host
+}
 
+func (s macSource) static(ctx context.Context) staticInfo {
+	id := s.deviceID(ctx)
+	host := s.hostName(ctx)
 	model := profilerField(s.out(ctx, "/usr/sbin/system_profiler", "SPHardwareDataType"), "Model Name")
 	osName := "macOS"
 	if v := firstLine(s.out(ctx, "/usr/bin/sw_vers", "-productVersion")); v != "" {

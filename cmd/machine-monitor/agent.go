@@ -81,11 +81,7 @@ func runAgent(args []string, stdout, stderr io.Writer) int {
 
 // startAgentWith runs the report loop until SIGINT or SIGTERM.
 // seenFile keeps accepted command ids across restarts (agent.Options.SeenFile).
-func startAgentWith(hubURL, key string, allowPower bool, seenFile string, stderr io.Writer, deviceKeys ...string) int {
-	deviceKey := ""
-	if len(deviceKeys) > 0 {
-		deviceKey = deviceKeys[0]
-	}
+func startAgentWith(hubURL, key string, allowPower bool, seenFile string, stderr io.Writer, deviceKey string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	logger := log.New(stderr, "", log.LstdFlags)

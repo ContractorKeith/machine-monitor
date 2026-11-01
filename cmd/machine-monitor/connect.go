@@ -199,13 +199,13 @@ func chooseHub(in *bufio.Reader, stdout, stderr io.Writer) (string, int) {
 
 // pairLoop pairs with code, or prompts for one until it works, the hub kills the code, or
 // stdin ends. A code given with --code is tried once.
-func pairLoop(ctx context.Context, in *bufio.Reader, c *http.Client, hubURL, code string, stdout io.Writer, enrollment ...*agent.DeviceCredentials) (string, error) {
-	if len(enrollment) > 0 {
-		r, err := collect.New().Collect(ctx)
+func pairLoop(ctx context.Context, in *bufio.Reader, c *http.Client, hubURL, code string, stdout io.Writer, enrollment *agent.DeviceCredentials) (string, error) {
+	if enrollment != nil {
+		id, err := collect.DeviceID(ctx)
 		if err != nil {
 			return "", err
 		}
-		enrollment[0].DeviceID = r.ID
+		enrollment.DeviceID = id
 	}
 	prompt := code == ""
 	for {
@@ -216,7 +216,7 @@ func pairLoop(ctx context.Context, in *bufio.Reader, c *http.Client, hubURL, cod
 			}
 		}
 		pctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		key, err := agent.Connect(pctx, c, hubURL, code, enrollment...)
+		key, err := agent.Connect(pctx, c, hubURL, code, enrollment)
 		cancel()
 		var pe *agent.PairError
 		if err == nil || !prompt || !errors.As(err, &pe) || !pe.Retry {

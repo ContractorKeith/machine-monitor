@@ -169,10 +169,10 @@ type DeviceCredentials struct {
 }
 
 // Pair trades a pairing code for the hub key. The key is not yet trusted: call Prove.
-func Pair(ctx context.Context, c *http.Client, hubURL, code string, enrollment ...*DeviceCredentials) (string, error) {
+func Pair(ctx context.Context, c *http.Client, hubURL, code string, enrollment *DeviceCredentials) (string, error) {
 	fields := map[string]string{"code": code}
-	if len(enrollment) > 0 {
-		fields["deviceId"] = enrollment[0].DeviceID
+	if enrollment != nil {
+		fields["deviceId"] = enrollment.DeviceID
 	}
 	body, _ := json.Marshal(fields)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, hubURL+"/api/pair", bytes.NewReader(body))
@@ -206,11 +206,11 @@ func Pair(ctx context.Context, c *http.Client, hubURL, code string, enrollment .
 	if !keyRE.MatchString(reply.Token) {
 		return "", errors.New("the hub handed over an unusable key")
 	}
-	if len(enrollment) > 0 {
+	if enrollment != nil {
 		if reply.DeviceKey != "" && !keyRE.MatchString(reply.DeviceKey) {
 			return "", errors.New("unusable device key")
 		}
-		enrollment[0].DeviceKey = reply.DeviceKey
+		enrollment.DeviceKey = reply.DeviceKey
 	}
 	return reply.Token, nil
 }
@@ -218,11 +218,11 @@ func Pair(ctx context.Context, c *http.Client, hubURL, code string, enrollment .
 // Connect pairs with the hub at hubURL using code and returns its key, proven: the server
 // that issued the key must also prove it holds it, so a server that just made one up is
 // refused before the key is used.
-func Connect(ctx context.Context, c *http.Client, hubURL, code string, enrollment ...*DeviceCredentials) (string, error) {
+func Connect(ctx context.Context, c *http.Client, hubURL, code string, enrollment *DeviceCredentials) (string, error) {
 	if _, err := FetchInfo(ctx, c, hubURL, ""); err != nil {
 		return "", fmt.Errorf("couldn't reach a hub at %s: %w", hubURL, err)
 	}
-	key, err := Pair(ctx, c, hubURL, code, enrollment...)
+	key, err := Pair(ctx, c, hubURL, code, enrollment)
 	if err != nil {
 		return "", err
 	}

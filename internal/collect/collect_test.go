@@ -13,6 +13,13 @@ func TestNewReportsPlatform(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	id, err := DeviceID(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != r.ID {
+		t.Fatalf("DeviceID = %q, report ID = %q", id, r.ID)
+	}
 	want := map[string]string{"linux": report.PlatformLinux, "darwin": report.PlatformMacOS, "windows": report.PlatformWindows}[runtime.GOOS]
 	if r.Platform != want {
 		t.Errorf("platform = %q, want %q", r.Platform, want)
