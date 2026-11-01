@@ -168,14 +168,14 @@ Keep upstream's API paths and JSON shapes so both sides interoperate. Changes ar
 
 | Endpoint | Auth | Purpose |
 |---|---|---|
-| `POST /api/report` | token in body | Agent report; reply may carry `procs: true` and signed `commands` |
+| `POST /api/report` | shared token and, once enrolled, deviceKey in body | Agent report; reply may carry `procs: true` and signed `commands` |
 | `GET /api/info` | open (proof only) / key | Hub identity; HMAC proof of `nonce` when unauthenticated |
-| `POST /api/pair` · `POST /api/pair/code` | open · key | Pairing code exchange |
+| `POST /api/pair` · `POST /api/pair/code` | open · key | Pairing code exchange; optional deviceId enrolls/rotates a private 32-byte random hex deviceKey returned only in this reply |
 | `GET /api/devices` · `GET /api/stream` | key | Snapshot · SSE (`snapshot`, `report`, `status`, `order`, `device`, `removed`, `alert`, `actionResult`) |
 | `GET /api/history/:id?range=&from=&to=&points=` | key | Downsampled history |
 | `GET /api/energy?bounds=` · `GET/PUT /api/energy/settings` | key | Energy summaries and price settings |
 | `GET/PUT /api/alerts` · `POST /api/alerts/test` · `DELETE /api/alerts/log` | key | Alerts |
-| `GET /api/devices/:id/processes` · `POST /api/devices/:id/action` | key | Processes; wake/sleep/restart/shutdown. Commands are HMAC-signed with the shared hub key: this stops injection by anyone without the key, not forgery by another key holder (per-device keys: #43) |
+| `GET /api/devices/:id/processes` · `POST /api/devices/:id/action` | key | Processes; wake/sleep/restart/shutdown. Commands are HMAC-SHA256 signed with the target device key (shared hub token only for unenrolled legacy devices) |
 | `PATCH/DELETE /api/devices/:id` · `PUT /api/order` | key | Rename, remove, reorder |
 | `GET /install.sh` · `GET /install.ps1` | key | Agent installer (downloads release binary, pins SHA-256) |
 
@@ -184,6 +184,16 @@ Additive fields in reports: `agent: "machine-monitor/<version>"`, `netIfaces[]`,
 
 Discovery: same UDP 7778 probe and `{"app":"device-monitor",...}` reply, plus
 `"impl":"machine-monitor"`.
+
+Device keys are stored in the hub's config.json deviceKeys map (device ID to key) and
+the agent's client.json deviceKey field, through WriteFile0600. They are never exposed
+in snapshots or streams. Re-pairing with deviceId rotates the key and migrates legacy
+agents; reports for enrolled IDs require both the shared token and matching deviceKey.
+Enrollment is retained even if a device is removed. Commands sign
+machine-monitor-cmd:<device>:<id>:<action>:<unix-ms>; TTL and replay protection remain,
+and power actions stay off unless that agent enables --allow-power-actions.
+Enrolled agents never fall back to verifying with the shared token. Plain HTTP still
+exposes secrets to traffic observers; use a trusted LAN/tailnet or HTTPS.
 
 ## 7. TUI design
 

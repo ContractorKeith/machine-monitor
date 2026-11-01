@@ -317,9 +317,10 @@ func (h *Hub) logf(format string, args ...any) {
 
 // hubConfig is config.json. Keys other hub versions or tools wrote are kept in extra.
 type hubConfig struct {
-	Token        string          `json:"token"`
-	Energy       *power.Settings `json:"energy,omitempty"` // nil until the user sets a price
-	AllowedHosts []string        `json:"allowedHosts,omitempty"`
+	DeviceKeys   map[string]string `json:"deviceKeys,omitempty"`
+	Token        string            `json:"token"`
+	Energy       *power.Settings   `json:"energy,omitempty"` // nil until the user sets a price
+	AllowedHosts []string          `json:"allowedHosts,omitempty"`
 	extra        map[string]json.RawMessage
 	notes        []string // load-time problems for the hub to log once
 }
@@ -356,6 +357,7 @@ func loadConfig(path string) (hubConfig, error) {
 			c.notes = append(c.notes, "hub: config.json: the electricity price is invalid and was ignored")
 		}
 	}
+	delete(c.extra, "deviceKeys")
 	delete(c.extra, "token")
 	delete(c.extra, "energy")
 	delete(c.extra, "allowedHosts")
@@ -383,6 +385,7 @@ func (h *Hub) saveConfig() error {
 		out[k] = v
 	}
 	out["token"] = h.cfg.Token
+	out["deviceKeys"] = h.cfg.DeviceKeys
 	if h.cfg.Energy != nil {
 		out["energy"] = h.cfg.Energy
 	}

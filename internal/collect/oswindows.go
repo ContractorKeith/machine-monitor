@@ -62,13 +62,18 @@ const (
 
 func (*windowsSource) platform() string { return report.PlatformWindows }
 
-func (s *windowsSource) static(ctx context.Context) staticInfo {
+func (s *windowsSource) deviceID(context.Context) string {
 	host := s.hostname()
 	id, _ := s.machineGUID()
 	if id = strings.TrimSpace(id); id == "" {
 		id = host
 	}
-	info := staticInfo{id: id, hostname: strPtr(host)}
+	return id
+}
+
+func (s *windowsSource) static(ctx context.Context) staticInfo {
+	host := s.hostname()
+	info := staticInfo{id: s.deviceID(ctx), hostname: strPtr(host)}
 
 	var osi []win32OperatingSystem
 	if s.query(ctx, wqlOS, &osi) && len(osi) > 0 {

@@ -63,12 +63,12 @@ func TestPairThenReportEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	c := NewHTTPClient()
-	if _, err := Connect(ctx, c, srv.URL, wrong(code.Code)); err == nil {
+	if _, err := Connect(ctx, c, srv.URL, wrong(code.Code), nil); err == nil {
 		t.Fatal("wrong code paired")
 	} else if pe := (*PairError)(nil); !errors.As(err, &pe) || !pe.Retry {
 		t.Fatalf("wrong code error: %v", err)
 	}
-	key, err := Connect(ctx, c, srv.URL, code.Code)
+	key, err := Connect(ctx, c, srv.URL, code.Code, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +247,7 @@ func TestConnectRefusesHubThatCannotProveKey(t *testing.T) {
 		f.ServeHTTP(w, r)
 	}))
 	defer srv.Close()
-	_, err := Connect(context.Background(), NewHTTPClient(), srv.URL, "123456")
+	_, err := Connect(context.Background(), NewHTTPClient(), srv.URL, "123456", nil)
 	if !errors.Is(err, ErrBadProof) {
 		t.Fatalf("Connect = %v, want ErrBadProof", err)
 	}
@@ -266,7 +266,7 @@ func TestConnectRefusesNonHub(t *testing.T) {
 		io.WriteString(w, `{"app":"something-else"}`)
 	}))
 	defer srv.Close()
-	if _, err := Connect(context.Background(), NewHTTPClient(), srv.URL, "123456"); !errors.Is(err, ErrNotHub) {
+	if _, err := Connect(context.Background(), NewHTTPClient(), srv.URL, "123456", nil); !errors.Is(err, ErrNotHub) {
 		t.Fatalf("Connect = %v, want ErrNotHub", err)
 	}
 }
@@ -384,7 +384,7 @@ func TestPairRejectsOddKey(t *testing.T) {
 		io.WriteString(w, `{"token":"bad key\r\nX-Evil: 1"}`)
 	}))
 	defer srv.Close()
-	if _, err := Pair(context.Background(), NewHTTPClient(), srv.URL, "1"); err == nil {
+	if _, err := Pair(context.Background(), NewHTTPClient(), srv.URL, "1", nil); err == nil {
 		t.Fatal("accepted a malformed key")
 	}
 }
@@ -451,7 +451,7 @@ func TestPairRetrySignal(t *testing.T) {
 			w.WriteHeader(403)
 			io.WriteString(w, c.body)
 		}))
-		_, err := Pair(context.Background(), NewHTTPClient(), srv.URL, "1")
+		_, err := Pair(context.Background(), NewHTTPClient(), srv.URL, "1", nil)
 		srv.Close()
 		var pe *PairError
 		if !errors.As(err, &pe) || pe.Retry != c.retry {

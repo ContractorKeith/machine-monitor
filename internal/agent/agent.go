@@ -28,6 +28,7 @@ const (
 // Options configures Run. HubURL, Key and Collector are required.
 type Options struct {
 	HubURL    string // origin, as NormalizeURL returns
+	DeviceKey string
 	Key       string
 	Collector collect.Collector
 	// Procs lists this machine's processes, sent only while the hub asks (reply procs:true).
@@ -88,7 +89,7 @@ func Run(ctx context.Context, opt Options) error {
 	if opt.Now == nil {
 		opt.Now = time.Now
 	}
-	a := &runner{opt: opt, guard: guard{key: opt.Key, allow: opt.AllowPowerActions, path: opt.SeenFile}}
+	a := &runner{opt: opt, guard: guard{key: cmp.Or(opt.DeviceKey, opt.Key), allow: opt.AllowPowerActions, path: opt.SeenFile}}
 	if err := a.guard.load(opt.Now()); err != nil {
 		a.logf("agent: remembered command ids: %v (starting with none)", err)
 	}
@@ -161,6 +162,12 @@ func (a *runner) step(ctx context.Context) error {
 		r.ActionResult = &a.results[0]
 	}
 	body, err := json.Marshal(r)
+	if err == nil && a.opt.DeviceKey != "" {
+		var fields map[string]json.RawMessage
+		_ = json.Unmarshal(body, &fields)
+		fields["deviceKey"], _ = json.Marshal(a.opt.DeviceKey)
+		body, err = json.Marshal(fields)
+	}
 	if err != nil {
 		return err
 	}

@@ -9,9 +9,9 @@ import (
 	"time"
 )
 
-func newOS() Collector {
-	return newCore(macSource{ps: gopsutil{}, run: runCmd, hostname: os.Hostname}, gopsutil{})
-}
+func newOS() Collector { return newCore(newSource(), gopsutil{}) }
+
+func newSource() source { return macSource{ps: gopsutil{}, run: runCmd, hostname: os.Hostname} }
 
 // execTimeout bounds every command the collector runs, even when ctx has no deadline.
 const execTimeout = 3 * time.Second

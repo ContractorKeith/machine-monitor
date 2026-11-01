@@ -20,6 +20,7 @@ import (
 // OS, so their logic is tested with fixtures anywhere; only newOS wires real ones.
 type source interface {
 	platform() string
+	deviceID(ctx context.Context) string
 	// static returns what doesn't change while we run. The collector calls it once.
 	static(ctx context.Context) staticInfo
 	clockMHz(ctx context.Context) *float64
