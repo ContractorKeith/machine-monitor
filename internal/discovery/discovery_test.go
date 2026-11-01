@@ -298,8 +298,8 @@ func TestReplyLimiter(t *testing.T) {
 			n++
 		}
 	}
-	if n != 255 {
-		t.Fatalf("%d replies to 255 new sources in one /24; want %d", n, 255)
+	if n+replyPerSource != 2*replyPerNetwork {
+		t.Fatalf("%d replies to 255 new sources in one /24; want %d", n, 2*replyPerNetwork-replyPerSource)
 	}
 	if !l.allow(src(256)) { // 10.0.1.0: another /24
 		t.Fatal("another network refused")
@@ -464,5 +464,34 @@ func TestReplyLimiterHardCap(t *testing.T) {
 	now = now.Add(replyIdle)
 	if !l.allow(netip.MustParseAddr("192.168.1.1")) {
 		t.Fatal("idle entries did not expire")
+	}
+}
+
+func TestReplyRotatingNetworkBound(t *testing.T) {
+	for _, ipv6 := range []bool{false, true} {
+		now := time.Unix(1000, 0)
+		l := newReplyLimiter(func() time.Time { return now })
+		start := now
+		replies := 0
+		for i := 0; i < 20000; i++ {
+			now = now.Add(time.Millisecond)
+			a := netip.AddrFrom4([4]byte{10, 0, 0, byte(i%254 + 1)})
+			if ipv6 {
+				b := [16]byte{0xfd, 0}
+				b[14] = byte(i >> 8)
+				b[15] = byte(i)
+				a = netip.AddrFrom16(b)
+			}
+			if l.allow(a) {
+				replies++
+			}
+			if i%1000 == 0 && !l.allow(netip.MustParseAddr("192.168.1.1")) {
+				t.Fatal("other network starved")
+			}
+		}
+		bound := 2 * replyPerNetwork * (1 + now.Sub(start).Seconds())
+		if float64(replies) > bound {
+			t.Fatalf("IPv6=%v: %d replies exceed bound %.0f", ipv6, replies, bound)
+		}
 	}
 }

@@ -31,9 +31,9 @@ func TestClean(t *testing.T) {
 		{"malayalam chillu", "ന്\u200d", "ന്\u200d"},
 		{"leading joiner", "\u200dab", "ab"},
 		{"trailing joiner", "ab\u200d", "ab"},
-		{"repeated joiners", "a\u200d\u200d\u200cb", "a\u200cb"},
+		{"repeated joiners", "a\u200d\u200d\u200cb", "ab"},
 		{"joiner by space", "a \u200d b", "a  b"},
-		{"joiner after bidi", "a\u202e\u200db", "a\u200db"},
+		{"joiner after bidi", "a\u202e\u200db", "ab"},
 		{"stray fe0f", "a️b", "ab"},
 		{"keycap", "1️⃣", "1️⃣"},
 		{"heart", "❤️", "❤️"},
@@ -90,4 +90,16 @@ func FuzzCleanIdempotent(f *testing.F) {
 			}
 		}
 	})
+}
+
+func TestCleanLatinJoiners(t *testing.T) {
+	for _, s := range []string{"a\u200db", "a\u200cb", "y\u200d4"} {
+		want := "ab"
+		if s[0] == 'y' {
+			want = "y4"
+		}
+		if got := Clean(s); got != want {
+			t.Errorf("Clean(%q)=%q, want %q", s, got, want)
+		}
+	}
 }

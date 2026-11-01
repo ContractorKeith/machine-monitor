@@ -12,8 +12,8 @@
 //     U+FFF9–U+FFFB, the tag characters and variation selectors in U+E0000–U+E0FFF;
 //   - invalid UTF-8.
 //
-// Kept on purpose: U+200D (ZWJ) and U+200C (ZWNJ) between letters, marks or emoji, and after
-// a mark (Malayalam chillu, Persian words); U+FE0F after a symbol or digit (emoji
+// Kept on purpose: U+200D (ZWJ) in emoji sequences; ZWJ and U+200C (ZWNJ) between
+// joining-script letters and after a combining mark (Malayalam chillu, Persian words); U+FE0F after a symbol or digit (emoji
 // presentation). A joiner that leads, repeats or follows anything else goes.
 package textclean
 
@@ -126,24 +126,35 @@ func hidden(r rune) bool {
 	return false
 }
 
-// visible reports a rune a joiner may sit next to: a letter, mark, number, symbol or emoji.
-func visible(r rune) bool {
-	return unicode.IsLetter(r) || unicode.IsMark(r) || unicode.IsNumber(r) ||
-		unicode.IsSymbol(r) || r >= 0x1f000 && r <= 0x1faff || r == 0xfe0f
-}
-
-// joinerOK reports whether the joiner at rs[i] stays: after a visible rune (not another
-// joiner) it needs a visible rune after it, except right after a mark, where a trailing
-// joiner shapes the letter (Malayalam chillu).
+// joinerOK preserves shaping marks and joining-script letters, and ZWJ emoji
+// sequences. Latin letters and digits never need an invisible joiner.
 func joinerOK(prev rune, rs []rune, i int) bool {
-	if prev == 0 || isJoiner(prev) || !visible(prev) {
+	if unicode.IsMark(prev) && prev != 0xfe0f {
+		return i+1 == len(rs) || !isJoiner(rs[i+1])
+	}
+	if i+1 == len(rs) {
 		return false
 	}
-	if i+1 >= len(rs) {
-		return unicode.IsMark(prev)
-	}
 	next := rs[i+1]
-	return (visible(next) && next != 0xfe0f) || unicode.IsMark(prev) && !isJoiner(next)
+	if rs[i] == 0x200d && (emojiRune(prev) || prev == 0xfe0f) && emojiRune(next) {
+		return true
+	}
+	return joiningLetter(prev) && joiningLetter(next)
+}
+
+func emojiRune(r rune) bool {
+	return r >= 0x1f000 && r <= 0x1faff || r >= 0x2600 && r <= 0x27bf
+}
+
+func joiningLetter(r rune) bool {
+	if !unicode.IsLetter(r) {
+		return false
+	}
+	return unicode.In(r, unicode.Arabic, unicode.Syriac, unicode.Thaana,
+		unicode.Nko, unicode.Mandaic, unicode.Mongolian, unicode.Devanagari,
+		unicode.Bengali, unicode.Gurmukhi, unicode.Gujarati, unicode.Oriya,
+		unicode.Tamil, unicode.Telugu, unicode.Kannada, unicode.Malayalam,
+		unicode.Sinhala, unicode.Myanmar, unicode.Khmer)
 }
 
 // emojiBase reports whether U+FE0F may follow r: a symbol or a digit, #, * (keycaps).
