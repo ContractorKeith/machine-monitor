@@ -291,15 +291,15 @@ func TestReplyLimiter(t *testing.T) {
 	if l.allow(src(0)) {
 		t.Fatal("one source over its limit")
 	}
-	// New sources in one /24 share that network's budget.
+	// New sources in one /24 can use their fallback after the shared budget runs out.
 	n := 0
 	for i := 1; i < 256; i++ {
 		if l.allow(src(i)) {
 			n++
 		}
 	}
-	if n+replyPerSource != replyPerNetwork {
-		t.Fatalf("%d replies to 255 new sources in one /24; want %d", n, replyPerNetwork-replyPerSource)
+	if n+replyPerSource != 2*replyPerNetwork {
+		t.Fatalf("%d replies to 255 new sources in one /24; want %d", n, 2*replyPerNetwork-replyPerSource)
 	}
 	if !l.allow(src(256)) { // 10.0.1.0: another /24
 		t.Fatal("another network refused")
@@ -428,4 +428,130 @@ func TestTwoHubsOnOneMachine(t *testing.T) {
 	if err != nil || len(hubs) != 2 {
 		t.Fatalf("got %+v, %v; want both hubs", hubs, err)
 	}
+}
+
+func TestReplySameNetworkFlood(t *testing.T) {
+	now := time.Unix(1000, 0)
+	l := newReplyLimiter(func() time.Time { return now })
+	for tick := 0; tick < 10000; tick++ {
+		now = now.Add(2 * time.Millisecond)
+		l.allow(netip.AddrFrom4([4]byte{127, 0, 0, byte(2 + tick%13)}))
+		if tick == 4000 || tick == 7000 {
+			if !l.allow(netip.MustParseAddr("127.0.0.1")) {
+				t.Fatal("same-/24 prober starved")
+			}
+		}
+	}
+	// Successful replies alone allocate entries, bounded by the total rate and idle window.
+	for i := 0; i < 100000; i++ {
+		l.allow(netip.AddrFrom4([4]byte{10, byte(i >> 16), byte(i >> 8), byte(i)}))
+	}
+	if len(l.per) > replyTotal*31 || len(l.nets) > replyTotal*31 {
+		t.Fatal("unbounded limiter state")
+	}
+}
+
+func TestReplyLimiterHardCap(t *testing.T) {
+	now := time.Unix(1000, 0)
+	l := newReplyLimiter(func() time.Time { return now })
+	for i := 0; i < replyMaxTracked; i++ {
+		a := netip.AddrFrom4([4]byte{10, byte(i >> 16), byte(i >> 8), byte(i)})
+		l.per[a] = &bucket{seen: now}
+	}
+	if l.allow(netip.MustParseAddr("192.168.1.1")) || len(l.per) != replyMaxTracked {
+		t.Fatal("source cap exceeded")
+	}
+	now = now.Add(replyIdle)
+	if !l.allow(netip.MustParseAddr("192.168.1.1")) {
+		t.Fatal("idle entries did not expire")
+	}
+}
+
+func TestReplyRotatingNetworkBound(t *testing.T) {
+	for _, ipv6 := range []bool{false, true} {
+		now := time.Unix(1000, 0)
+		l := newReplyLimiter(func() time.Time { return now })
+		start := now
+		replies := 0
+		for i := 0; i < 20000; i++ {
+			now = now.Add(time.Millisecond)
+			a := netip.AddrFrom4([4]byte{10, 0, 0, byte(i%254 + 1)})
+			if ipv6 {
+				b := [16]byte{0xfd, 0}
+				b[14] = byte(i >> 8)
+				b[15] = byte(i)
+				a = netip.AddrFrom16(b)
+			}
+			if l.allow(a) {
+				replies++
+			}
+			if i%1000 == 0 && !l.allow(netip.MustParseAddr("192.168.1.1")) {
+				t.Fatal("other network starved")
+			}
+		}
+		bound := 2 * replyPerNetwork * (1 + now.Sub(start).Seconds())
+		if float64(replies) > bound {
+			t.Fatalf("IPv6=%v: %d replies exceed bound %.0f", ipv6, replies, bound)
+		}
+	}
+}
+
+// TestReplyRotatingSlash24Fallback (PR #84 review): a flood rotating over most of one /24 at
+// 1 kHz drained the shared network reserve, so a prober probing every 5 s got no reply. While
+// the flood ramps up (its first ~5 s) every address not yet answered competes for the same
+// tokens, so the prober probes from 10 s on.
+func TestReplyRotatingSlash24Fallback(t *testing.T) {
+	for _, n := range []int{13, 60, 200, 254} {
+		now := time.Unix(1000, 0)
+		l := newReplyLimiter(func() time.Time { return now })
+		start := now
+		prober := netip.MustParseAddr("10.0.0.250")
+		answered, probes := 0, 0
+		for i := 0; now.Sub(start) < 70*time.Second; i++ {
+			now = now.Add(time.Millisecond)
+			if a := netip.AddrFrom4([4]byte{10, 0, 0, byte(i%n + 1)}); a != prober {
+				l.allow(a)
+			}
+			if at := now.Sub(start); at >= 10*time.Second && at%(5*time.Second) == 0 {
+				probes++
+				if l.allow(prober) {
+					answered++
+				}
+			}
+		}
+		if probes != 13 || answered != probes {
+			t.Errorf("%d flood addresses: prober answered %d of %d probes", n, answered, probes)
+		}
+	}
+}
+
+// TestReplyFallbackReserve pins the per-source fallback with the network's own budget gone:
+// one reply per five seconds, only to a source that has been quiet, and each one is spent.
+func TestReplyFallbackReserve(t *testing.T) {
+	now := time.Unix(1000, 0)
+	l := newReplyLimiter(func() time.Time { return now })
+	a := netip.MustParseAddr("10.0.0.1")
+	l.allow(a)
+	nb, src := l.nets[network(a)], l.per[a]
+	src.reserve = bucketReserve{at: now} // fallback spent just now
+	// exhaust empties the network's normal budget and fills its reserve before a probe.
+	exhaust := func() {
+		nb.tokens, nb.at = 0, now
+		nb.reserve = bucketReserve{tokens: replyPerNetwork, at: now}
+	}
+	probe := func(after time.Duration, want bool, why string) {
+		t.Helper()
+		now = now.Add(after)
+		exhaust()
+		if got := l.allow(a); got != want {
+			t.Fatalf("%s: allow = %v, want %v", why, got, want)
+		}
+	}
+	probe(3*time.Second, false, "3 s after the last fallback")
+	probe(3*time.Second, true, "6 s after the last fallback")
+	probe(2500*time.Millisecond, false, "2.5 s after a fallback was spent")
+	probe(2500*time.Millisecond, true, "5 s after a fallback was spent")
+	// A source probing faster than every replyQuiet has no claim on the shared reserve.
+	src.reserve.tokens = 1
+	probe(replyQuiet/2, false, "probing again within the quiet time")
 }
