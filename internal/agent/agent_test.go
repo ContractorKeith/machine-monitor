@@ -134,6 +134,7 @@ type fakeHub struct {
 	hubKey string    // the key this hub proves (and hands out when pairing)
 	procs  bool      // ask for processes in report replies
 	down   bool      // answer every request with 503
+	refuse bool      // answer reports with 401, as for a stale device key
 	cmds   []Command // put in the next report reply, then cleared
 	mu     sync.Mutex
 	seen   []string // every request: "METHOD path auth body"
@@ -162,6 +163,10 @@ func (f *fakeHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/api/pair":
 		json.NewEncoder(w).Encode(map[string]string{"token": f.hubKey})
 	case "/api/report":
+		if f.refuse {
+			w.WriteHeader(401)
+			return
+		}
 		json.NewEncoder(w).Encode(map[string]any{"ok": true, "procs": procs, "commands": cmds})
 	default:
 		w.WriteHeader(404)
@@ -457,5 +462,27 @@ func TestPairRetrySignal(t *testing.T) {
 		if !errors.As(err, &pe) || pe.Retry != c.retry {
 			t.Errorf("%s: err %v, want retry %v", c.name, err, c.retry)
 		}
+	}
+}
+
+// After a re-pair rotates the key, a running agent tells the user to restart it.
+func TestRefusedKeyMessageSaysRestart(t *testing.T) {
+	f := &fakeHub{t: t, hubKey: ourKey, refuse: true}
+	u := startFake(t, f)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var mu sync.Mutex
+	var logs []string
+	go Run(ctx, Options{HubURL: u, Key: ourKey, DeviceKey: "stale", Collector: fakeCollector{"x"}, Interval: time.Millisecond,
+		MaxBackoff: 2 * time.Millisecond, Logf: func(format string, a ...any) {
+			mu.Lock()
+			logs = append(logs, fmt.Sprintf(format, a...))
+			mu.Unlock()
+		}})
+	waitFor(t, "refusal logged", func() bool { mu.Lock(); defer mu.Unlock(); return len(logs) > 0 })
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(logs[0], "restart") {
+		t.Errorf("log = %q", logs[0])
 	}
 }

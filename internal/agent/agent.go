@@ -226,7 +226,7 @@ func (a *runner) post(ctx context.Context, body []byte) (reply, error) {
 		}
 		return rep, nil
 	case resp.StatusCode == http.StatusUnauthorized:
-		return rep, errors.New("the hub refused this machine's key: pair again with machine-monitor connect")
+		return rep, errors.New("the hub refused this machine's key: if this machine was just paired again, restart this agent; otherwise pair it with machine-monitor connect")
 	default:
 		json.Unmarshal(raw, &msg)
 		if m := cleanMsg(msg.Error); m != "" {

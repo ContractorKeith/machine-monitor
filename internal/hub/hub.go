@@ -337,6 +337,9 @@ func loadConfig(path string) (hubConfig, error) {
 		return c, fmt.Errorf("hub: %s: %w", path, err)
 	}
 	if err := json.Unmarshal(b, &c); err != nil {
+		if bad := json.Unmarshal(c.extra["deviceKeys"], &map[string]string{}); bad != nil && c.extra["deviceKeys"] != nil {
+			return c, fmt.Errorf("hub: %s: deviceKeys is damaged (%v); remove the \"deviceKeys\" entry and pair each machine again with machine-monitor connect", path, bad)
+		}
 		return c, fmt.Errorf("hub: %s: %w", path, err)
 	}
 	if c.Energy != nil { // re-validate: the file may be hand-edited
@@ -382,7 +385,9 @@ func (h *Hub) saveConfig() error {
 		out[k] = v
 	}
 	out["token"] = h.cfg.Token
-	out["deviceKeys"] = h.cfg.DeviceKeys
+	if len(h.cfg.DeviceKeys) > 0 {
+		out["deviceKeys"] = h.cfg.DeviceKeys
+	}
 	if h.cfg.Energy != nil {
 		out["energy"] = h.cfg.Energy
 	}
