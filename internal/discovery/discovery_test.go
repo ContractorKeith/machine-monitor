@@ -495,3 +495,63 @@ func TestReplyRotatingNetworkBound(t *testing.T) {
 		}
 	}
 }
+
+// TestReplyRotatingSlash24Fallback (PR #84 review): a flood rotating over most of one /24 at
+// 1 kHz drained the shared network reserve, so a prober probing every 5 s got no reply. While
+// the flood ramps up (its first ~5 s) every address not yet answered competes for the same
+// tokens, so the prober probes from 10 s on.
+func TestReplyRotatingSlash24Fallback(t *testing.T) {
+	for _, n := range []int{13, 60, 200, 254} {
+		now := time.Unix(1000, 0)
+		l := newReplyLimiter(func() time.Time { return now })
+		start := now
+		prober := netip.MustParseAddr("10.0.0.250")
+		answered, probes := 0, 0
+		for i := 0; now.Sub(start) < 70*time.Second; i++ {
+			now = now.Add(time.Millisecond)
+			if a := netip.AddrFrom4([4]byte{10, 0, 0, byte(i%n + 1)}); a != prober {
+				l.allow(a)
+			}
+			if at := now.Sub(start); at >= 10*time.Second && at%(5*time.Second) == 0 {
+				probes++
+				if l.allow(prober) {
+					answered++
+				}
+			}
+		}
+		if probes != 13 || answered != probes {
+			t.Errorf("%d flood addresses: prober answered %d of %d probes", n, answered, probes)
+		}
+	}
+}
+
+// TestReplyFallbackReserve pins the per-source fallback with the network's own budget gone:
+// one reply per five seconds, only to a source that has been quiet, and each one is spent.
+func TestReplyFallbackReserve(t *testing.T) {
+	now := time.Unix(1000, 0)
+	l := newReplyLimiter(func() time.Time { return now })
+	a := netip.MustParseAddr("10.0.0.1")
+	l.allow(a)
+	nb, src := l.nets[network(a)], l.per[a]
+	src.reserve = bucketReserve{at: now} // fallback spent just now
+	// exhaust empties the network's normal budget and fills its reserve before a probe.
+	exhaust := func() {
+		nb.tokens, nb.at = 0, now
+		nb.reserve = bucketReserve{tokens: replyPerNetwork, at: now}
+	}
+	probe := func(after time.Duration, want bool, why string) {
+		t.Helper()
+		now = now.Add(after)
+		exhaust()
+		if got := l.allow(a); got != want {
+			t.Fatalf("%s: allow = %v, want %v", why, got, want)
+		}
+	}
+	probe(3*time.Second, false, "3 s after the last fallback")
+	probe(3*time.Second, true, "6 s after the last fallback")
+	probe(2500*time.Millisecond, false, "2.5 s after a fallback was spent")
+	probe(2500*time.Millisecond, true, "5 s after a fallback was spent")
+	// A source probing faster than every replyQuiet has no claim on the shared reserve.
+	src.reserve.tokens = 1
+	probe(replyQuiet/2, false, "probing again within the quiet time")
+}

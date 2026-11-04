@@ -44,13 +44,15 @@ const (
 	// burst and rate. replyTotal caps every reply together to bound
 	// the work and memory a flood spread over many networks can cost. A client's probe
 	// reaches a hub a few times at most (255.255.255.255 plus a directed broadcast per
-	// network).
+	// network). Only a source silent for replyQuiet may use the shared fallback reserve, so
+	// addresses rotating through a /24 can't drain it ahead of a slow prober.
 	replyPerSource  = 5
 	replySourceRate = 2.0              // replies a second, per source
 	replyPerNetwork = 25               // replies a second, per /24 or /64
 	replyTotal      = 500              // replies a second in all
 	replyMaxTracked = replyTotal * 60  // hard cap even when rejected probes keep old entries active
 	replyIdle       = 30 * time.Second // a source or network silent this long is forgotten
+	replyQuiet      = 2 * time.Second  // a source must have been silent this long to use the shared reserve
 )
 
 // Reply is the JSON a hub sends back to a probe: {"app","name","port"} as upstream, plus
@@ -218,9 +220,10 @@ func (l *replyLimiter) allow(from netip.Addr) bool {
 	src.reserve.at = now
 	nb.reserve.tokens = min(replyPerNetwork, nb.reserve.tokens+max(0, now.Sub(nb.reserve.at).Seconds())*replyPerNetwork)
 	nb.reserve.at = now
+	quiet := now.Sub(src.seen) >= replyQuiet // a source hammering us has no claim on the reserve
 	sourceOK := src.take(now, replySourceRate, replyPerSource, false)
 	networkOK := nb.take(now, replyPerNetwork, replyPerNetwork, false)
-	ok := sourceOK && (networkOK || src.reserve.tokens >= 1 && nb.reserve.tokens >= 1) &&
+	ok := sourceOK && (networkOK || quiet && src.reserve.tokens >= 1 && nb.reserve.tokens >= 1) &&
 		l.total.take(now, replyTotal, replyTotal, false)
 	if _, tracked := l.per[from]; ok || tracked {
 		l.per[from] = src

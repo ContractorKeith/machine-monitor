@@ -102,3 +102,34 @@ func TestCleanLatinJoiners(t *testing.T) {
 		}
 	}
 }
+
+// Joiners are judged by their neighbors after hidden characters are removed, so a hidden
+// character between a joiner and a joining letter doesn't change the verdict.
+func TestCleanJoinerSeesFinalNeighbors(t *testing.T) {
+	for in, want := range map[string]string{
+		"ب\u200b\u200dب":       "ب\u200dب",
+		"ب\u200d\u200bب":       "ب\u200dب",
+		"👨\u200b\u200d\u2060👩": "👨\u200d👩",
+		"a\u200d\u200bb":       "ab",
+	} {
+		for name, clean := range map[string]func(string) string{"Clean": Clean, "Strip": Strip} {
+			if got := clean(in); got != want {
+				t.Errorf("%s(%q) = %q, want %q", name, in, got, want)
+			}
+		}
+	}
+}
+
+// After a mark on a joining letter, a joiner followed by another joiner goes and the last
+// one stays, so ZWJ+ZWNJ leaves the ZWNJ.
+func TestCleanJoinerRunAfterMark(t *testing.T) {
+	for in, want := range map[string]string{
+		"ن\u0651\u200d\u200c":       "ن\u0651\u200c",
+		"ن\u0651\u200c\u200d":       "ن\u0651\u200d",
+		"ن\u0651\u200d\u200c\u200d": "ن\u0651\u200d",
+	} {
+		if got := Clean(in); got != want {
+			t.Errorf("Clean(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
