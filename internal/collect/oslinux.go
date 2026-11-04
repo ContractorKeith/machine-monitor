@@ -29,7 +29,7 @@ type linuxSource struct {
 
 func (linuxSource) platform() string { return report.PlatformLinux }
 
-func (s linuxSource) static(ctx context.Context) staticInfo {
+func (s linuxSource) deviceID(context.Context) string {
 	host, _ := s.hostname()
 	id := s.firstLine("etc/machine-id")
 	if id == "" {
@@ -39,6 +39,12 @@ func (s linuxSource) static(ctx context.Context) staticInfo {
 		id = host
 	}
 
+	return id
+}
+
+func (s linuxSource) static(ctx context.Context) staticInfo {
+	host, _ := s.hostname()
+	id := s.deviceID(ctx)
 	osName := osRelease(s.read("etc/os-release"))
 	model := s.firstLine("sys/class/dmi/id/product_name")
 	if model != "" && !strings.Contains(model, "To be filled") && model != "System Product Name" {

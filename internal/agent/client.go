@@ -13,8 +13,9 @@ import (
 // Client is client.json: the hub this machine is paired with and its key. The agent and
 // the connected TUI both read it.
 type Client struct {
-	HubURL string `json:"hubUrl"`
-	Key    string `json:"key"`
+	HubURL    string `json:"hubUrl"`
+	Key       string `json:"key"`
+	DeviceKey string `json:"deviceKey,omitempty"`
 }
 
 // ErrNotPaired means client.json doesn't exist yet.

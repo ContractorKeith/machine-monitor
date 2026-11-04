@@ -239,10 +239,22 @@ func latestOf(t *testing.T, srv *httptest.Server, key, id string) *hub.Latest {
 // result.
 func TestPowerActionEndToEnd(t *testing.T) {
 	h, srv := realHub(t)
+	codeStatus, issued := postKeyed(t, srv, h.Token(), "/api/pair/code", "{}")
+	if codeStatus != 200 {
+		t.Fatal("pair code failed")
+	}
+	credentials := &DeviceCredentials{DeviceID: "e2e"}
+	if _, err := Connect(context.Background(), NewHTTPClient(), srv.URL, issued["code"].(string), credentials); err != nil {
+		t.Fatal(err)
+	}
+	if credentials.DeviceKey == "" {
+		t.Fatal("no device key")
+	}
+
 	ex := &fakeExec{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go Run(ctx, Options{HubURL: srv.URL, Key: h.Token(), Collector: fakeCollector{"e2e"}, AllowPowerActions: true,
+	go Run(ctx, Options{HubURL: srv.URL, Key: h.Token(), DeviceKey: credentials.DeviceKey, Collector: fakeCollector{"e2e"}, AllowPowerActions: true,
 		Exec: ex.run, Interval: 10 * time.Millisecond, Logf: t.Logf})
 	waitFor(t, "the device on the hub", func() bool { return latestOf(t, srv, h.Token(), "e2e") != nil })
 
@@ -393,5 +405,25 @@ func TestSupportedActions(t *testing.T) {
 	}
 	if got := SupportedActions(); !slices.Equal(got, want) {
 		t.Errorf("SupportedActions() = %v, want %v", got, want)
+	}
+}
+
+func TestEnrolledCommandIsolation(t *testing.T) {
+	const key = "device-one-private-key"
+	g := guard{key: key, allow: true}
+	for _, signingKey := range []string{ourKey, "device-two-private-key"} {
+		if err := g.verify(signed(signingKey, "dev-1", "123456abcdef", "restart", cmdNow), "dev-1", cmdNow); err == nil {
+			t.Fatal("forged command accepted")
+		}
+	}
+	if err := g.verify(signed(key, "dev-2", "123456abcdef", "restart", cmdNow), "dev-1", cmdNow); err == nil {
+		t.Fatal("cross-device command accepted")
+	}
+	good := signed(key, "dev-1", "123456abcdef", "restart", cmdNow)
+	if err := g.verify(good, "dev-1", cmdNow); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.verify(good, "dev-1", cmdNow); err == nil {
+		t.Fatal("replay accepted")
 	}
 }

@@ -14,14 +14,15 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
-func newOS() Collector {
-	src := &windowsSource{
+func newOS() Collector { return newCore(newSource(), gopsutil{}) }
+
+func newSource() source {
+	return &windowsSource{
 		ps:          gopsutil{},
 		wmi:         wmiClient{},
 		machineGUID: machineGUID,
 		hostname:    func() string { h, _ := os.Hostname(); return cmp.Or(os.Getenv("COMPUTERNAME"), h) },
 	}
-	return newCore(src, gopsutil{})
 }
 
 // wmiTimeout bounds one WMI query; WMI calls take no context.

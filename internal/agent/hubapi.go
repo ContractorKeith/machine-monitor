@@ -1,7 +1,7 @@
 // Package agent reports this machine to a hub (machine-monitor agent) and pairs with one
 // (machine-monitor connect).
 //
-// The hub key is the only secret. It is sent only to a hub that has just proven it holds
+// The hub key and enrolled device key are sent only to a hub that has proven it holds
 // the same key: the agent sends a random nonce to GET /api/info and checks the HMAC proof
 // before every first report and after every failed one, so a stale address, a spoofed
 // DHCP lease or a fake hub on the LAN never receives the key. The pairing code is sent
@@ -162,9 +162,19 @@ type PairError struct {
 
 func (e *PairError) Error() string { return e.Msg }
 
+// DeviceCredentials binds pairing to an agent ID and receives its private key.
+type DeviceCredentials struct {
+	DeviceID  string
+	DeviceKey string
+}
+
 // Pair trades a pairing code for the hub key. The key is not yet trusted: call Prove.
-func Pair(ctx context.Context, c *http.Client, hubURL, code string) (string, error) {
-	body, _ := json.Marshal(map[string]string{"code": code})
+func Pair(ctx context.Context, c *http.Client, hubURL, code string, enrollment *DeviceCredentials) (string, error) {
+	fields := map[string]string{"code": code}
+	if enrollment != nil {
+		fields["deviceId"] = enrollment.DeviceID
+	}
+	body, _ := json.Marshal(fields)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, hubURL+"/api/pair", bytes.NewReader(body))
 	if err != nil {
 		return "", err
@@ -176,9 +186,10 @@ func Pair(ctx context.Context, c *http.Client, hubURL, code string) (string, err
 	}
 	defer resp.Body.Close()
 	var reply struct {
-		Token string `json:"token"`
-		Error string `json:"error"`
-		Retry *bool  `json:"retry"` // machine-monitor hubs only
+		DeviceKey string `json:"deviceKey"`
+		Token     string `json:"token"`
+		Error     string `json:"error"`
+		Retry     *bool  `json:"retry"` // machine-monitor hubs only
 	}
 	json.NewDecoder(io.LimitReader(resp.Body, maxReply)).Decode(&reply)
 	if resp.StatusCode != http.StatusOK || reply.Token == "" {
@@ -195,17 +206,23 @@ func Pair(ctx context.Context, c *http.Client, hubURL, code string) (string, err
 	if !keyRE.MatchString(reply.Token) {
 		return "", errors.New("the hub handed over an unusable key")
 	}
+	if enrollment != nil {
+		if reply.DeviceKey != "" && !keyRE.MatchString(reply.DeviceKey) {
+			return "", errors.New("unusable device key")
+		}
+		enrollment.DeviceKey = reply.DeviceKey
+	}
 	return reply.Token, nil
 }
 
 // Connect pairs with the hub at hubURL using code and returns its key, proven: the server
 // that issued the key must also prove it holds it, so a server that just made one up is
 // refused before the key is used.
-func Connect(ctx context.Context, c *http.Client, hubURL, code string) (string, error) {
+func Connect(ctx context.Context, c *http.Client, hubURL, code string, enrollment *DeviceCredentials) (string, error) {
 	if _, err := FetchInfo(ctx, c, hubURL, ""); err != nil {
 		return "", fmt.Errorf("couldn't reach a hub at %s: %w", hubURL, err)
 	}
-	key, err := Pair(ctx, c, hubURL, code)
+	key, err := Pair(ctx, c, hubURL, code, enrollment)
 	if err != nil {
 		return "", err
 	}

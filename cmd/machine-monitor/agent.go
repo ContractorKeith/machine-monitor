@@ -76,17 +76,17 @@ func runAgent(args []string, stdout, stderr io.Writer) int {
 	if *allowPower {
 		seen = filepath.Join(filepath.Dir(paths.Client), "agent-commands.json")
 	}
-	return startAgentWith(hubURL, key, *allowPower, seen, stderr)
+	return startAgentWith(hubURL, key, *allowPower, seen, stderr, cl.DeviceKey)
 }
 
 // startAgentWith runs the report loop until SIGINT or SIGTERM.
 // seenFile keeps accepted command ids across restarts (agent.Options.SeenFile).
-func startAgentWith(hubURL, key string, allowPower bool, seenFile string, stderr io.Writer) int {
+func startAgentWith(hubURL, key string, allowPower bool, seenFile string, stderr io.Writer, deviceKey string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	logger := log.New(stderr, "", log.LstdFlags)
 	procs := tui.SystemProcesses()
-	err := agent.Run(ctx, agent.Options{HubURL: hubURL, Key: key, Collector: collect.New(),
+	err := agent.Run(ctx, agent.Options{HubURL: hubURL, Key: key, DeviceKey: deviceKey, Collector: collect.New(),
 		Procs: procs.Processes, AllowPowerActions: allowPower,
 		SeenFile: seenFile, Version: version, Logf: logger.Printf})
 	if err != nil {

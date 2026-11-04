@@ -63,12 +63,12 @@ func TestPairThenReportEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	c := NewHTTPClient()
-	if _, err := Connect(ctx, c, srv.URL, wrong(code.Code)); err == nil {
+	if _, err := Connect(ctx, c, srv.URL, wrong(code.Code), nil); err == nil {
 		t.Fatal("wrong code paired")
 	} else if pe := (*PairError)(nil); !errors.As(err, &pe) || !pe.Retry {
 		t.Fatalf("wrong code error: %v", err)
 	}
-	key, err := Connect(ctx, c, srv.URL, code.Code)
+	key, err := Connect(ctx, c, srv.URL, code.Code, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,6 +134,7 @@ type fakeHub struct {
 	hubKey string    // the key this hub proves (and hands out when pairing)
 	procs  bool      // ask for processes in report replies
 	down   bool      // answer every request with 503
+	refuse bool      // answer reports with 401, as for a stale device key
 	cmds   []Command // put in the next report reply, then cleared
 	mu     sync.Mutex
 	seen   []string // every request: "METHOD path auth body"
@@ -162,6 +163,10 @@ func (f *fakeHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/api/pair":
 		json.NewEncoder(w).Encode(map[string]string{"token": f.hubKey})
 	case "/api/report":
+		if f.refuse {
+			w.WriteHeader(401)
+			return
+		}
 		json.NewEncoder(w).Encode(map[string]any{"ok": true, "procs": procs, "commands": cmds})
 	default:
 		w.WriteHeader(404)
@@ -247,7 +252,7 @@ func TestConnectRefusesHubThatCannotProveKey(t *testing.T) {
 		f.ServeHTTP(w, r)
 	}))
 	defer srv.Close()
-	_, err := Connect(context.Background(), NewHTTPClient(), srv.URL, "123456")
+	_, err := Connect(context.Background(), NewHTTPClient(), srv.URL, "123456", nil)
 	if !errors.Is(err, ErrBadProof) {
 		t.Fatalf("Connect = %v, want ErrBadProof", err)
 	}
@@ -266,7 +271,7 @@ func TestConnectRefusesNonHub(t *testing.T) {
 		io.WriteString(w, `{"app":"something-else"}`)
 	}))
 	defer srv.Close()
-	if _, err := Connect(context.Background(), NewHTTPClient(), srv.URL, "123456"); !errors.Is(err, ErrNotHub) {
+	if _, err := Connect(context.Background(), NewHTTPClient(), srv.URL, "123456", nil); !errors.Is(err, ErrNotHub) {
 		t.Fatalf("Connect = %v, want ErrNotHub", err)
 	}
 }
@@ -384,7 +389,7 @@ func TestPairRejectsOddKey(t *testing.T) {
 		io.WriteString(w, `{"token":"bad key\r\nX-Evil: 1"}`)
 	}))
 	defer srv.Close()
-	if _, err := Pair(context.Background(), NewHTTPClient(), srv.URL, "1"); err == nil {
+	if _, err := Pair(context.Background(), NewHTTPClient(), srv.URL, "1", nil); err == nil {
 		t.Fatal("accepted a malformed key")
 	}
 }
@@ -451,11 +456,33 @@ func TestPairRetrySignal(t *testing.T) {
 			w.WriteHeader(403)
 			io.WriteString(w, c.body)
 		}))
-		_, err := Pair(context.Background(), NewHTTPClient(), srv.URL, "1")
+		_, err := Pair(context.Background(), NewHTTPClient(), srv.URL, "1", nil)
 		srv.Close()
 		var pe *PairError
 		if !errors.As(err, &pe) || pe.Retry != c.retry {
 			t.Errorf("%s: err %v, want retry %v", c.name, err, c.retry)
 		}
+	}
+}
+
+// After a re-pair rotates the key, a running agent tells the user to restart it.
+func TestRefusedKeyMessageSaysRestart(t *testing.T) {
+	f := &fakeHub{t: t, hubKey: ourKey, refuse: true}
+	u := startFake(t, f)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var mu sync.Mutex
+	var logs []string
+	go Run(ctx, Options{HubURL: u, Key: ourKey, DeviceKey: "stale", Collector: fakeCollector{"x"}, Interval: time.Millisecond,
+		MaxBackoff: 2 * time.Millisecond, Logf: func(format string, a ...any) {
+			mu.Lock()
+			logs = append(logs, fmt.Sprintf(format, a...))
+			mu.Unlock()
+		}})
+	waitFor(t, "refusal logged", func() bool { mu.Lock(); defer mu.Unlock(); return len(logs) > 0 })
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(logs[0], "restart") {
+		t.Errorf("log = %q", logs[0])
 	}
 }

@@ -233,10 +233,16 @@ func (h *Hub) deviceLock(id string) *sync.Mutex {
 	return l
 }
 
+var errDeviceKey = errors.New("bad device key")
+
 // ingest takes one raw report body (already authenticated) through Normalize into the
 // registry, history, power estimate, SSE and alerts. Reports for one device are applied one
 // at a time, in full, so LastSeen, history samples and "report" events stay in order.
-func (h *Hub) ingest(raw []byte) (reportReply, error) {
+func (h *Hub) ingest(raw []byte) (reportReply, error) { return h.ingestFrom(raw, false) }
+
+// ingestFrom is ingest; own marks the hub's in-process self-report, which never crosses the
+// network and so needs no device key even when connect enrolled this machine's own id.
+func (h *Hub) ingestFrom(raw []byte, own bool) (reportReply, error) {
 	r, err := report.Normalize(raw)
 	if errors.Is(err, report.ErrInvalidID) {
 		return reportReply{}, errors.New("invalid id")
@@ -260,6 +266,14 @@ func (h *Hub) ingest(raw []byte) (reportReply, error) {
 	latest := &Latest{Report: r, ReceivedAt: now, PowerEst: est}
 
 	h.mu.Lock()
+	var auth struct {
+		DeviceKey string `json:"deviceKey"`
+	}
+	_ = json.Unmarshal(raw, &auth)
+	if key := h.cfg.DeviceKeys[r.ID]; !own && key != "" && !safeEqual(key, auth.DeviceKey) {
+		h.mu.Unlock()
+		return reportReply{}, errDeviceKey
+	}
 	d := h.registry[r.ID]
 	if d == nil {
 		if len(h.registry) >= MaxDevices {
@@ -462,7 +476,7 @@ func (h *Hub) collectLoop(ctx context.Context) {
 		raw, err := json.Marshal(r)
 		if err == nil {
 			var rep reportReply
-			rep, err = h.ingest(raw)
+			rep, err = h.ingestFrom(raw, true)
 			wantProcs = rep.Procs
 		}
 		if err != nil {

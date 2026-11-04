@@ -3,16 +3,14 @@ package agent
 // Signed power actions (PLAN §3 row 25, M7). Off unless the agent runs with
 // --allow-power-actions; then each report advertises the actions this OS supports
 // (features "actions") and the hub may put commands in its reply. A command runs only if
-// it passes verify: a known action this agent allows, a valid HMAC from the hub key over
+// it passes verify: a known action this agent allows, a valid HMAC from the device key (hub key before enrollment) over
 // this device's id, the command id, the action and the time it was queued, queued at most
 // CommandTTL ago (and at most maxSkew ahead of this machine's clock), and an id not seen
 // before. Accepted ids are saved (SeenFile, 0600) until they would expire, so restarting
 // the agent doesn't make a captured command run again. Anything else is logged and
 // ignored, so someone on the network path without the hub key can't inject or replay one.
 //
-// The key is the hub token every paired machine shares, so the signature proves a command
-// came from a holder of the hub key, not from the hub: any paired machine or TUI can sign
-// a command for any device. Per-device keys are issue #43.
+// Enrolled agents verify only with their device key, with no shared-token fallback.
 
 import (
 	"context"

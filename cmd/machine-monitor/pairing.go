@@ -35,7 +35,7 @@ func loadPairing(path string) (agent.Client, error) {
 	if cfg.Hub == "" && cfg.Key == "" {
 		return agent.Client{}, agent.ErrNotPaired
 	}
-	return agent.Client{HubURL: cfg.Hub, Key: cfg.Key}, nil
+	return agent.Client{HubURL: cfg.Hub, Key: cfg.Key, DeviceKey: cfg.DeviceKey}, nil
 }
 
 // tuiOptions are the display options from the environment plus this build's version, which

@@ -58,6 +58,21 @@ type Collector interface {
 // New returns the collector for this OS.
 func New() Collector { return newOS() }
 
+// DeviceID reads the same identity used in reports, without collecting metrics or
+// running probes. macOS needs only ioreg (and the hostname fallback if unavailable).
+func DeviceID(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(ctx, staticTimeout)
+	defer cancel()
+	id := newSource().deviceID(ctx)
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
 // DefaultTimeout bounds a probe's Run when Probe.Timeout is zero.
 const DefaultTimeout = 1500 * time.Millisecond
 
