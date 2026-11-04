@@ -156,7 +156,7 @@ func TestServiceUsage(t *testing.T) {
 }
 
 func TestInTempDir(t *testing.T) {
-	dir := t.TempDir()
+	dir := os.TempDir() // not t.TempDir(): that follows GOTMPDIR, which os.TempDir() ignores
 	if r, err := filepath.EvalSymlinks(dir); err == nil {
 		dir = r
 	}

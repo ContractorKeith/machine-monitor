@@ -561,6 +561,25 @@ func TestDeleteConfirmRulesChanged(t *testing.T) {
 	}
 }
 
+// A settings event that removes a rule above the cursor moves the rule under it: y must
+// cancel, not delete the neighbour that slid into place.
+func TestDeleteConfirmRuleShiftedAboveCursor(t *testing.T) {
+	f := alertsFixture()
+	m := alertsModel(t, f, 80, 24)
+	if len(m.al.cfg.Rules) < 2 {
+		t.Skip("fixture needs two rules")
+	}
+	m, _ = send(t, m, keyMsg("j"), keyMsg("D")) // asks about rule 1
+	shifted := cloneSettings(m.al.cfg)
+	shifted.Rules = shifted.Rules[1:] // rule 0 removed: rule 2 (or nothing) now sits under the cursor
+	shifted.Rules = append(shifted.Rules, shifted.Rules[len(shifted.Rules)-1])
+	shifted.Rules[len(shifted.Rules)-1].ID += "-extra" // keep the list long enough for the cursor
+	m, _ = send(t, m, settingsEvent(t, shifted, len(shifted.Rules)), keyMsg("y"))
+	if m.al.confirm != "" || len(f.saved) != 0 || m.al.notice != "the rules changed on the hub" {
+		t.Fatalf("confirm %q, saves %d, notice %q", m.al.confirm, len(f.saved), m.al.notice)
+	}
+}
+
 // A refused save shows the hub's own sentence.
 func TestHubErrText(t *testing.T) {
 	err := &client.StatusError{Code: 400, Message: "invalid alert settings"}

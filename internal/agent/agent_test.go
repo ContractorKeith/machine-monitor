@@ -135,6 +135,7 @@ type fakeHub struct {
 	procs  bool      // ask for processes in report replies
 	down   bool      // answer every request with 503
 	refuse bool      // answer reports with 401, as for a stale device key
+	full   string    // answer reports with 400 and this error, as for a full hub
 	cmds   []Command // put in the next report reply, then cleared
 	mu     sync.Mutex
 	seen   []string // every request: "METHOD path auth body"
@@ -165,6 +166,11 @@ func (f *fakeHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/api/report":
 		if f.refuse {
 			w.WriteHeader(401)
+			return
+		}
+		if f.full != "" {
+			w.WriteHeader(400)
+			json.NewEncoder(w).Encode(map[string]string{"error": f.full})
 			return
 		}
 		json.NewEncoder(w).Encode(map[string]any{"ok": true, "procs": procs, "commands": cmds})
@@ -484,5 +490,28 @@ func TestRefusedKeyMessageSaysRestart(t *testing.T) {
 	defer mu.Unlock()
 	if !strings.Contains(logs[0], "restart") {
 		t.Errorf("log = %q", logs[0])
+	}
+}
+
+// A paired agent turned away by a full hub logs the hub's sentence, once.
+func TestFullHubRefusalLoggedOnce(t *testing.T) {
+	const msg = "This hub already has 250 devices, its limit. Remove one (Delete in the TUI) before adding another."
+	u := startFake(t, &fakeHub{t: t, hubKey: ourKey, full: msg})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var mu sync.Mutex
+	var logs []string
+	go Run(ctx, Options{HubURL: u, Key: ourKey, Collector: fakeCollector{"x"}, Interval: time.Millisecond,
+		MaxBackoff: 2 * time.Millisecond, Logf: func(format string, a ...any) {
+			mu.Lock()
+			logs = append(logs, fmt.Sprintf(format, a...))
+			mu.Unlock()
+		}})
+	waitFor(t, "refusal logged", func() bool { mu.Lock(); defer mu.Unlock(); return len(logs) > 0 })
+	time.Sleep(100 * time.Millisecond) // many more failed reports
+	mu.Lock()
+	defer mu.Unlock()
+	if len(logs) != 1 || !strings.Contains(logs[0], msg) {
+		t.Errorf("logs = %q", logs)
 	}
 }
