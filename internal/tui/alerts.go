@@ -51,6 +51,7 @@ type (
 	alertsLoadedMsg struct {
 		a   *client.Alerts
 		err error
+		gen int // saves accepted when the fetch began
 	}
 	alertsSavedMsg struct {
 		s        alerts.Settings
@@ -80,6 +81,7 @@ type alertsUI struct {
 	form    alertForm // the open editor, when form.open
 	confirm string    // "rule" or "log" while asking y/n
 	notice  string    // the last action's result or error
+	gen     int       // saves accepted so far; a fetch begun before one is stale
 
 	banner *alerts.Event // shown in every view until dismissed
 	more   int           // alerts that arrived after the banner's, while it showed
@@ -110,9 +112,10 @@ func (m *model) loadAlerts() tea.Cmd {
 		return nil
 	}
 	m.al.loading = true
+	gen := m.al.gen
 	return m.alertsCall(func(ctx context.Context, a AlertsHub) tea.Msg {
 		r, err := a.Alerts(ctx)
-		return alertsLoadedMsg{r, err}
+		return alertsLoadedMsg{r, err, gen}
 	})
 }
 
@@ -130,6 +133,9 @@ func (m model) updateAlerts(msg tea.Msg) (model, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case alertsLoadedMsg:
 		m.al.loading = false
+		if msg.gen != m.al.gen { // a save landed meanwhile: this answer predates it
+			return m, m.loadAlerts(), true
+		}
 		m.al.err = msg.err
 		if msg.err == nil && msg.a != nil {
 			m.al.loaded = true
@@ -151,6 +157,7 @@ func (m model) updateAlerts(msg tea.Msg) (model, tea.Cmd, bool) {
 			return m, nil, true
 		}
 		m.al.active, m.al.loaded = msg.active, true
+		m.al.gen++
 		m.setRules(msg.s)
 		if msg.selectID != "" {
 			if i := slices.IndexFunc(msg.s.Rules, func(r alerts.Rule) bool { return r.ID == msg.selectID }); i >= 0 {
@@ -186,8 +193,14 @@ func (m *model) applyAlert(ev client.Event) tea.Cmd {
 		m.al.active = msg.Active
 	}
 	if msg.Settings != nil {
+		var asked string // the rule the delete question is about
+		if c := m.al.cursor; m.al.confirm == "rule" && c < len(m.al.cfg.Rules) {
+			asked = m.al.cfg.Rules[c].ID
+		}
 		m.setRules(*msg.Settings)
-		if m.al.confirm == "rule" { // the rule it asked about may be gone or moved
+		// The rule it asked about may be gone or moved. Its fields changing, or an echo of our
+		// own earlier save arriving late, is not a reason: the delete still hits the same rule.
+		if c := m.al.cursor; m.al.confirm == "rule" && (c >= len(m.al.cfg.Rules) || m.al.cfg.Rules[c].ID != asked) {
 			m.al.confirm, m.al.notice = "", "the rules changed on the hub"
 		}
 	}

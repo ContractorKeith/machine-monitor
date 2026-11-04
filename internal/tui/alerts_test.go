@@ -575,3 +575,36 @@ func TestHubErrText(t *testing.T) {
 		t.Errorf("notice = %q", m.al.notice)
 	}
 }
+
+// The echo of our own change (a settings event identical to the rules on screen) must not
+// cancel a delete the user is in the middle of confirming; that raced the flaky test.
+func TestDeleteConfirmSurvivesUnchangedSettingsEvent(t *testing.T) {
+	f := alertsFixture()
+	m := alertsModel(t, f, 80, 24)
+	n := len(m.al.cfg.Rules)
+	late := cloneSettings(m.al.cfg) // an older save's echo: same rules, other field values
+	late.Rules[0].Enabled = !late.Rules[0].Enabled
+	m, _ = send(t, m, keyMsg("D"), settingsEvent(t, m.al.cfg, n), settingsEvent(t, late, n), keyMsg("y"))
+	if len(f.saved) != 1 || len(f.saved[0].Rules) != n-1 {
+		t.Fatalf("confirm %q, saves %+v", m.al.confirm, f.saved)
+	}
+}
+
+// A fetch that began before a save and lands after it must not put the old rules back.
+func TestStaleLoadAfterSaveIgnored(t *testing.T) {
+	f := alertsFixture()
+	m := alertsModel(t, f, 100, 30)
+	cmd := m.loadAlerts() // begins now, answers with the rules as they are now
+	if cmd == nil {
+		t.Fatal("no fetch started")
+	}
+	stale := cmd()
+	fresh := cloneSettings(m.al.cfg)
+	fresh.Rules = fresh.Rules[:2]
+	next, _ := m.Update(alertsSavedMsg{s: fresh})
+	next, _ = next.(model).Update(stale)
+	m = next.(model)
+	if len(m.al.cfg.Rules) != 2 {
+		t.Fatalf("stale fetch replaced the rules: %d", len(m.al.cfg.Rules))
+	}
+}
