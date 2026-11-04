@@ -392,7 +392,10 @@ func TestAlertsEditorAgainstHub(t *testing.T) {
 	tm := teatest.NewTestModel(t, probe{New(o), ch}, teatest.WithInitialTermSize(100, 30))
 	waitUntil(t, tm, ch, synced)
 	tm.Type("6")
-	m := waitUntil(t, tm, ch, func(m model) bool { return m.al.loaded })
+	// Startup may already have loaded alerts; wait for the fetch on entering this view too.
+	m := waitUntil(t, tm, ch, func(m model) bool {
+		return m.view == viewAlerts && m.al.loaded && !m.al.loading
+	})
 	if len(m.al.cfg.Rules) != 4 {
 		t.Fatalf("defaults: %d rules", len(m.al.cfg.Rules))
 	}
@@ -478,6 +481,26 @@ func TestAlertsEditorAgainstHub(t *testing.T) {
 	finish(t, tm)
 }
 
+// An older fetch can finish while a new rule's save is in flight. Selection must
+// follow the accepted rule, rather than being clamped against the old rule list.
+func TestNewAlertSelectionAfterPendingLoad(t *testing.T) {
+	f := alertsFixture()
+	m := alertsModel(t, f, 100, 30)
+	old := client.Alerts{Settings: cloneSettings(m.al.cfg)}
+	m, _ = send(t, m, keyMsg("a"))
+	next, cmd := m.Update(keyMsg("enter"))
+	m = next.(model)
+	if cmd == nil {
+		t.Fatal("save did not start")
+	}
+	next, _ = m.Update(alertsLoadedMsg{a: &old})
+	m, _ = settle(t, next.(model), cmd)
+	last := len(m.al.cfg.Rules) - 1
+	if m.al.notice != "saved" || m.al.cursor != last || m.al.cfg.Rules[last].ID == "" {
+		t.Fatalf("after save: notice %q, cursor %d, rules %+v", m.al.notice, m.al.cursor, m.al.cfg.Rules)
+	}
+}
+
 // settingsEvent is the hub's alerts event with the first n of s's rules.
 func settingsEvent(t *testing.T, s alerts.Settings, n int) hubMsg {
 	t.Helper()
@@ -550,5 +573,38 @@ func TestHubErrText(t *testing.T) {
 	m, _ = send(t, m, keyMsg(" "))
 	if m.al.notice != "save failed: invalid alert settings" {
 		t.Errorf("notice = %q", m.al.notice)
+	}
+}
+
+// The echo of our own change (a settings event identical to the rules on screen) must not
+// cancel a delete the user is in the middle of confirming; that raced the flaky test.
+func TestDeleteConfirmSurvivesUnchangedSettingsEvent(t *testing.T) {
+	f := alertsFixture()
+	m := alertsModel(t, f, 80, 24)
+	n := len(m.al.cfg.Rules)
+	late := cloneSettings(m.al.cfg) // an older save's echo: same rules, other field values
+	late.Rules[0].Enabled = !late.Rules[0].Enabled
+	m, _ = send(t, m, keyMsg("D"), settingsEvent(t, m.al.cfg, n), settingsEvent(t, late, n), keyMsg("y"))
+	if len(f.saved) != 1 || len(f.saved[0].Rules) != n-1 {
+		t.Fatalf("confirm %q, saves %+v", m.al.confirm, f.saved)
+	}
+}
+
+// A fetch that began before a save and lands after it must not put the old rules back.
+func TestStaleLoadAfterSaveIgnored(t *testing.T) {
+	f := alertsFixture()
+	m := alertsModel(t, f, 100, 30)
+	cmd := m.loadAlerts() // begins now, answers with the rules as they are now
+	if cmd == nil {
+		t.Fatal("no fetch started")
+	}
+	stale := cmd()
+	fresh := cloneSettings(m.al.cfg)
+	fresh.Rules = fresh.Rules[:2]
+	next, _ := m.Update(alertsSavedMsg{s: fresh})
+	next, _ = next.(model).Update(stale)
+	m = next.(model)
+	if len(m.al.cfg.Rules) != 2 {
+		t.Fatalf("stale fetch replaced the rules: %d", len(m.al.cfg.Rules))
 	}
 }
