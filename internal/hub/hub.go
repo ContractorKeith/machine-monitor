@@ -337,13 +337,13 @@ func loadConfig(path string) (hubConfig, error) {
 		return c, err
 	}
 	if err := json.Unmarshal(b, &c.extra); err != nil {
-		return c, fmt.Errorf("hub: %s: %w", path, err)
+		return c, fmt.Errorf("hub: %s is damaged (%v); restore it from a backup, or delete it to start over (that makes a new hub key and un-pairs every device, so pair each machine again with machine-monitor connect)", path, err)
 	}
 	if err := json.Unmarshal(b, &c); err != nil {
 		if bad := json.Unmarshal(c.extra["deviceKeys"], &map[string]string{}); bad != nil && c.extra["deviceKeys"] != nil {
 			return c, fmt.Errorf("hub: %s: deviceKeys is damaged (%v); remove the \"deviceKeys\" entry and pair each machine again with machine-monitor connect", path, bad)
 		}
-		return c, fmt.Errorf("hub: %s: %w", path, err)
+		return c, fmt.Errorf("hub: %s is damaged (%v); restore it from a backup, or delete it to start over (that makes a new hub key and un-pairs every device, so pair each machine again with machine-monitor connect)", path, err)
 	}
 	if c.Energy != nil { // re-validate: the file may be hand-edited
 		raw, _ := json.Marshal(c.Energy)

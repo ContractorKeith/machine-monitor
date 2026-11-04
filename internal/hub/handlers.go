@@ -226,6 +226,10 @@ func (h *Hub) handleReport(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusUnauthorized, errorBody("bad device key"))
 		return
 	}
+	if errors.Is(err, errTooManyDevices) { // the agent logs this, so say what to do, as pair does
+		sendJSON(w, http.StatusBadRequest, errorBody(fullMessage))
+		return
+	}
 	if err != nil {
 		sendJSON(w, http.StatusBadRequest, errorBody(err.Error()))
 		return

@@ -185,10 +185,18 @@ func TestConfigKeepsUnknownKeys(t *testing.T) {
 }
 
 func TestDamagedConfigIsAnError(t *testing.T) {
-	paths := config.At(t.TempDir())
-	config.WriteFile0600(paths.Config, []byte(`{"token":`))
-	if _, err := New(Options{Paths: paths}); err == nil {
-		t.Fatal("New with a damaged config.json: no error")
+	for _, body := range []string{`{"token":`, ``, `{`} {
+		paths := config.At(t.TempDir())
+		config.WriteFile0600(paths.Config, []byte(body))
+		_, err := New(Options{Paths: paths})
+		if err == nil {
+			t.Fatalf("New with config.json %q: no error", body)
+		}
+		for _, want := range []string{paths.Config, "damaged", "restore", "delete", "pair"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("config.json %q: error %q lacks %q", body, err, want)
+			}
+		}
 	}
 }
 
@@ -288,7 +296,7 @@ func TestMaxDevices(t *testing.T) {
 		th.postReport(fmt.Sprintf("d%d", i), nil)
 	}
 	w := th.req("POST", "/api/report", "", th.agentReport("one-more", nil))
-	if w.Code != 400 || !strings.Contains(w.Body.String(), "too many devices") {
+	if w.Code != 400 || !strings.Contains(w.Body.String(), fullMessage) {
 		t.Fatalf("device %d: %d %s", MaxDevices+1, w.Code, w.Body)
 	}
 	th.postReport("d0", nil) // known devices still report
