@@ -92,6 +92,24 @@ machine-monitor update           # download, verify checksum and signature, repl
 Homebrew and Scoop installs update through `brew upgrade` and `scoop update` instead. A
 running hub or agent keeps the old version until it restarts.
 
+### Temperature sensors
+
+Temperatures and fans come from a helper on macOS and Windows. Without it, those fields
+stay empty and everything else still works.
+
+- **macOS:** install [smctemp](https://github.com/narugit/smctemp) for CPU and GPU
+  temperatures. machine-monitor finds it in `/opt/homebrew/bin` or `/usr/local/bin`, and a
+  running agent or hub picks it up without a restart.
+
+  ```sh
+  brew tap narugit/tap && brew install narugit/tap/smctemp
+  ```
+
+- **Windows:** run [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)
+  (or OpenHardwareMonitor) so its WMI sensors are available. Without it, only ACPI thermal
+  zones are read.
+- **Linux:** nothing to install; it reads the kernel's hwmon and thermal zones.
+
 ## Quick start
 
 **Just this machine:**
