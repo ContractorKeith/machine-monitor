@@ -17,7 +17,6 @@ Last touched 2026-11-01.
 
 ## Pointers
 - `docs/PLAN.md` — the build plan: architecture, feature matrix, milestones, acceptance.
-- Upstream reference: clone `Forward-Future/device-monitor` to study behavior; port logic, not code style.
 
 ## Commands
 ```bash
