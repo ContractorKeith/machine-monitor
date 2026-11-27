@@ -11,17 +11,13 @@ import (
 	"time"
 )
 
-// Runner runs a service-manager command ("systemctl", "launchctl" or "schtasks") and
-// returns its combined output. Tests replace it with a fake.
 type Runner func(ctx context.Context, name string, args ...string) ([]byte, error)
 
 const (
-	runTimeout = 20 * time.Second // systemctl restart waits for the old process to stop
+	runTimeout = 20 * time.Second
 	maxOutput  = 64 << 10
 )
 
-// ExecRunner runs the real command from a fixed path, with a timeout and a stripped
-// environment.
 func ExecRunner(ctx context.Context, name string, args ...string) ([]byte, error) {
 	exe, err := lookTool(name)
 	if err != nil {
@@ -39,7 +35,6 @@ func ExecRunner(ctx context.Context, name string, args ...string) ([]byte, error
 	return out.Bytes(), err
 }
 
-// toolPaths are where each tool lives; PATH is never searched.
 func toolPaths(name string) []string {
 	switch name {
 	case "systemctl":
@@ -56,7 +51,6 @@ func toolPaths(name string) []string {
 	return nil
 }
 
-// lookTool returns the first existing path for name.
 func lookTool(name string) (string, error) {
 	for _, p := range toolPaths(name) {
 		if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() {
@@ -66,13 +60,9 @@ func lookTool(name string) (string, error) {
 	return "", errors.New(name + " not found")
 }
 
-// allowedEnv is the parent environment the tools may see. systemctl --user needs
-// XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS to reach the user manager.
 var allowedEnv = []string{"PATH", "HOME", "USER", "LOGNAME", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS",
 	"USERPROFILE", "USERNAME", "USERDOMAIN", "APPDATA", "LOCALAPPDATA", "SystemRoot", "SystemDrive", "TEMP", "TMP", "TMPDIR"}
 
-// strippedEnv keeps only allowedEnv, plus LC_ALL=C so output parses the same everywhere.
-// Never nil: os/exec treats a nil Env as "inherit everything".
 func strippedEnv() []string {
 	env := []string{"LC_ALL=C"}
 	for _, k := range allowedEnv {
@@ -83,7 +73,6 @@ func strippedEnv() []string {
 	return env
 }
 
-// limitWriter drops output past n bytes.
 type limitWriter struct {
 	w io.Writer
 	n int

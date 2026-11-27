@@ -24,18 +24,14 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/hub"
 )
 
-// testHub is a real hub served by httptest.
 type testHub struct {
 	t    *testing.T
 	h    *hub.Hub
 	srv  *httptest.Server
-	stop func() // shuts the hub down and saves its data, as if its machine went away
+	stop func()
 	ln   *trackListener
 }
 
-// trackListener remembers the connections it accepts, so a test can drop them all: the
-// hub takes compact streams' connections over (hijacks them), so the server's
-// CloseClientConnections no longer reaches them.
 type trackListener struct {
 	net.Listener
 	mu    sync.Mutex
@@ -52,7 +48,6 @@ func (l *trackListener) Accept() (net.Conn, error) {
 	return c, err
 }
 
-// dropConns closes every connection accepted so far, as a network failure would.
 func (th *testHub) dropConns() {
 	th.ln.mu.Lock()
 	defer th.ln.mu.Unlock()
@@ -62,7 +57,6 @@ func (th *testHub) dropConns() {
 	th.ln.conns = nil
 }
 
-// newTestHub starts a hub on addr ("" for any free port) and runs its timers.
 func newTestHub(t *testing.T, paths config.Paths, addr string) *testHub {
 	t.Helper()
 	h, err := hub.New(hub.Options{Paths: paths, Hostname: "testbox", Location: time.UTC, Logf: t.Logf})
@@ -102,7 +96,6 @@ func newTestHub(t *testing.T, paths config.Paths, addr string) *testHub {
 	return th
 }
 
-// report posts the recorded upstream agent.sh report as device id.
 func (th *testHub) report(id string, edit func(map[string]any)) {
 	th.t.Helper()
 	b, err := os.ReadFile("../report/testdata/linux-agent.sh.json")
@@ -135,13 +128,11 @@ func (th *testHub) client(key string) *Client {
 	return c
 }
 
-// events reads a stream in the background so tests can wait for one event type at a time.
 type events struct {
 	t  *testing.T
 	ch <-chan Event
 }
 
-// next returns the next event of type typ, skipping others.
 func (e events) next(typ string) Event {
 	e.t.Helper()
 	timeout := time.After(10 * time.Second)
@@ -166,7 +157,6 @@ func stream(t *testing.T, c *Client, cfg streamConfig) events {
 	return events{t, c.streamWith(ctx, cfg)}
 }
 
-// fastConfig reconnects quickly so tests don't wait on the real backoff.
 func fastConfig() streamConfig {
 	c := defaultStreamConfig
 	c.retryMin, c.retryMax = 20*time.Millisecond, 100*time.Millisecond
@@ -202,8 +192,6 @@ func TestParseURL(t *testing.T) {
 	}
 }
 
-// TestAgainstHub drives every read and write call against a real hub, and checks each
-// change arrives on the stream as the hub's event.
 func TestAgainstHub(t *testing.T) {
 	th := newTestHub(t, config.At(t.TempDir()), "")
 	th.report("dev-a", nil)
@@ -254,7 +242,7 @@ func TestAgainstHub(t *testing.T) {
 		t.Errorf("order = %v", o.Order)
 	}
 
-	if st := ev.next(EventStatus); !st.Online["dev-a"] { // the 3 s heartbeat
+	if st := ev.next(EventStatus); !st.Online["dev-a"] {
 		t.Errorf("status = %v", st.Online)
 	}
 
@@ -279,8 +267,6 @@ func TestAgainstHub(t *testing.T) {
 	}
 }
 
-// TestStreamReconnect: the stream survives a dropped connection and a hub restart, and each
-// reconnection starts with a fresh snapshot.
 func TestStreamReconnect(t *testing.T) {
 	paths := config.At(t.TempDir())
 	th := newTestHub(t, paths, "")
@@ -290,7 +276,6 @@ func TestStreamReconnect(t *testing.T) {
 	ev.next(EventConnected)
 	ev.next(EventSnapshot)
 
-	// 1. The connection drops; the hub is still there.
 	th.dropConns()
 	if d := ev.next(EventDisconnected); d.Err == nil || d.Retry <= 0 {
 		t.Errorf("disconnected = %+v", d)
@@ -300,11 +285,10 @@ func TestStreamReconnect(t *testing.T) {
 		t.Errorf("snapshot after reconnect = %d devices", len(s.Devices))
 	}
 
-	// 2. The hub goes away and comes back on the same address with the same data.
 	addr := th.srv.Listener.Addr().String()
 	th.stop()
 	ev.next(EventDisconnected)
-	ev.next(EventDisconnected) // still down: retrying
+	ev.next(EventDisconnected)
 	th2 := newTestHub(t, paths, addr)
 	ev.next(EventConnected)
 	if s := ev.next(EventSnapshot); len(s.Devices) != 1 || s.Devices[0].ID != "dev-a" || s.Devices[0].Latest != nil {
@@ -316,7 +300,6 @@ func TestStreamReconnect(t *testing.T) {
 	}
 }
 
-// TestWrongKey: a wrong key fails the hub's proof, so it is never sent, and the stream ends.
 func TestWrongKey(t *testing.T) {
 	th := newTestHub(t, config.At(t.TempDir()), "")
 	c := th.client("0123456789abcdef01234567")
@@ -340,7 +323,6 @@ func TestWrongKey(t *testing.T) {
 	}
 }
 
-// fakeHub serves /api/info with a correct proof and /api/stream from fn.
 func fakeHub(t *testing.T, key string, fn func(ctx context.Context, w http.ResponseWriter, f http.Flusher)) *Client {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -371,9 +353,6 @@ func fakeHub(t *testing.T, key string, fn func(ctx context.Context, w http.Respo
 	return c
 }
 
-// TestSlowConsumer: a consumer that stops reading never stalls the network reader. Events
-// that can't be merged fill the queue; the client then drops the connection, and
-// reconnects (fresh snapshot) once the consumer catches up.
 func TestSlowConsumer(t *testing.T) {
 	const sent = 200
 	finished := make(chan int, 4)
@@ -387,7 +366,7 @@ func TestSlowConsumer(t *testing.T) {
 			f.Flush()
 		}
 		finished <- n
-		<-ctx.Done() // hold the connection open; the client must hang up
+		<-ctx.Done()
 	})
 	cfg := fastConfig()
 	cfg.buffer = 4
@@ -395,7 +374,7 @@ func TestSlowConsumer(t *testing.T) {
 	defer cancel()
 	ch := c.streamWith(ctx, cfg)
 
-	select { // the handler wrote everything without the consumer reading a single event
+	select {
 	case <-finished:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the server's writes blocked on a slow consumer")
@@ -411,8 +390,7 @@ func TestSlowConsumer(t *testing.T) {
 			break
 		}
 	}
-	// connected, snapshot, then alerts until more than buffer were waiting (give or take the
-	// one the pump holds while it waits for the consumer).
+
 	if len(got) < cfg.buffer+1 || len(got) > cfg.buffer+3 || got[0] != EventConnected || got[1] != EventSnapshot {
 		t.Errorf("events before the drop: %v", got)
 	}
@@ -421,10 +399,6 @@ func TestSlowConsumer(t *testing.T) {
 	ev.next(EventSnapshot)
 }
 
-// TestCoalesce: while the consumer is busy, a device's reports merge into its newest one,
-// keeping every sample, and status events merge into one; the stream stays up, events
-// keep their order around anything that can't merge, and the queue stays one slot per
-// device however much the hub sends.
 func TestCoalesce(t *testing.T) {
 	const devices, rounds = 50, 40
 	finished := make(chan struct{}, 4)
@@ -447,17 +421,15 @@ func TestCoalesce(t *testing.T) {
 			}
 		}
 		f.Flush()
-		select { // reconnects after a failure call this again: never block on it
+		select {
 		case finished <- struct{}{}:
 		default:
 		}
 		<-ctx.Done()
 	})
 	cfg := fastConfig()
-	cfg.buffer = 8 // far below the 2000 reports: only merging keeps the stream up
-	// The consumer starts reading only once the reader has queued the hub's last event, so
-	// what merges doesn't depend on how fast either goroutine runs (it used to sleep 200 ms
-	// and hope, which flaked under -race).
+	cfg.buffer = 8
+
 	last := fmt.Sprintf("d%02d", (rounds-1)%devices)
 	allQueued := make(chan struct{})
 	cfg.queued = func(e Event) {
@@ -479,7 +451,7 @@ func TestCoalesce(t *testing.T) {
 	}
 	select {
 	case <-allQueued:
-	case <-time.After(30 * time.Second): // a failure guard only; nothing waits on it to pass
+	case <-time.After(30 * time.Second):
 		t.Fatal("the reader never queued the last event")
 	}
 
@@ -508,7 +480,7 @@ func TestCoalesce(t *testing.T) {
 			break
 		}
 	}
-	// Merged: one report per device, one status, the order event.
+
 	if len(types) > 2+devices+2 {
 		t.Errorf("%d events delivered; reports were not merged", len(types))
 	}
@@ -535,7 +507,6 @@ func TestCoalesce(t *testing.T) {
 	}
 }
 
-// TestIdleStream: a stream that goes silent (a pulled cable) is dropped and retried.
 func TestIdleStream(t *testing.T) {
 	c := fakeHub(t, "k", func(ctx context.Context, w http.ResponseWriter, f http.Flusher) {
 		io.WriteString(w, "data: {\"type\":\"snapshot\",\"devices\":[]}\n\n")
@@ -555,19 +526,19 @@ func TestIdleStream(t *testing.T) {
 func TestSSEParse(t *testing.T) {
 	in := "\xEF\xBB\xBF: hello comment\n" +
 		"retry: 2500\n" +
-		"data: {\"type\":\"status\",\n" + // multi-line data
+		"data: {\"type\":\"status\",\n" +
 		"data:  \"online\":{\"a\":true}}\n" +
 		"\n" +
-		"event: order\r\n" + // CRLF, and the type from "event:"
+		"event: order\r\n" +
 		"id: 7\r\n" +
 		"data:{\"order\":{\"a\":2}}\r\n" +
 		"\r\n" +
-		"data: {\"type\":\"removed\",\"id\":\"a\"}\r" + // bare CR
+		"data: {\"type\":\"removed\",\"id\":\"a\"}\r" +
 		"\r" +
-		"\n" + // a blank line with nothing to dispatch
+		"\n" +
 		"bogus line\n" +
 		"data: not json\n\n" +
-		"data: {\"type\":\"removed\",\"id\":\"half\"}\n" // unfinished at EOF: dropped
+		"data: {\"type\":\"removed\",\"id\":\"half\"}\n"
 	r := newSSEReader(strings.NewReader(in), 1<<10, 1<<10, nil)
 	var got []Event
 	for {
@@ -640,11 +611,9 @@ func TestConfig(t *testing.T) {
 	}
 }
 
-// TestNoKeyBeforeProof: no request carries the key until the hub has proved it knows it,
-// and a hub that can't prove it never sees the key at all.
 func TestNoKeyBeforeProof(t *testing.T) {
 	var mu sync.Mutex
-	var keyed []string // paths requested with a key
+	var keyed []string
 	proof := "wrong"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
@@ -678,7 +647,7 @@ func TestNoKeyBeforeProof(t *testing.T) {
 	if len(keyed) != 0 {
 		t.Errorf("key sent to an unproven hub: %v", keyed)
 	}
-	proof = "" // now the hub proves itself
+	proof = ""
 	mu.Unlock()
 	if _, err := c.Devices(ctx); err != nil {
 		t.Fatal(err)
@@ -693,8 +662,6 @@ func TestNoKeyBeforeProof(t *testing.T) {
 	}
 }
 
-// TestStreamStatusMessage: a refused stream keeps the hub's sentence, e.g. the 503 at the
-// connection limit.
 func TestStreamStatusMessage(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/info" {

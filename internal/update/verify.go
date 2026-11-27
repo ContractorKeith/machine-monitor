@@ -1,21 +1,5 @@
 package update
 
-// Sigstore bundle check for checksums.txt, with the standard library only (sigstore-go
-// would pull in a large dependency tree for one signature).
-//
-// The release workflow signs checksums.txt with `cosign sign-blob --bundle` using keyless
-// signing: Fulcio issues a short-lived certificate for the workflow's GitHub OIDC identity.
-// Verify checks that
-//   - the certificate chains to the Fulcio root (fulcio.pem, from sigstore/root-signing's
-//     trusted_root.json) and is for code signing,
-//   - its OIDC issuer is GitHub Actions and its identity is release.yml in this repo at
-//     exactly the release tag, and
-//   - its key signed these exact bytes.
-//
-// It does not check the Rekor transparency-log entry. The chain is checked at the
-// certificate's own issue time, since Fulcio certificates live ten minutes; the signing key
-// is ephemeral and never leaves the workflow run.
-
 import (
 	"bytes"
 	"crypto/ecdsa"
@@ -31,11 +15,8 @@ import (
 	"slices"
 )
 
-// GitHubIssuer is the OIDC issuer of GitHub Actions tokens.
 const GitHubIssuer = "https://token.actions.githubusercontent.com"
 
-// Fulcio certificate extensions carrying the OIDC issuer: v1 holds the raw string, v2 a
-// DER UTF8String.
 var (
 	oidIssuerV1 = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 1}
 	oidIssuerV2 = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 8}
@@ -44,17 +25,14 @@ var (
 //go:embed fulcio.pem
 var fulcioPEM []byte
 
-// Trust says who may sign a release's checksums.txt.
 type Trust struct {
 	Roots         *x509.CertPool
 	Intermediates *x509.CertPool
-	Issuer        string // OIDC issuer the certificate must carry
-	// Identity is the certificate's URI SAN for a tag, e.g.
-	// https://github.com/owner/repo/.github/workflows/release.yml@refs/tags/v1.2.3
+	Issuer        string
+
 	Identity func(tag string) string
 }
 
-// DefaultTrust trusts the public Fulcio CA for repo's release.yml workflow.
 func DefaultTrust(repo string) Trust {
 	roots, inter := x509.NewCertPool(), x509.NewCertPool()
 	certs, err := parsePEMCerts(fulcioPEM)
@@ -71,15 +49,12 @@ func DefaultTrust(repo string) Trust {
 	return Trust{Roots: roots, Intermediates: inter, Issuer: GitHubIssuer, Identity: WorkflowIdentity(repo)}
 }
 
-// WorkflowIdentity is the certificate identity of repo's release.yml run for a tag.
 func WorkflowIdentity(repo string) func(tag string) string {
 	return func(tag string) string {
 		return "https://github.com/" + repo + "/.github/workflows/release.yml@refs/tags/" + tag
 	}
 }
 
-// bundle is the part of a Sigstore bundle (v0.1–v0.3 JSON) that Verify reads. []byte fields
-// decode from base64.
 type bundle struct {
 	VerificationMaterial struct {
 		Certificate *struct {
@@ -100,7 +75,6 @@ type bundle struct {
 	} `json:"messageSignature"`
 }
 
-// Verify checks that bundleJSON is a valid signature over msg by the release workflow at tag.
 func (t Trust) Verify(msg, bundleJSON []byte, tag string) error {
 	var b bundle
 	if err := json.Unmarshal(bundleJSON, &b); err != nil {
@@ -155,7 +129,6 @@ func (t Trust) Verify(msg, bundleJSON []byte, tag string) error {
 	return nil
 }
 
-// certIssuer is the OIDC issuer Fulcio recorded in cert, or "".
 func certIssuer(cert *x509.Certificate) string {
 	for _, e := range cert.Extensions {
 		if e.Id.Equal(oidIssuerV2) {
@@ -173,7 +146,6 @@ func certIssuer(cert *x509.Certificate) string {
 	return ""
 }
 
-// identities lists cert's URI and email SANs for an error message.
 func identities(cert *x509.Certificate) string {
 	var ids []string
 	for _, u := range cert.URIs {

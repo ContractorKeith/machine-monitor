@@ -12,9 +12,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/power"
 )
 
-// TestSettingsAgainstHub: the price round-trips through GET/PUT /api/energy/settings and
-// arrives on the stream; a pairing code is six digits valid for about ten minutes; the
-// keyed info lists the hub's port; /api/remote is read or reported as not available.
 func TestSettingsAgainstHub(t *testing.T) {
 	th := newTestHub(t, config.At(t.TempDir()), "")
 	c := th.client(th.h.Token())
@@ -31,7 +28,7 @@ func TestSettingsAgainstHub(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if saved.Rate != 0.2123 || saved.TOU[0].From != 0 { // rounded and sorted by the hub
+	if saved.Rate != 0.2123 || saved.TOU[0].From != 0 {
 		t.Errorf("saved = %+v", saved)
 	}
 	if got, err := c.EnergySettings(ctx); err != nil || got == nil || got.Currency != "EUR" || len(got.TOU) != 2 {
@@ -64,8 +61,6 @@ func TestSettingsAgainstHub(t *testing.T) {
 	}
 }
 
-// TestInstallCommands: the one-liners are the README's, built from a LAN address when
-// the client itself uses loopback.
 func TestInstallCommands(t *testing.T) {
 	c, err := New("http://127.0.0.1:7777", "abc123")
 	if err != nil {
@@ -92,10 +87,6 @@ func TestInstallCommands(t *testing.T) {
 	}
 }
 
-// TestPairCodeTiedToStream (review of #70): a code from the TUI's Add device outlived a
-// killed TUI for the whole PairTTL. The client names itself on its stream and its codes, so
-// the hub refuses a code while the client has no stream open, and ends one hub.PairGrace
-// after the client's stream is gone. Runs for about PairGrace.
 func TestPairCodeTiedToStream(t *testing.T) {
 	if testing.Short() {
 		t.Skip("waits out hub.PairGrace")
@@ -128,7 +119,7 @@ func TestPairCodeTiedToStream(t *testing.T) {
 	if code := exclusive(); code != 409 {
 		t.Fatalf("exclusive code while the TUI's is live: %d", code)
 	}
-	stop() // the TUI is killed: its stream goes
+	stop()
 	deadline := time.Now().Add(hub.PairGrace + 5*time.Second)
 	for exclusive() != 200 {
 		if time.Now().After(deadline) {

@@ -9,15 +9,12 @@ import (
 	"strings"
 )
 
-// unitName is the systemd user unit for a role.
 func unitName(r Role) string { return "machine-monitor-" + string(r) + ".service" }
 
-// unitPath is where the user unit lives: $XDG_CONFIG_HOME/systemd/user (~/.config/systemd/user).
 func (m *Manager) unitPath(r Role) string {
 	return filepath.Join(m.ConfigHome, "systemd", "user", unitName(r))
 }
 
-// SystemdUnit renders the user unit for s.
 func (m *Manager) SystemdUnit(s Spec) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Written by `machine-monitor service install`; remove with `machine-monitor service uninstall`.\n")
@@ -36,15 +33,11 @@ func (m *Manager) SystemdUnit(s Spec) string {
 	return b.String()
 }
 
-// systemdQuote double-quotes one ExecStart= word, escaping what systemd would otherwise
-// expand: backslash, quote, % specifiers and $ variables.
 func systemdQuote(s string) string {
 	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "%", "%%", "$", "$$", "\n", `\n`)
 	return `"` + r.Replace(s) + `"`
 }
 
-// systemdEnvQuote double-quotes an Environment= assignment. systemd expands % specifiers
-// there but not $ variables, so $ stays as is.
 func systemdEnvQuote(s string) string {
 	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "%", "%%", "\n", `\n`)
 	return `"` + r.Replace(s) + `"`
@@ -52,8 +45,7 @@ func systemdEnvQuote(s string) string {
 
 func (m *Manager) installSystemd(ctx context.Context, s Spec, out io.Writer) error {
 	path, name := m.unitPath(s.Role), unitName(s.Role)
-	// is-enabled prints "disabled" and exits non-zero, so only its output matters. A unit the
-	// user left disabled must not end up enabled by a failed install.
+
 	wasDisabled := false
 	if fileExists(path) {
 		state, _ := m.run(ctx, "systemctl", "--user", "is-enabled", name)
@@ -73,11 +65,11 @@ func (m *Manager) installSystemd(ctx context.Context, s Spec, out io.Writer) err
 	}
 	steps := [][]string{{"--user", "daemon-reload"}, {"--user", "enable", "--now", name}}
 	if existed && changed {
-		steps = append(steps, []string{"--user", "restart", name}) // pick up the new command line
+		steps = append(steps, []string{"--user", "restart", name})
 	}
 	for _, args := range steps {
 		if _, err := m.run(ctx, "systemctl", args...); err != nil {
-			if existed && changed { // keep the old unit, and tell systemd it is current again
+			if existed && changed {
 				if rerr := restoreFile(path, old); rerr != nil {
 					return fmt.Errorf("%w (and the old unit could not be put back: %v)", err, rerr)
 				}
@@ -101,7 +93,7 @@ func (m *Manager) uninstallSystemd(ctx context.Context, r Role, out io.Writer) e
 		fmt.Fprintf(out, "%s: not installed (%s)\n", r, path)
 		return nil
 	}
-	// A unit that's already stopped or disabled is fine; carry on and remove the file.
+
 	if _, err := m.run(ctx, "systemctl", "--user", "disable", "--now", name); err != nil {
 		fmt.Fprintf(out, "warning: %v\n", err)
 	} else {
@@ -124,15 +116,13 @@ func (m *Manager) statusSystemd(ctx context.Context, r Role) Status {
 	if !st.Installed {
 		return st
 	}
-	// is-enabled and is-active print their answer and exit non-zero for "disabled" and
-	// "inactive", so the output matters and the exit code doesn't.
+
 	enabled, _ := m.run(ctx, "systemctl", "--user", "is-enabled", st.Name)
 	active, _ := m.run(ctx, "systemctl", "--user", "is-active", st.Name)
 	st.State = firstLine(enabled, "unknown") + ", " + firstLine(active, "unknown")
 	return st
 }
 
-// userName is the login name for the linger hint.
 func (m *Manager) userName() string {
 	if m.User != "" {
 		return m.User
@@ -140,7 +130,6 @@ func (m *Manager) userName() string {
 	return "$USER"
 }
 
-// firstLine is the first line of s, or def when s is empty.
 func firstLine(s, def string) string {
 	s, _, _ = strings.Cut(strings.TrimSpace(s), "\n")
 	if s == "" {

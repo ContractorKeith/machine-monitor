@@ -19,13 +19,10 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/hub"
 )
 
-// throttledListener hands out connections whose writes are paced to rate bytes a second,
-// like a slow Wi-Fi, VPN or relay link between the hub and a TUI. Write deadlines are
-// honoured as a real socket would: a write still pacing when its deadline passes fails.
 type throttledListener struct {
 	net.Listener
-	rate    int           // bytes a second
-	written *atomic.Int64 // bytes sent on every connection
+	rate    int
+	written *atomic.Int64
 }
 
 func (l throttledListener) Accept() (net.Conn, error) {
@@ -41,8 +38,8 @@ type throttledConn struct {
 	rate     int
 	mu       sync.Mutex
 	deadline time.Time
-	sent     int       // bytes since start
-	start    time.Time // when pacing began
+	sent     int
+	start    time.Time
 	written  *atomic.Int64
 }
 
@@ -60,7 +57,6 @@ func (c *throttledConn) SetDeadline(t time.Time) error {
 	return c.Conn.SetDeadline(t)
 }
 
-// Write sends b in 4 KB chunks, each no earlier than the rate allows.
 func (c *throttledConn) Write(b []byte) (int, error) {
 	const chunk = 4 << 10
 	n := 0
@@ -93,15 +89,6 @@ func (c *throttledConn) Write(b []byte) (int, error) {
 	return n, nil
 }
 
-// TestSlowLink250 is skeptic report B1: a TUI's stream from a hub with 250 busy devices (PLAN
-// MaxDevices) and ten minutes of history each, over a 500 KB/s link. The client must
-// connect within a bound and then keep that one connection, with fresh reports for every
-// device and bounded memory. Before the compact stream, the 21 MB snapshot took over 40 s
-// to send, the hub dropped the stream for falling behind, and the client reconnected for
-// another snapshot for ever.
-//
-// It runs for 40 s; MM_SLOWLINK=3m runs it for longer, and MM_SLOWLINK_RATE=100000 over
-// a slower link (bytes a second).
 func TestSlowLink250(t *testing.T) {
 	if raceDetector {
 		t.Skip("timing test; the race detector slows everything several times over")
@@ -113,9 +100,9 @@ func TestSlowLink250(t *testing.T) {
 		devices   = hub.MaxDevices
 		interval  = 2 * time.Second
 		connectBy = 15 * time.Second
-		heapMax   = 200 << 20 // hub and client together
+		heapMax   = 200 << 20
 	)
-	duration, rate := 40*time.Second, 500<<10 // rate in bytes a second
+	duration, rate := 40*time.Second, 500<<10
 	if s := os.Getenv("MM_SLOWLINK_RATE"); s != "" {
 		if _, err := fmt.Sscan(s, &rate); err != nil {
 			t.Fatal(err)
@@ -129,9 +116,7 @@ func TestSlowLink250(t *testing.T) {
 		duration = d
 	}
 
-	// The hub's clock replays the last ten minutes while the history is filled in, then
-	// runs in real time.
-	var fake atomic.Int64 // Unix ms; 0 is the real clock
+	var fake atomic.Int64
 	clock := func() time.Time {
 		if ms := fake.Load(); ms != 0 {
 			return time.UnixMilli(ms)
@@ -196,8 +181,6 @@ func TestSlowLink250(t *testing.T) {
 	}
 	fake.Store(0)
 
-	// Before and after: the upstream snapshot (GET /api/devices, the same devices and
-	// history as the upstream stream's snapshot) and our client's compact one.
 	for _, path := range []string{"/api/devices", "/api/devices?compact=1"} {
 		req := httptest.NewRequest("GET", srv.URL+path, nil)
 		req.RemoteAddr = "127.0.0.1:1"
@@ -207,8 +190,6 @@ func TestSlowLink250(t *testing.T) {
 		t.Logf("snapshot %s: %d bytes", path, rec.Body.Len())
 	}
 
-	// Live load: every device reports every interval, through the handler (agents have
-	// their own links; only the TUI's is slow).
 	loadCtx, stopLoad := context.WithCancel(ctx)
 	defer stopLoad()
 	var wg sync.WaitGroup
@@ -241,7 +222,7 @@ func TestSlowLink250(t *testing.T) {
 		})
 	}
 	began := time.Now()
-	go func() { // the uptime every device reports: whole seconds since the load began
+	go func() {
 		for loadCtx.Err() == nil {
 			round.Store(int64(time.Since(began) / time.Second))
 			time.Sleep(100 * time.Millisecond)
@@ -253,8 +234,7 @@ func TestSlowLink250(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Uncompressed: the test's reports are near copies of one another, so gzip would hide
-	// how much the link carries. MM_SLOWLINK_GZIP=1 measures it with compression.
+
 	c.stream.Transport.(*http.Transport).DisableCompression = os.Getenv("MM_SLOWLINK_GZIP") != "1"
 	sctx, stopStream := context.WithCancel(ctx)
 	defer stopStream()
