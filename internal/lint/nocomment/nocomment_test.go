@@ -1,12 +1,10 @@
 package nocomment
 
 import (
-	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"go/parser"
-	"go/printer"
+	"go/scanner"
 	"go/token"
 	"os"
 	"os/exec"
@@ -123,15 +121,21 @@ func TestList(t *testing.T) {
 	t.Logf("%d comments in %d files written to %s", len(comments), len(Counts(comments)), *list)
 }
 
-func stripComments(name string, src []byte) (string, error) {
+func codeTokens(src []byte) string {
 	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, name, src, 0)
-	if err != nil {
-		return "", err
+	var s scanner.Scanner
+	s.Init(fset.AddFile("", fset.Base(), len(src)), src, nil, 0)
+	var b strings.Builder
+	for {
+		_, tok, lit := s.Scan()
+		if tok == token.EOF {
+			return b.String()
+		}
+		if tok == token.SEMICOLON {
+			lit = ";"
+		}
+		fmt.Fprintf(&b, "%d %q\n", tok, lit)
 	}
-	var b bytes.Buffer
-	err = (&printer.Config{Mode: printer.RawFormat}).Fprint(&b, fset, f)
-	return b.String(), err
 }
 
 func TestOnlyCommentsChanged(t *testing.T) {
@@ -156,10 +160,8 @@ func TestOnlyCommentsChanged(t *testing.T) {
 			t.Errorf("%s: new file, not a comment-only change", f)
 			continue
 		}
-		a, errA := stripComments(f, old)
-		b, errB := stripComments(f, cur)
-		if errA != nil || errB != nil || a != b {
-			t.Errorf("%s: code changed, not just comments (%v %v)", f, errA, errB)
+		if codeTokens(old) != codeTokens(cur) {
+			t.Errorf("%s: code changed, not just comments", f)
 		}
 	}
 }
