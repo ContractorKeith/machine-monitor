@@ -319,6 +319,11 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 	if compact {
 		if hc := hijackStream(w, r); hc != nil {
 			defer hc.close(timeout)
+			if hc.sendQ != nil {
+				h.sendQOnce.Do(func() {
+					h.logf("hub: compact streams run with an unbounded send queue: %v", hc.sendQ)
+				})
+			}
 			ctx, base, setDeadline, flushBase = hc.ctx, hc, hc.conn.SetWriteDeadline, hc.bw.Flush
 		} else {
 			w.WriteHeader(http.StatusOK)
@@ -426,6 +431,7 @@ type hijacked struct {
 	body   io.WriteCloser
 	ctx    context.Context
 	cancel context.CancelFunc
+	sendQ  error
 }
 
 func (c *hijacked) Write(b []byte) (int, error) { return c.body.Write(b) }
@@ -448,9 +454,9 @@ func hijackStream(w http.ResponseWriter, r *http.Request) *hijacked {
 	if err != nil {
 		return nil
 	}
-	boundSendQueue(conn)
+	sendQ := boundSendQueue(conn)
 	ctx, cancel := context.WithCancel(r.Context())
-	c := &hijacked{conn: conn, bw: brw.Writer, body: httputil.NewChunkedWriter(brw.Writer), ctx: ctx, cancel: cancel}
+	c := &hijacked{conn: conn, bw: brw.Writer, body: httputil.NewChunkedWriter(brw.Writer), ctx: ctx, cancel: cancel, sendQ: sendQ}
 	conn.SetReadDeadline(time.Time{})
 	go func() {
 		io.Copy(io.Discard, brw.Reader)
