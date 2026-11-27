@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -87,7 +88,7 @@ func newHarness(t *testing.T, settings string) *harness {
 		Broadcast: func(m Message) { h.msgs = append(h.msgs, m) },
 		HubURL:    func() string { return "http://hub.lan:7777" },
 		Now:       h.clock.now,
-		HTTP:      h.doer,
+		doer:      h.doer,
 		LookupIP: func(context.Context, string) ([]netip.Addr, error) {
 			return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
 		},
@@ -261,7 +262,7 @@ func TestOfflineAtStartupFiresSilently(t *testing.T) {
 		},
 		Now:       clock.now,
 		Broadcast: func(m Message) { msgs = append(msgs, m) },
-		HTTP:      &fakeDoer{},
+		doer:      &fakeDoer{},
 	})
 	if len(msgs) != 0 {
 		t.Fatalf("broadcast at startup: %+v", msgs)
@@ -625,7 +626,7 @@ func TestPersistence(t *testing.T) {
 	paths := config.At(t.TempDir())
 	clock := newClock()
 	devices := func() []Device { return []Device{{ID: "pc1", Name: "Box", Online: true, LastSeen: clock.t}} }
-	opts := Options{Paths: paths, Devices: devices, Now: clock.now, HTTP: &fakeDoer{}}
+	opts := Options{Paths: paths, Devices: devices, Now: clock.now, doer: &fakeDoer{}}
 
 	e := New(opts)
 	if _, err := os.Stat(paths.Alerts); err != nil {
@@ -663,7 +664,7 @@ func TestLogWriteDebounced(t *testing.T) {
 	paths := config.At(t.TempDir())
 	clock := newClock()
 	devices := func() []Device { return []Device{{ID: "pc1", Name: "Box", Online: true, LastSeen: clock.t}} }
-	e := New(Options{Paths: paths, Devices: devices, Now: clock.now, HTTP: &fakeDoer{}})
+	e := New(Options{Paths: paths, Devices: devices, Now: clock.now, doer: &fakeDoer{}})
 	if _, err := e.Update([]byte(rule(TypeCPU, 50, 0))); err != nil {
 		t.Fatal(err)
 	}
@@ -754,7 +755,7 @@ func TestNoBackOnlineForDevicesNeverSeenOffline(t *testing.T) {
 		Devices:   func() []Device { return dev },
 		Now:       clock.now,
 		Broadcast: func(m Message) { msgs = append(msgs, m) },
-		HTTP:      &fakeDoer{},
+		doer:      &fakeDoer{},
 	})
 	e.mu.Lock()
 	e.cfg.Rules = []Rule{{ID: "aaaaaaaaaaaa", Type: TypeOffline, Device: AllDevices, Enabled: true, Minutes: 10}}
@@ -799,7 +800,7 @@ func TestBackOnlineAfterRestartForAnnouncedOffline(t *testing.T) {
 	paths := config.At(t.TempDir())
 	clock := newClock()
 	dev := []Device{{ID: "pc1", Name: "Box", Online: false, LastSeen: clock.t.Add(-time.Hour)}}
-	opts := Options{Paths: paths, Devices: func() []Device { return dev }, Now: clock.now, HTTP: &fakeDoer{}}
+	opts := Options{Paths: paths, Devices: func() []Device { return dev }, Now: clock.now, doer: &fakeDoer{}}
 
 	e := New(opts)
 	if _, err := e.Update([]byte(rule(TypeOffline, 0, 5))); err != nil {
@@ -837,3 +838,14 @@ func TestDeliveryErrorsScrubInnerURLs(t *testing.T) {
 type doerFunc func(*http.Request) (*http.Response, error)
 
 func (f doerFunc) Do(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestOptionsExposeNoHTTPSeam(t *testing.T) {
+	doer := reflect.TypeOf((*Doer)(nil)).Elem()
+	typ := reflect.TypeOf(Options{})
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		if f.IsExported() && (f.Type == doer || f.Type.Implements(doer)) {
+			t.Errorf("Options.%s lets callers replace the SSRF-guarded client", f.Name)
+		}
+	}
+}

@@ -94,7 +94,7 @@ type Options struct {
 	Broadcast    func(Message)
 	HubURL       func() string
 	Now          func() time.Time
-	HTTP         Doer
+	doer         Doer
 	LookupIP     func(ctx context.Context, host string) ([]netip.Addr, error)
 	BlockPrivate bool
 	LocalAddrs   func() []netip.Addr
@@ -143,7 +143,7 @@ func New(opt Options) *Engine {
 	if opt.Devices == nil {
 		opt.Devices = func() []Device { return nil }
 	}
-	e := &Engine{opt: opt, client: opt.HTTP, state: map[string]*state{}}
+	e := &Engine{opt: opt, client: opt.doer, state: map[string]*state{}}
 	if e.client == nil {
 		e.client = newGuardedClient(e.blocked)
 	}
