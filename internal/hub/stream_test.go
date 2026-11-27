@@ -21,10 +21,6 @@ func samplePoint(t float64) history.Point { return history.Point{T: t} }
 
 func ftoa(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
 
-// TestCompactCoalesces (B1): a compact stream that isn't reading keeps one report per
-// device (the newest state, carrying the newest compactSamples samples) and the newest
-// status and order, however many arrive, and is never dropped for it. An upstream-mode stream is dropped after streamBuffer events
-// (TestSlowStreamDropped).
 func TestCompactCoalesces(t *testing.T) {
 	th := newTestHub(t)
 	s := th.addStreamMode(true)
@@ -61,7 +57,6 @@ func TestCompactCoalesces(t *testing.T) {
 		switch ev.Type {
 		case "report":
 			got = append(got, ev.ID+"@"+ftoa(ev.Sample.T))
-			// The samples merged in are every other i (one device each), oldest first.
 			if n := len(ev.Samples); n != compactSamples || ev.Samples[n-1].T != ev.Sample.T {
 				t.Errorf("%s: %d samples ending %v; want %d ending with the newest", ev.ID, n, ev.Samples, compactSamples)
 			}
@@ -83,9 +78,6 @@ func TestCompactCoalesces(t *testing.T) {
 	}
 }
 
-// TestCompactOrdering: events keep their order while reports coalesce: a report waits in
-// its first slot (so it precedes the actionResult it carried), a removal drops the
-// device's waiting report, and a later report that brings it back goes after the removal.
 func TestCompactOrdering(t *testing.T) {
 	th := newTestHub(t)
 	s := th.addStreamMode(true)
@@ -127,10 +119,6 @@ func TestCompactOrdering(t *testing.T) {
 	}
 }
 
-// TestCompactBacklogResyncs: when events that can't coalesce pile up past compactBacklog,
-// the stream gets a fresh snapshot in their place rather than being dropped. What the
-// snapshot can't rebuild survives and follows it: the newest compactKeep alerts, action
-// results and pairings, and the newest alert and energy settings.
 func TestCompactBacklogResyncs(t *testing.T) {
 	th := newTestHub(t)
 	s := th.addStreamMode(true)
@@ -138,9 +126,9 @@ func TestCompactBacklogResyncs(t *testing.T) {
 	th.broadcast(map[string]any{"type": "energySettings", "n": 1})
 	th.broadcast(map[string]any{"type": "paired"})
 	for i := range compactBacklog {
-		th.broadcast(map[string]any{"type": "device", "id": "dev-1", "n": i}) // renames: in the snapshot
+		th.broadcast(map[string]any{"type": "device", "id": "dev-1", "n": i})
 	}
-	th.broadcast(alerts.Message{Type: "alerts"}) // settings, from the alerts engine
+	th.broadcast(alerts.Message{Type: "alerts"})
 	for i := range 2 * compactKeep {
 		th.broadcast(alerts.Message{Type: "alert", Event: &alerts.Event{ID: strconv.Itoa(i)}})
 	}
@@ -166,7 +154,7 @@ func TestCompactBacklogResyncs(t *testing.T) {
 	}
 	var want []string
 	want = append(want, "energySettings", "alerts")
-	for i := compactKeep + 1; i < 2*compactKeep; i++ { // the newest alerts, then the action result
+	for i := compactKeep + 1; i < 2*compactKeep; i++ {
 		want = append(want, "alert:"+strconv.Itoa(i))
 	}
 	want = append(want, "actionResult")
@@ -175,8 +163,6 @@ func TestCompactBacklogResyncs(t *testing.T) {
 	}
 }
 
-// TestCompactGzipEndsCleanly: when the hub ends a compact gzip stream (it is closing), the
-// gzip data is finished, so the client reads a clean end of stream, not "unexpected EOF".
 func TestCompactGzipEndsCleanly(t *testing.T) {
 	th := newTestHub(t)
 	srv := httptest.NewServer(th.h)
@@ -208,9 +194,6 @@ func TestCompactGzipEndsCleanly(t *testing.T) {
 	}
 }
 
-// TestCompactStream: over HTTP, ?compact=1 gets a gzip stream whose snapshot carries the
-// latest report but no history, then live events. The upstream stream (no opt-in) is
-// unchanged: its snapshot has each device's history.
 func TestCompactStream(t *testing.T) {
 	th := newTestHub(t)
 	for range 3 {
@@ -218,8 +201,8 @@ func TestCompactStream(t *testing.T) {
 		th.clk.Add(2 * time.Second)
 	}
 	srv := httptest.NewServer(th.h)
-	t.Cleanup(srv.Close)                            // after the streams below close: Close waits for them
-	tr := &http.Transport{DisableCompression: true} // see the encoding as sent
+	t.Cleanup(srv.Close)
+	tr := &http.Transport{DisableCompression: true}
 	defer tr.CloseIdleConnections()
 
 	open := func(path string, hdr ...string) (*http.Response, *bufio.Scanner) {
@@ -273,7 +256,6 @@ func TestCompactStream(t *testing.T) {
 		if resp.Header.Get(CompactHeader) != "compact" || resp.Header.Get("Content-Encoding") != "gzip" {
 			t.Errorf("%s %q: headers %v", c.path, c.header, resp.Header)
 		}
-		// The hijacked response writes its own head; it carries a Date as net/http's does.
 		if d, err := http.ParseTime(resp.Header.Get("Date")); err != nil || time.Since(d).Abs() > time.Minute {
 			t.Errorf("%s %q: Date %q", c.path, c.header, resp.Header.Get("Date"))
 		}
@@ -283,7 +265,7 @@ func TestCompactStream(t *testing.T) {
 		}
 		th.postReport("dev-1", nil)
 		ev := next(sc)
-		for range 10 { // alerts may come first
+		for range 10 {
 			if ev["type"] == "report" {
 				break
 			}

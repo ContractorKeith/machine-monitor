@@ -1,22 +1,5 @@
 package hub
 
-// Pairing: a short one-time code shown on the hub lets a new machine fetch the hub key
-// without anyone typing the key. One code at a time; it dies after PairTTL or pairMaxWrong
-// wrong guesses in all. Each source gets PairTries guesses at a code (upstream counts them
-// for everyone together, so one peer could burn every code). POST /api/pair is open, so it
-// is rate-limited like /api/info (see guard). `machine-monitor pair` and the TUI's Add
-// device issue codes. Each code has an id, carried by the "paired" and "pairEnded" events,
-// so whoever shows a code knows when that code, not some other one, was used or replaced.
-//
-// `machine-monitor pair` and the TUI name themselves with a random owner on both their
-// stream (/api/stream?pair=OWNER) and their code request. PairGrace after the last stream
-// with that owner ends, its code ends too, so a pair or TUI killed without a chance to
-// cancel (SIGKILL, a crash, a closed terminal) doesn't leave a code nobody shows (skeptic
-// report N3).
-//
-// Ported from Forward-Future/device-monitor server.js @ c3a4c41
-// (MIT, © 2026 Matt): https://github.com/Forward-Future/device-monitor
-
 import (
 	"crypto/rand"
 	"encoding/hex"
@@ -32,31 +15,25 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// Pairing limits. PairTTL is upstream's; upstream's 5 tries were for everyone together.
 const (
-	PairTTL   = 10 * time.Minute // a code is valid this long
-	PairTries = 5                // wrong guesses one source may make at a code
-	// pairMaxWrong wrong guesses from all sources kill the code, which caps the odds of
-	// guessing it at 1 in 10,000 however many addresses a peer can use.
+	PairTTL      = 10 * time.Minute
+	PairTries    = 5
 	pairMaxWrong = 100
 )
 
-// pairState is the one active pairing code, if any.
 type pairState struct {
 	mu      sync.Mutex
-	code    string // "" when no code is active
-	id      int64  // the current or last code's id
+	code    string
+	id      int64
 	expires time.Time
-	tries   map[string]int // source (sourceKey) -> wrong guesses at this code
-	wrong   int            // wrong guesses from every source
-	owner   string         // the pair run showing this code; "" for the TUI's Add device
-	streams map[string]int // owner -> open streams that named it
+	tries   map[string]int
+	wrong   int
+	owner   string
+	streams map[string]int
 }
 
-// pairOwnerRE is what an owner may look like: pair sends 32 hex digits.
 var pairOwnerRE = regexp.MustCompile(`^[0-9a-f]{16,64}$`)
 
-// pairOwner is the stream's ?pair= owner, or "" when it has none (or a malformed one).
 func pairOwner(r *http.Request) string {
 	if o := r.URL.Query().Get("pair"); pairOwnerRE.MatchString(o) {
 		return o
@@ -64,12 +41,8 @@ func pairOwner(r *http.Request) string {
 	return ""
 }
 
-// PairGrace is how long a code outlives the last stream of its owner. A TUI that reconnects
-// within it keeps its code (it would also miss the "pairEnded" sent while it was away).
 const PairGrace = 15 * time.Second
 
-// watchPair counts a stream that names owner; the returned func, called when the stream
-// ends, ends owner's code PairGrace later unless a stream with that owner is open again.
 func (h *Hub) watchPair(owner string) (done func()) {
 	p := &h.pair
 	p.mu.Lock()
@@ -108,7 +81,6 @@ func (h *Hub) watchPair(owner string) (done func()) {
 	}
 }
 
-// activeLocked reports whether a code is live, dropping an expired one. Caller holds mu.
 func (p *pairState) activeLocked(now time.Time) bool {
 	if p.code != "" && now.After(p.expires) {
 		p.code = ""
@@ -116,27 +88,19 @@ func (p *pairState) activeLocked(now time.Time) bool {
 	return p.code != ""
 }
 
-// Pairing refusals, in the words clients show.
 const (
 	tooManyTries = "Wrong pairing code. Too many tries: get a new code from the hub."
 	codeActive   = "A pairing code is already active (from another machine-monitor pair, or the TUI's Add device). Use that code, or wait until it is used or expires."
 )
 
-// fullMessage is why a full hub refuses to pair.
 var fullMessage = fmt.Sprintf("This hub already has %d devices, its limit. Remove one (Delete in the TUI) before adding another.", MaxDevices)
 
-// full reports whether the registry is at MaxDevices, so a new device could never report.
 func (h *Hub) full() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return len(h.registry) >= MaxDevices
 }
 
-// handlePairCode (key) issues a new code. A body of {"replace": false} asks for a code only
-// if none is active (409 otherwise), which is what `machine-monitor pair` sends, so two runs
-// can't hand out two codes of which only one works. "owner" ties the code to the caller's
-// open stream (see watchPair); with no such stream open, no code is issued. Without it the new code replaces the
-// old one, as upstream, and a "pairEnded" event tells whoever showed the old one.
 func (h *Hub) handlePairCode(w http.ResponseWriter, r *http.Request) {
 	body, _, err := readObject(w, r)
 	if err != nil {
@@ -162,7 +126,7 @@ func (h *Hub) handlePairCode(w http.ResponseWriter, r *http.Request) {
 	p := &h.pair
 	p.mu.Lock()
 	var ended map[string]any
-	if owner != "" && p.streams[owner] == 0 { // its stream already ended: nobody would show the code
+	if owner != "" && p.streams[owner] == 0 {
 		p.mu.Unlock()
 		sendJSON(w, http.StatusConflict, errorBody("This pair run's live stream from the hub has closed. Run machine-monitor pair again."))
 		return
@@ -187,9 +151,6 @@ func (h *Hub) handlePairCode(w http.ResponseWriter, r *http.Request) {
 	sendJSON(w, http.StatusOK, map[string]any{"code": code, "expires": expires.UnixMilli(), "id": id})
 }
 
-// handleCancelPairCode (key) is DELETE /api/pair/code?id=N: `machine-monitor pair` ends its
-// own code when it stops, so the next run needn't wait out the old one. Another id is left
-// alone.
 func (h *Hub) handleCancelPairCode(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
 	if err != nil {
@@ -209,8 +170,6 @@ func (h *Hub) handleCancelPairCode(w http.ResponseWriter, r *http.Request) {
 	sendJSON(w, http.StatusOK, map[string]bool{"ok": cancelled})
 }
 
-// handlePair (open) trades the active code for the hub key. Non-digits in the code are
-// ignored, so "123 456" works. The compare is constant-time.
 func (h *Hub) handlePair(w http.ResponseWriter, r *http.Request) {
 	body, _, err := readObject(w, r)
 	if err != nil {
@@ -225,7 +184,7 @@ func (h *Hub) handlePair(w http.ResponseWriter, r *http.Request) {
 	given := digitsOnly(fmt.Sprint(body["code"]))
 	client, _ := h.clientAddr(r)
 	src := sourceKey(client)
-	full := h.full() // before p.mu: never hold p.mu while waiting on h.mu
+	full := h.full()
 	p := &h.pair
 	p.mu.Lock()
 	if !p.activeLocked(h.now()) {
@@ -233,12 +192,12 @@ func (h *Hub) handlePair(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusForbidden, errorBody("No pairing code is active. On the hub, run machine-monitor pair to get one."))
 		return
 	}
-	if full { // filled up since the code was issued; no guess is counted
+	if full {
 		p.mu.Unlock()
 		sendJSON(w, http.StatusConflict, map[string]any{"error": fullMessage, "retry": false})
 		return
 	}
-	if p.tries[src] >= PairTries { // even the right code: this source has had its guesses
+	if p.tries[src] >= PairTries {
 		p.mu.Unlock()
 		sendJSON(w, http.StatusForbidden, map[string]any{"error": tooManyTries, "retry": false, "triesLeft": 0})
 		return
@@ -255,7 +214,6 @@ func (h *Hub) handlePair(w http.ResponseWriter, r *http.Request) {
 		if left == 0 {
 			msg = tooManyTries
 		}
-		// retry and triesLeft are additive to upstream's reply, so clients needn't parse msg.
 		sendJSON(w, http.StatusForbidden, map[string]any{"error": msg, "retry": left > 0, "triesLeft": left})
 		return
 	}
@@ -295,7 +253,6 @@ func (h *Hub) handlePair(w http.ResponseWriter, r *http.Request) {
 	sendJSON(w, http.StatusOK, reply)
 }
 
-// digitsOnly drops everything but ASCII digits. A missing code (JSON null) reads as "".
 func digitsOnly(s string) string {
 	var b strings.Builder
 	for _, c := range s {

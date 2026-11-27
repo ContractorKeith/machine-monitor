@@ -24,7 +24,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// clock is a settable test clock.
 type clock struct {
 	mu sync.Mutex
 	t  time.Time
@@ -50,7 +49,6 @@ func newTestHub(t *testing.T) *testHub {
 	return openTestHub(t, config.At(t.TempDir()), &clock{t: time.Date(2026, 10, 31, 12, 0, 30, 0, time.UTC)})
 }
 
-// openTestHub opens a hub on paths; mods may change its Options first.
 func openTestHub(t *testing.T, paths config.Paths, clk *clock, mods ...func(*Options)) *testHub {
 	t.Helper()
 	opt := Options{Paths: paths, Now: clk.Now, Hostname: "testbox", Location: time.UTC, Logf: t.Logf}
@@ -65,14 +63,10 @@ func openTestHub(t *testing.T, paths config.Paths, clk *clock, mods ...func(*Opt
 	return &testHub{Hub: h, t: t, clk: clk, paths: paths, h: h.Handler()}
 }
 
-// reqTimeout bounds every test request made with req.
 const reqTimeout = 10 * time.Second
 
-// req sends a request from 127.0.0.1 to Host 127.0.0.1:7777. key "" sends no key.
 func (th *testHub) req(method, path, key, body string, hdr ...string) *httptest.ResponseRecorder {
 	th.t.Helper()
-	// A handler that should answer at once but streams instead (/api/stream with a broken
-	// key check) fails the test after reqTimeout rather than hanging it.
 	ctx, cancel := context.WithTimeout(context.Background(), reqTimeout)
 	defer cancel()
 	r := httptest.NewRequestWithContext(ctx, method, path, strings.NewReader(body))
@@ -95,13 +89,11 @@ func (th *testHub) req(method, path, key, body string, hdr ...string) *httptest.
 	return w
 }
 
-// keyed sends a request with the hub key.
 func (th *testHub) keyed(method, path, body string) *httptest.ResponseRecorder {
 	th.t.Helper()
 	return th.req(method, path, th.Token(), body)
 }
 
-// agentReport is the recorded upstream agent.sh report with this hub's token and id.
 func (th *testHub) agentReport(id string, edit func(m map[string]any)) string {
 	th.t.Helper()
 	b, err := os.ReadFile("../report/testdata/linux-agent.sh.json")
@@ -145,8 +137,6 @@ func (th *testHub) devices() []View {
 	}
 	return decode[[]View](th.t, w)
 }
-
-// ---- token and config --------------------------------------------------------------------
 
 func TestTokenCreatedOnceAndPrivate(t *testing.T) {
 	th := newTestHub(t)
@@ -200,8 +190,6 @@ func TestDamagedConfigIsAnError(t *testing.T) {
 	}
 }
 
-// ---- report intake -----------------------------------------------------------------------
-
 func TestReportAuthAndValidation(t *testing.T) {
 	th := newTestHub(t)
 	for _, tt := range []struct {
@@ -231,7 +219,6 @@ func TestReportAuthAndValidation(t *testing.T) {
 func TestReportRegistersDevice(t *testing.T) {
 	th := newTestHub(t)
 	w := th.req("POST", "/api/report", "", th.agentReport("dev-1", func(m map[string]any) {
-		// A small display card listed first: the big GPU should be sorted to the front.
 		gpus := m["gpus"].([]any)
 		m["gpus"] = append([]any{map[string]any{"name": "Tiny", "memTotal": 1 << 20}}, gpus...)
 		m["processes"] = []any{map[string]any{"pid": 1, "name": "init"}}
@@ -299,7 +286,7 @@ func TestMaxDevices(t *testing.T) {
 	if w.Code != 400 || !strings.Contains(w.Body.String(), fullMessage) {
 		t.Fatalf("device %d: %d %s", MaxDevices+1, w.Code, w.Body)
 	}
-	th.postReport("d0", nil) // known devices still report
+	th.postReport("d0", nil)
 }
 
 func TestRegistryPersists(t *testing.T) {
@@ -349,7 +336,7 @@ func TestHubMonitorsItself(t *testing.T) {
 		d := h.registry["hub-self"]
 		name, agent := "", ""
 		if d != nil {
-			name = d.Name // read under the lock: ingest writes it
+			name = d.Name
 			if l := h.latest["hub-self"]; l != nil {
 				agent = l.Report.Agent
 			}
@@ -376,8 +363,6 @@ func TestHubMonitorsItself(t *testing.T) {
 	}
 }
 
-// ---- info --------------------------------------------------------------------------------
-
 func TestInfo(t *testing.T) {
 	th := newTestHub(t)
 	nonce := "0123456789abcdef0123"
@@ -389,8 +374,6 @@ func TestInfo(t *testing.T) {
 	if locked["proof"] != hubProof(th.Token(), nonce) {
 		t.Errorf("proof = %v", locked["proof"])
 	}
-	// connProof covers both ends of the connection as the hub saw them: the client's address
-	// and port, and the hub's own.
 	info := func(remote, local string) map[string]any {
 		r := httptest.NewRequest("GET", "/api/info?nonce="+nonce, nil)
 		r.RemoteAddr, r.Host = remote, "127.0.0.1:7777"
@@ -409,8 +392,6 @@ func TestInfo(t *testing.T) {
 	if v := info("127.0.0.1:50001", hubEnd.String()); v["connProof"] == base["connProof"] {
 		t.Errorf("connProof doesn't depend on the client's port: %v", v)
 	}
-	// A socket that shares the client's port but reached another listener (Windows
-	// SO_REUSEADDR) gets a different proof.
 	if v := info(client.String(), "127.0.0.1:7778"); v["connProof"] == base["connProof"] {
 		t.Errorf("connProof doesn't depend on the hub's port: %v", v)
 	}
@@ -425,7 +406,6 @@ func TestInfo(t *testing.T) {
 	if ConnProof("k", nonce, mapped, mapped) != ConnProof("k", nonce, plain, plain) {
 		t.Error("connProof differs for a mapped address")
 	}
-	// Computed with upstream's hubProof in Node: hex(HMAC-SHA256(key, "device-monitor-hub:" + nonce)).
 	if got := hubProof("k", "abc"); got != "edde3dc2cc87ea46276b01ea252bdf3a8b538dcdd0e475e0f1b53e070c0745fe" {
 		t.Errorf("hubProof(k, abc) = %s", got)
 	}
@@ -439,8 +419,6 @@ func TestInfo(t *testing.T) {
 		t.Errorf("unlocked info = %v", open)
 	}
 }
-
-// ---- security ----------------------------------------------------------------------------
 
 func TestKeyRequired(t *testing.T) {
 	th := newTestHub(t)
@@ -458,7 +436,6 @@ func TestKeyRequired(t *testing.T) {
 			t.Errorf("%s %s with wrong key: %d", rt[0], rt[1], w.Code)
 		}
 	}
-	// The cookie works as well as the header.
 	if w := th.req("GET", "/api/devices", "", "", "Cookie", "dm_key="+th.Token()); w.Code != 200 {
 		t.Errorf("cookie key: %d", w.Code)
 	}
@@ -544,7 +521,6 @@ func TestRateLimit(t *testing.T) {
 	if w := th.req("GET", "/api/info", "", ""); w.Code != 429 {
 		t.Fatalf("request %d: %d, want 429", RateMax+1, w.Code)
 	}
-	// Other addresses have their own allowance; a LAN peer can't pick one with X-Forwarded-For.
 	if w := th.req("GET", "/api/info", "", "", "RemoteAddr", "192.168.1.9:1"); w.Code != 200 {
 		t.Errorf("other address: %d", w.Code)
 	}
@@ -557,11 +533,9 @@ func TestRateLimit(t *testing.T) {
 	if c := spoof(); c != 429 {
 		t.Errorf("X-Forwarded-For from a LAN peer dodged the limit: %d", c)
 	}
-	// Loopback is no exception: any local process could send X-Forwarded-For.
 	if w := th.req("GET", "/api/info", "", "", "X-Forwarded-For", "100.64.0.7"); w.Code != 429 {
 		t.Errorf("X-Forwarded-For from loopback dodged the limit with no trusted proxy: %d", w.Code)
 	}
-	// From a trusted proxy on another machine the forwarded address is the client.
 	const proxy = "192.168.1.2:5000"
 	th.mu.Lock()
 	th.cfg.extra = map[string]json.RawMessage{"trustedProxies": json.RawMessage(`["127.0.0.1", "192.168.1.2"]`)}
@@ -569,18 +543,15 @@ func TestRateLimit(t *testing.T) {
 	if w := th.req("GET", "/api/info", "", "", "RemoteAddr", proxy, "X-Forwarded-For", "100.64.0.7"); w.Code != 200 {
 		t.Errorf("client forwarded by a trusted proxy: %d", w.Code)
 	}
-	// The proxy appends the address it saw; earlier entries are the client's to invent.
 	for i := range RateMax {
 		th.req("GET", "/api/info", "", "", "RemoteAddr", proxy, "X-Forwarded-For", fmt.Sprintf("10.1.%d.%d, 100.64.0.9", i/250, i%250+1))
 	}
 	if w := th.req("GET", "/api/info", "", "", "RemoteAddr", proxy, "X-Forwarded-For", "10.9.9.9, 100.64.0.9"); w.Code != 429 {
 		t.Errorf("rotating the leftmost X-Forwarded-For dodged the limit: %d", w.Code)
 	}
-	// A listed loopback proxy is still not believed: any local program connects from there.
 	if w := th.req("GET", "/api/info", "", "", "X-Forwarded-For", "100.64.0.10"); w.Code != 429 {
 		t.Errorf("X-Forwarded-For from a trusted loopback proxy dodged the limit: %d", w.Code)
 	}
-	// The key skips the limit; the limit resets after the window.
 	if w := th.keyed("GET", "/api/info", ""); w.Code != 200 {
 		t.Errorf("with key: %d", w.Code)
 	}
@@ -629,8 +600,6 @@ func TestIsLocalAddress(t *testing.T) {
 	}
 }
 
-// ---- devices: history, rename, remove, order ---------------------------------------------
-
 func TestHistoryEndpoint(t *testing.T) {
 	th := newTestHub(t)
 	for range 5 {
@@ -660,7 +629,7 @@ func TestRenameRemoveOrder(t *testing.T) {
 	if v := decode[View](t, w); w.Code != 200 || v.Name != "Den PC" || !v.Renamed {
 		t.Fatalf("rename: %d %s", w.Code, w.Body)
 	}
-	th.postReport("a", nil) // a report no longer overrides the user's name
+	th.postReport("a", nil)
 	if d := th.devices()[0]; d.Name != "Den PC" {
 		t.Errorf("name after report: %q", d.Name)
 	}
@@ -691,8 +660,6 @@ func TestRenameRemoveOrder(t *testing.T) {
 	}
 }
 
-// ---- energy ------------------------------------------------------------------------------
-
 func TestEnergy(t *testing.T) {
 	th := newTestHub(t)
 	if w := th.keyed("GET", "/api/energy/settings", ""); strings.TrimSpace(w.Body.String()) != "null" {
@@ -707,7 +674,6 @@ func TestEnergy(t *testing.T) {
 		t.Errorf("invalid settings: %d", w.Code)
 	}
 
-	// Two minutes of reports, so the first minute is committed.
 	start := th.clk.Now().Truncate(time.Minute)
 	for range 60 {
 		th.postReport("dev-1", nil)
@@ -747,8 +713,6 @@ func TestEnergy(t *testing.T) {
 	}
 }
 
-// ---- alerts ------------------------------------------------------------------------------
-
 func TestAlertsEndpoints(t *testing.T) {
 	th := newTestHub(t)
 	got := decode[map[string]any](t, th.keyed("GET", "/api/alerts", ""))
@@ -762,7 +726,7 @@ func TestAlertsEndpoints(t *testing.T) {
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"active"`) {
 		t.Fatalf("PUT /api/alerts: %d %s", w.Code, w.Body)
 	}
-	th.postReport("dev-1", nil) // CPU 12.6 % > 5 %: fires at once
+	th.postReport("dev-1", nil)
 	got = decode[map[string]any](t, th.keyed("GET", "/api/alerts", ""))
 	if len(got["active"].([]any)) != 1 || len(got["events"].([]any)) != 1 {
 		t.Fatalf("after report: %v", got)
@@ -781,7 +745,7 @@ func TestAlertsEndpoints(t *testing.T) {
 func TestOfflineAlertFromDevices(t *testing.T) {
 	th := newTestHub(t)
 	th.postReport("dev-1", nil)
-	th.clk.Add(11 * time.Minute) // default rule: offline for 10 minutes
+	th.clk.Add(11 * time.Minute)
 	th.alerts.Tick()
 	act := th.alerts.Active()
 	if len(act) != 1 || act[0].Type != "offline" || act[0].DeviceName != "atlas" {
@@ -789,9 +753,6 @@ func TestOfflineAlertFromDevices(t *testing.T) {
 	}
 }
 
-// ---- SSE ---------------------------------------------------------------------------------
-
-// sse reads events from a live /api/stream.
 type sse struct {
 	t    *testing.T
 	body io.Closer
@@ -829,7 +790,6 @@ func openStream(t *testing.T, srv *httptest.Server, key string) *sse {
 	return s
 }
 
-// next returns the next event of type typ, skipping others.
 func (s *sse) next(typ string) map[string]any {
 	s.t.Helper()
 	timeout := time.After(5 * time.Second)
@@ -903,7 +863,6 @@ func TestStreamEvents(t *testing.T) {
 		t.Errorf("removed = %v", r)
 	}
 
-	// Close ends open streams.
 	th.Close()
 	for range s.ch {
 	}
@@ -935,7 +894,6 @@ func TestSlowStreamDropped(t *testing.T) {
 	if n := len(s.ch); n != streamBuffer {
 		t.Errorf("got %d buffered messages, want %d", n, streamBuffer)
 	}
-	// The slot stays taken until the handler finishes.
 	th.smu.Lock()
 	active := th.activeStreams
 	th.smu.Unlock()
@@ -949,8 +907,6 @@ func TestSlowStreamDropped(t *testing.T) {
 	}
 }
 
-// TestStreamClientStopsReading: a keyed client that opens the stream and never reads must not
-// pin its handler and connection forever. The write deadline ends the handler.
 func TestStreamClientStopsReading(t *testing.T) {
 	th := newTestHub(t)
 	th.streamWriteTimeout = 200 * time.Millisecond
@@ -974,8 +930,6 @@ func TestStreamClientStopsReading(t *testing.T) {
 			t.Fatal("stream never opened")
 		}
 	}
-	// Never read from conn. Big messages fill the socket buffers, so the handler blocks in a
-	// write; without a deadline it would stay there for good.
 	pad := strings.Repeat("x", 256<<10)
 	for deadline := time.Now().Add(15 * time.Second); active() != 0; time.Sleep(time.Millisecond) {
 		if time.Now().After(deadline) {
@@ -985,13 +939,11 @@ func TestStreamClientStopsReading(t *testing.T) {
 	}
 }
 
-// TestConcurrentReportsStayOrdered: reports for one device racing each other are applied one
-// at a time: LastSeen never goes backwards, history and "report" events stay in time order.
 func TestConcurrentReportsStayOrdered(t *testing.T) {
 	th := newTestHub(t)
 	s := th.addStream()
 	raw := []byte(th.agentReport("dev-1", nil))
-	const workers, each = 8, 25 // 200 events fit in streamBuffer
+	const workers, each = 8, 25
 	var wg sync.WaitGroup
 	for range workers {
 		wg.Go(func() {
@@ -1057,10 +1009,6 @@ func TestPlatformAlwaysSent(t *testing.T) {
 	}
 }
 
-// ---- fix wave #45 ------------------------------------------------------------------------
-
-// A device that goes silent gets a "status" event as it crosses OfflineAfter, not at the
-// next heartbeat (up to StatusInterval later).
 func TestOfflineStatusSentAtOnce(t *testing.T) {
 	th := newTestHub(t)
 	srv := httptest.NewServer(th.h)
@@ -1082,7 +1030,6 @@ func TestOfflineStatusSentAtOnce(t *testing.T) {
 	if st := s.next("status"); st["online"].(map[string]any)["dev-1"] != false {
 		t.Fatalf("status = %v", st)
 	}
-	// Nothing changed since: no further event until the heartbeat.
 	th.checkOnline()
 	select {
 	case m := <-s.ch:
@@ -1091,11 +1038,9 @@ func TestOfflineStatusSentAtOnce(t *testing.T) {
 	}
 }
 
-// Run sends the offline "status" event on its own, without the heartbeat, when a device
-// crosses OfflineAfter: its timer keeps re-arming.
 func TestRunSendsOfflineStatus(t *testing.T) {
 	th := newTestHub(t)
-	th.statusInterval = time.Hour // only the offline check can send "status"
+	th.statusInterval = time.Hour
 	srv := httptest.NewServer(th.h)
 	t.Cleanup(srv.Close)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1107,8 +1052,8 @@ func TestRunSendsOfflineStatus(t *testing.T) {
 	s.next("snapshot")
 	th.postReport("dev-1", nil)
 	s.next("report")
-	time.Sleep(1500 * time.Millisecond) // past the first timer, so only a re-armed one fires
-	th.clk.Add(OfflineAfter)            // dev-1's last report is now OfflineAfter old
+	time.Sleep(1500 * time.Millisecond)
+	th.clk.Add(OfflineAfter)
 	deadline := time.After(1500 * time.Millisecond)
 	for {
 		select {
@@ -1125,7 +1070,6 @@ func TestRunSendsOfflineStatus(t *testing.T) {
 	}
 }
 
-// logs collects a hub's log lines.
 type logs struct {
 	mu    sync.Mutex
 	lines []string
@@ -1180,11 +1124,9 @@ func TestUnreadableHistoryIsSkipped(t *testing.T) {
 	if l.count("x1.ndjson") != 1 {
 		t.Errorf("logs = %q, want the skipped file named once", l.lines)
 	}
-	th.postReport("dev-1", nil) // and the hub works
+	th.postReport("dev-1", nil)
 }
 
-// With a read-only data directory the failed devices.json write is logged once and retried
-// less often, not every second.
 func TestUnwritableDevicesLoggedOnce(t *testing.T) {
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		t.Skip("needs Unix permissions and a non-root user")
@@ -1200,7 +1142,6 @@ func TestUnwritableDevicesLoggedOnce(t *testing.T) {
 			t.Fatal("the failed save was never logged")
 		}
 	}
-	// Writable again: the next try waits saveRetryMin, not saveDelay, and then succeeds.
 	os.Chmod(paths.Dir, 0o700)
 	th.clk.Add(time.Second)
 	th.postReport("dev-1", nil)
@@ -1260,7 +1201,7 @@ func TestSaveSkipsUnchangedRegistry(t *testing.T) {
 		t.Error("devices.json rewritten with nothing changed")
 	}
 	th.clk.Add(time.Second)
-	th.postReport("dev-1", nil) // LastSeen changes
+	th.postReport("dev-1", nil)
 	if err := th.saveRegistry(); err != nil {
 		t.Fatal(err)
 	}
@@ -1269,7 +1210,6 @@ func TestSaveSkipsUnchangedRegistry(t *testing.T) {
 	}
 }
 
-// readCounter counts the bytes read from a request body.
 type readCounter struct {
 	r io.Reader
 	n atomic.Int64
@@ -1281,7 +1221,6 @@ func (c *readCounter) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// postFrom sends a report body from remote and returns the status and bytes read.
 func (th *testHub) postFrom(remote, body string) (int, int64) {
 	rc := &readCounter{r: strings.NewReader(body)}
 	r := httptest.NewRequest("POST", "/api/report", rc)
@@ -1291,7 +1230,6 @@ func (th *testHub) postFrom(remote, body string) (int, int64) {
 	return w.Code, rc.n.Load()
 }
 
-// A peer whose reports keep failing gets only the start of its next bodies read.
 func TestFailedReportsLimited(t *testing.T) {
 	th := newTestHub(t)
 	bad := `{"token":"wrong","id":"dev-1"}`
@@ -1316,8 +1254,6 @@ func TestFailedReportsLimited(t *testing.T) {
 	}
 }
 
-// An attacker and a keyed agent behind one address: the agent keeps reporting, however many
-// bad reports the attacker sends between its reports.
 func TestFailedReportsDontLockOutAgent(t *testing.T) {
 	th := newTestHub(t)
 	const nat = "192.168.1.9:4000"
@@ -1329,13 +1265,10 @@ func TestFailedReportsDontLockOutAgent(t *testing.T) {
 		if code, _ := th.postFrom(nat, th.agentReport("dev-1", nil)); code != 200 {
 			t.Fatalf("round %d: keyed report: %d", round, code)
 		}
-		// Its success doesn't clear the address, or the attacker would get another
-		// reportFailMax full reads after each of the agent's reports.
 		if code, _ := th.postFrom(nat, `{"token":"guess"}`); code != 429 {
 			t.Fatalf("round %d: after the agent's report: %d", round, code)
 		}
 	}
-	// A report with its token past the peek is refused while the address is over budget.
 	for range reportFailMax {
 		th.postFrom(nat, `{"token":"guess"}`)
 	}
@@ -1346,8 +1279,6 @@ func TestFailedReportsDontLockOutAgent(t *testing.T) {
 	}
 }
 
-// IPv6 peers are counted per /64 for the rate limit and the failed-report budget, as for
-// pairing tries: a machine can use any address in its /64.
 func TestLimitsPerIPv6Prefix(t *testing.T) {
 	th := newTestHub(t)
 	for i := range RateMax {
@@ -1367,8 +1298,6 @@ func TestLimitsPerIPv6Prefix(t *testing.T) {
 	}
 }
 
-// X-Forwarded-For is read from the right, past trusted proxies, and only from a trusted,
-// non-loopback socket.
 func TestClientAddr(t *testing.T) {
 	th := newTestHub(t)
 	th.mu.Lock()
@@ -1377,11 +1306,11 @@ func TestClientAddr(t *testing.T) {
 	for _, tc := range []struct{ remote, xff, want string }{
 		{"192.168.1.2:1", "100.64.0.5", "100.64.0.5"},
 		{"192.168.1.2:1", "6.6.6.6, 100.64.0.5", "100.64.0.5"},
-		{"192.168.1.2:1", "6.6.6.6, 100.64.0.5, 10.0.0.7", "100.64.0.5"}, // a second trusted hop
+		{"192.168.1.2:1", "6.6.6.6, 100.64.0.5, 10.0.0.7", "100.64.0.5"},
 		{"192.168.1.2:1", "100.64.0.5, junk", "192.168.1.2"},
 		{"192.168.1.2:1", "", "192.168.1.2"},
-		{"192.168.1.3:1", "100.64.0.5", "192.168.1.3"}, // not a trusted proxy
-		{"127.0.0.1:1", "100.64.0.5", "127.0.0.1"},     // loopback: any local program
+		{"192.168.1.3:1", "100.64.0.5", "192.168.1.3"},
+		{"127.0.0.1:1", "100.64.0.5", "127.0.0.1"},
 		{"[::1]:1", "100.64.0.5", "::1"},
 	} {
 		r := httptest.NewRequest("GET", "/", nil)
@@ -1393,8 +1322,6 @@ func TestClientAddr(t *testing.T) {
 			t.Errorf("%s with %q: %s, want %s", tc.remote, tc.xff, got, tc.want)
 		}
 	}
-	// Only the last maxForwardHops entries are read: past them the socket is used, however
-	// long the list.
 	long := strings.TrimSuffix(strings.Repeat("10.0.0.7, ", 5000), ", ")
 	r := httptest.NewRequest("GET", "/", nil)
 	r.RemoteAddr = "192.168.1.2:1"
@@ -1407,7 +1334,6 @@ func TestClientAddr(t *testing.T) {
 	if got, _ := th.clientAddr(r); got.String() != "100.64.0.5" {
 		t.Errorf("client behind %d trusted hops: %s", maxForwardHops-1, got)
 	}
-	// Several header lines are one list.
 	r = httptest.NewRequest("GET", "/", nil)
 	r.RemoteAddr = "192.168.1.2:1"
 	r.Header.Add("X-Forwarded-For", "100.64.0.5")
@@ -1428,8 +1354,6 @@ func TestLocalKey(t *testing.T) {
 	}
 }
 
-// An overlapping time-of-use price already in config.json keeps its flat rate, logs once and
-// does not wipe the price (skeptic pass 3, N9).
 func TestOverlappingTOUInConfigKeepsFlatRate(t *testing.T) {
 	paths := config.At(t.TempDir())
 	cfg := `{"token":"abc","energy":{"region":"US","rate":0.2,"currency":"USD","tou":[` +
@@ -1448,7 +1372,6 @@ func TestOverlappingTOUInConfigKeepsFlatRate(t *testing.T) {
 	}
 }
 
-// A refused overlap is explained in a sentence by the API (N12).
 func TestPutEnergySettingsExplainsOverlap(t *testing.T) {
 	th := newTestHub(t)
 	w := th.keyed("PUT", "/api/energy/settings", `{"region":"US","rate":0.2,"currency":"USD","tou":[`+
@@ -1458,8 +1381,6 @@ func TestPutEnergySettingsExplainsOverlap(t *testing.T) {
 	}
 }
 
-// A second hub on a data directory in use is refused with a sentence, and may start once the
-// first has closed (skeptic pass 3, N14).
 func TestSecondHubOnSameDirRefused(t *testing.T) {
 	paths := config.At(t.TempDir())
 	th := openTestHub(t, paths, &clock{t: time.Unix(1e9, 0)})
@@ -1477,7 +1398,6 @@ func TestSecondHubOnSameDirRefused(t *testing.T) {
 	h.Close()
 }
 
-// A refused alert setting says why (N12).
 func TestPutAlertsGivesReason(t *testing.T) {
 	th := newTestHub(t)
 	w := th.keyed("PUT", "/api/alerts", `{"rules":"nope"}`)
