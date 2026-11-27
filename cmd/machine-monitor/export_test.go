@@ -18,7 +18,6 @@ import (
 
 func init() { built["export"] = true }
 
-// TestExport runs export against internal/export's fixture history directory.
 func TestExport(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv(config.DirEnv, dir)
@@ -65,7 +64,6 @@ func TestExport(t *testing.T) {
 	}
 }
 
-// fakeExportHub serves two devices and one minute of history for "id-1", answering only to key.
 func fakeExportHub(t *testing.T, key string) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -91,8 +89,6 @@ func fakeExportHub(t *testing.T, key string) *httptest.Server {
 	return srv
 }
 
-// export --hub finds the key connect saved in client.json ("hubUrl"), takes a device name
-// as well as an id, and honors the global --hub (skeptic M1 and the report's export gaps).
 func TestExportFromHubUsesPairingAndNames(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv(config.DirEnv, dir)
@@ -117,7 +113,7 @@ func TestExportFromHubUsesPairingAndNames(t *testing.T) {
 		!strings.Contains(errOut.String(), "More than one device is named") {
 		t.Errorf("ambiguous name: exit %d, %q", code, errOut.String())
 	}
-	// --key stands in for a missing pairing.
+
 	if err := os.Remove(filepath.Join(dir, "client.json")); err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +127,6 @@ func TestExportFromHubUsesPairingAndNames(t *testing.T) {
 	}
 }
 
-// A name in this machine's own devices.json resolves to its id.
 func TestExportLocalByName(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv(config.DirEnv, dir)

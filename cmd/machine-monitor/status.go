@@ -11,16 +11,14 @@ import (
 	"time"
 
 	"github.com/ContractorKeith/machine-monitor/internal/collect"
-	_ "github.com/ContractorKeith/machine-monitor/internal/collect/all" // register probes
+	_ "github.com/ContractorKeith/machine-monitor/internal/collect/all"
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// statusGap is the time between the two samples status takes, so usage and rates are real.
 const statusGap = time.Second
 
 var statusCollector = collect.New
 
-// runStatus prints one report of this machine: machine-monitor status --json.
 func runStatus(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	fs.SetOutput(stderr)

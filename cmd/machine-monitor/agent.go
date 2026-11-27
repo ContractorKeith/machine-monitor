@@ -14,14 +14,11 @@ import (
 
 	"github.com/ContractorKeith/machine-monitor/internal/agent"
 	"github.com/ContractorKeith/machine-monitor/internal/collect"
-	_ "github.com/ContractorKeith/machine-monitor/internal/collect/all" // register probes
+	_ "github.com/ContractorKeith/machine-monitor/internal/collect/all"
 	"github.com/ContractorKeith/machine-monitor/internal/config"
 	"github.com/ContractorKeith/machine-monitor/internal/tui"
 )
 
-// runAgent is `machine-monitor agent [--hub URL] [--key KEY] [--allow-power-actions]`:
-// report this machine to a hub.
-// The hub and key default to client.json, written by connect.
 func runAgent(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("agent", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -79,8 +76,6 @@ func runAgent(args []string, stdout, stderr io.Writer) int {
 	return startAgentWith(hubURL, key, *allowPower, seen, stderr, cl.DeviceKey)
 }
 
-// startAgentWith runs the report loop until SIGINT or SIGTERM.
-// seenFile keeps accepted command ids across restarts (agent.Options.SeenFile).
 func startAgentWith(hubURL, key string, allowPower bool, seenFile string, stderr io.Writer, deviceKey string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

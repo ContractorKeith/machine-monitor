@@ -16,7 +16,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/hub"
 )
 
-// connectHub starts a real hub and points MACHINE_MONITOR_DIR at a fresh client dir.
 func connectHub(t *testing.T) (*hub.Hub, *httptest.Server, string) {
 	t.Helper()
 	h, err := hub.New(hub.Options{Paths: config.At(t.TempDir()), Hostname: "testhub", Logf: t.Logf})
@@ -44,8 +43,6 @@ func pairCode(t *testing.T, h *hub.Hub, srv *httptest.Server) string {
 	return v.Code
 }
 
-// stubAgent makes stdout look like a terminal and replaces the TUI connect opens, recording
-// what it was given. (The name is from when connect ran the agent.)
 func stubAgent(t *testing.T) *[2]string {
 	got := new([2]string)
 	old, oldTTY := connectTUI, stdoutIsTerminal
@@ -130,7 +127,7 @@ func TestConnectWithCodeFlagAndNoAgent(t *testing.T) {
 		wrong = "000001"
 	}
 	var out, errOut bytes.Buffer
-	// A wrong --code is tried once, not re-prompted.
+
 	if rc := run([]string{"connect", "--code", wrong, "--no-agent", srv.URL}, &out, &errOut); rc != 1 ||
 		!strings.Contains(errOut.String(), "Wrong pairing code") {
 		t.Fatalf("bad --code: exit %d, %q", rc, errOut.String())
@@ -156,7 +153,7 @@ func TestConnectWithDashboardLink(t *testing.T) {
 	if cl, _ := agent.LoadClient(clientPath); cl.Key != h.Token() {
 		t.Errorf("client.json key %q", cl.Key)
 	}
-	// A link with a key this hub doesn't hold fails the proof and saves nothing new.
+
 	if rc := run([]string{"connect", "--no-agent", srv.URL + "/?key=0000000000000000aaaa"}, &out, &errOut); rc != 1 ||
 		!strings.Contains(errOut.String(), "didn't prove it holds this key") {
 		t.Fatalf("wrong key: exit %d, %q", rc, errOut.String())
@@ -201,7 +198,6 @@ func TestAgentNeedsPairing(t *testing.T) {
 	}
 }
 
-// The agent refuses a hub URL with ?key= instead of failing as "not paired" (skeptic L4).
 func TestAgentRejectsKeyInURL(t *testing.T) {
 	t.Setenv(config.DirEnv, t.TempDir())
 	var out, errOut bytes.Buffer
@@ -211,7 +207,6 @@ func TestAgentRejectsKeyInURL(t *testing.T) {
 	}
 }
 
-// Without a TTY on stdout, connect pairs and prints the next step instead of opening the TUI.
 func TestConnectWithoutTTYDoesNotOpenTUI(t *testing.T) {
 	h, srv, _ := connectHub(t)
 	got := stubAgent(t)
@@ -229,7 +224,6 @@ func stubDiscovery(t *testing.T, hubs []discovery.Hub, err error) {
 	t.Cleanup(func() { discoverHubs = old })
 }
 
-// connect with no URL runs LAN discovery and offers what it finds (skeptic H1).
 func TestConnectDiscoversHubs(t *testing.T) {
 	h, srv, _ := connectHub(t)
 	got := stubAgent(t)
