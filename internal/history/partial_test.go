@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-// A crash mid-append leaves a partial last line. Loading must cut it, so the next append
-// starts on a fresh line instead of running into it and losing that minute.
 func TestLoadCutsPartialLastLine(t *testing.T) {
 	dir := t.TempDir()
 	line := `{"id":"m","t":1791158400000,"cpu":40,"n":1}` + "\n"
@@ -36,15 +34,13 @@ func TestLoadCutsPartialLastLine(t *testing.T) {
 	}
 }
 
-// A short write (disk full) must leave no partial row, even when the truncate that undoes it
-// also fails, and the failure is reported once per kind, not once per minute (B6).
 func TestShortWriteLeavesNoPartialRow(t *testing.T) {
 	dir := t.TempDir()
 	c := &fakeClock{}
 	s := open(t, dir, c)
 	defer s.Close()
 	add(t, s, c, "m", t0, 10)
-	add(t, s, c, "m", t0+minuteMS, 20) // commits minute 0
+	add(t, s, c, "m", t0+minuteMS, 20)
 	path := filepath.Join(dir, "m.ndjson")
 
 	s.write = func(f *os.File, b []byte) (int, error) {
@@ -64,7 +60,6 @@ func TestShortWriteLeavesNoPartialRow(t *testing.T) {
 		t.Fatalf("partial row left behind: %q", b)
 	}
 
-	// Space returns: the failed minutes are written first (N17), each on its own line.
 	s.write = func(f *os.File, b []byte) (int, error) { return f.Write(b) }
 	if err := s.Add("m", Point{T: t0 + 6*minuteMS, CPU: ptr(40.0)}); err != nil {
 		t.Fatal(err)
@@ -74,8 +69,6 @@ func TestShortWriteLeavesNoPartialRow(t *testing.T) {
 	}
 }
 
-// A minute that failed to write is retried on the next commit, so it survives a restart; one
-// that keeps failing is given up on after maxTries (skeptic pass 3, N17).
 func TestFailedMinuteIsRetried(t *testing.T) {
 	dir := t.TempDir()
 	c := &fakeClock{}
@@ -89,12 +82,12 @@ func TestFailedMinuteIsRetried(t *testing.T) {
 		return f.Write(b)
 	}
 	c.set(t0 + minuteMS)
-	if err := s.Add("m", Point{T: t0 + minuteMS, CPU: ptr(20.0)}); err == nil { // commits minute 0: fails
+	if err := s.Add("m", Point{T: t0 + minuteMS, CPU: ptr(20.0)}); err == nil {
 		t.Fatal("the failed write returned no error")
 	}
 	failing = false
-	add(t, s, c, "m", t0+2*minuteMS, 30) // commits minute 1: writes 0 and 1
-	if err := s.Close(); err != nil {    // commits minute 2
+	add(t, s, c, "m", t0+2*minuteMS, 30)
+	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
 	s2 := open(t, dir, c)
@@ -103,7 +96,6 @@ func TestFailedMinuteIsRetried(t *testing.T) {
 		t.Fatalf("minutes after restart = %d, want 3", n)
 	}
 
-	// Bounded: the queue never outgrows maxUnwritten.
 	s3 := open(t, t.TempDir(), c)
 	defer s3.Close()
 	s3.write = func(*os.File, []byte) (int, error) { return 0, syscall.EIO }
@@ -115,7 +107,6 @@ func TestFailedMinuteIsRetried(t *testing.T) {
 	}
 }
 
-// A partial row with the next row glued on (left by older versions) loses only the partial one.
 func TestLoadResyncsAfterGluedRow(t *testing.T) {
 	dir := t.TempDir()
 	a := `{"id":"m","t":1791158400000,"cpu":40,"n":1}` + "\n"
@@ -133,8 +124,6 @@ func TestLoadResyncsAfterGluedRow(t *testing.T) {
 	}
 }
 
-// Appends land at the end of the file even when another writer got there between this one's
-// open and its write, so two stores never overwrite each other's rows (skeptic pass 3, N14).
 func TestAppendLandsAtEndOfFile(t *testing.T) {
 	dir := t.TempDir()
 	c := &fakeClock{}

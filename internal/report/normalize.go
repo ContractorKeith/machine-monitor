@@ -1,19 +1,3 @@
-// Normalize rebuilds an untrusted agent report from known fields only, with every value
-// coerced to the expected type and clamped, so the hub only ever stores and streams
-// strings where it expects strings and finite numbers where it expects numbers.
-//
-// Ported from Forward-Future/device-monitor security.js (normalizeReport,
-// normalizeProcesses, isValidId, cleanText) at c3a4c41.
-// MIT License, Copyright (c) 2026 Matt: https://github.com/Forward-Future/device-monitor
-//
-// Matching JavaScript, on purpose:
-//   - Numbers accept JSON numbers and numeric strings as JS Number() parses them
-//     ("12.5", " 7 ", "0x1A", "1e3"); anything else, or a non-finite result, is nil.
-//   - Strings accept any JSON value as JS String() renders it (numbers, booleans,
-//     arrays, "[object Object]"), drop U+0000–U+001F and U+007F, trim JS whitespace,
-//     and are cut at upstream's limits counted in UTF-16 code units, as JS slice does.
-//     Where a cut would split a surrogate pair, the half pair is dropped, so the result
-//     is always valid UTF-8 and never longer than upstream's.
 package report
 
 import (
@@ -30,7 +14,6 @@ import (
 	"unicode/utf16"
 )
 
-// Errors from Normalize.
 var (
 	ErrNotObject    = errors.New("report: not a JSON object")
 	ErrInvalidID    = errors.New("report: invalid id")
@@ -46,27 +29,19 @@ var (
 	jsDecimalRE  = regexp.MustCompile(`^[+-]?(Infinity|\d+\.?\d*([eE][+-]?\d+)?|\.\d+([eE][+-]?\d+)?)$`)
 )
 
-// ValidID reports whether id is an acceptable device id: machine GUID, machine-id or
-// IOPlatformUUID style, 1–64 chars of [A-Za-z0-9._:-] starting with a letter or digit.
 func ValidID(id string) bool { return idRE.MatchString(id) }
 
-// ValidAction reports whether a is a remote action the hub may queue.
 func ValidAction(a string) bool { return a == "sleep" || a == "restart" || a == "shutdown" }
 
-// Normalize decodes a raw report body and rebuilds it from known fields (normalizeReport).
-// It fails if the body isn't a JSON object or its id isn't ValidID, as upstream's
-// handleReport does. Token is dropped. Processes is normalized separately
-// (normalizeProcesses): nil when the agent didn't send an array, so the hub should move
-// it out before storing the report.
 func Normalize(raw []byte) (Report, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.UseNumber() // keep 1e999 decodable; num() turns it into nil as JS does with Infinity
+	dec.UseNumber()
 	var v any
 	if err := dec.Decode(&v); err != nil {
 		return Report{}, err
 	}
 	if _, err := dec.Token(); err != io.EOF {
-		return Report{}, ErrTrailingData // JSON.parse rejects anything after the value
+		return Report{}, ErrTrailingData
 	}
 	b, ok := v.(map[string]any)
 	if !ok {
@@ -173,7 +148,6 @@ func normalizeReport(id string, b map[string]any) Report {
 	for _, f := range objs(b["fans"], 64) {
 		r.Fans = append(r.Fans, Fan{Name: str(f["name"], 80), RPM: num(f["rpm"], 0, 1e5)})
 	}
-	// AI: nil means the agent doesn't check, empty means nothing is loaded.
 	if _, ok := b["ai"].([]any); ok {
 		r.AI = []AIGroup{}
 		for _, g := range objs(b["ai"], 8) {
@@ -191,7 +165,6 @@ func normalizeReport(id string, b map[string]any) Report {
 	}
 	r.Processes = normalizeProcesses(b["processes"])
 
-	// Additive fields, which upstream's hub drops. Same rules as their upstream siblings.
 	if a := str(b["agent"], 64); a != nil {
 		r.Agent = *a
 	}
@@ -203,8 +176,6 @@ func normalizeReport(id string, b map[string]any) Report {
 	return r
 }
 
-// normalizeProcesses rebuilds the processes list, sent only while someone has the
-// Processes panel open. nil when v isn't an array; rows without a pid or name are dropped.
 func normalizeProcesses(v any) []Process {
 	if _, ok := v.([]any); !ok {
 		return nil
@@ -224,12 +195,8 @@ func normalizeProcesses(v any) []Process {
 	return out
 }
 
-// CleanText is upstream's cleanText: v as JS String() renders it, cleaned by the shared
-// textclean policy (beyond upstream: escape sequences, bidi, invisible characters), trimmed, cut to limit UTF-16 code units. nil for null or an empty result.
-// v is a value from encoding/json (decoded with or without UseNumber).
 func CleanText(v any, limit int) *string { return str(v, limit) }
 
-// obj returns v as a JSON object, or an empty one (upstream isObj(v) ? v : {}).
 func obj(v any) map[string]any {
 	if m, ok := v.(map[string]any); ok {
 		return m
@@ -237,7 +204,6 @@ func obj(v any) map[string]any {
 	return map[string]any{}
 }
 
-// list returns the first limit elements of v if it's an array, else nothing.
 func list(v any, limit int) []any {
 	a, _ := v.([]any)
 	if len(a) > limit {
@@ -246,7 +212,6 @@ func list(v any, limit int) []any {
 	return a
 }
 
-// objs is list(v, limit).filter(isObj): elements past limit are cut before filtering.
 func objs(v any, limit int) []map[string]any {
 	var out []map[string]any
 	for _, e := range list(v, limit) {
@@ -257,7 +222,6 @@ func objs(v any, limit int) []map[string]any {
 	return out
 }
 
-// str is upstream's str(v, max).
 func str(v any, limit int) *string {
 	if v == nil {
 		return nil
@@ -270,13 +234,12 @@ func str(v any, limit int) *string {
 	return Ptr(cutUTF16(s, limit))
 }
 
-// cutUTF16 keeps the first limit UTF-16 code units of s, never splitting a surrogate pair.
 func cutUTF16(s string, limit int) string {
 	n := 0
 	for i, r := range s {
 		w := utf16.RuneLen(r)
 		if w < 0 {
-			w = 1 // invalid UTF-8 never comes out of encoding/json, but count it like U+FFFD
+			w = 1
 		}
 		if n+w > limit {
 			return s[:i]
@@ -286,17 +249,16 @@ func cutUTF16(s string, limit int) string {
 	return s
 }
 
-// jsString renders a decoded JSON value as JS String() does.
 func jsString(v any) string {
 	switch x := v.(type) {
 	case nil:
-		return "" // only reachable inside arrays: String([null]) is ""
+		return ""
 	case string:
 		return x
 	case bool:
 		return strconv.FormatBool(x)
 	case json.Number:
-		f, _ := strconv.ParseFloat(string(x), 64) // out-of-range gives ±Inf or ±0, as JS does
+		f, _ := strconv.ParseFloat(string(x), 64)
 		return jsNumberString(f)
 	case float64:
 		return jsNumberString(x)
@@ -311,7 +273,6 @@ func jsString(v any) string {
 	}
 }
 
-// jsNumberString formats f as JS Number.prototype.toString() does.
 func jsNumberString(f float64) string {
 	switch {
 	case math.IsNaN(f):
@@ -326,14 +287,12 @@ func jsNumberString(f float64) string {
 	if a := math.Abs(f); a >= 1e-6 && a < 1e21 {
 		return strconv.FormatFloat(f, 'f', -1, 64)
 	}
-	// Go writes 1e-07 and 1e+21; JS writes 1e-7 and 1e+21.
 	s := strconv.FormatFloat(f, 'e', -1, 64)
 	mant, exp, _ := strings.Cut(s, "e")
 	sign, digits := exp[:1], strings.TrimLeft(exp[1:], "0")
 	return mant + "e" + sign + digits
 }
 
-// num is upstream's num(v, min, max): a finite number clamped to [lo, hi], or nil.
 func num(v any, lo, hi float64) *float64 {
 	var n float64
 	switch x := v.(type) {
@@ -354,12 +313,11 @@ func num(v any, lo, hi float64) *float64 {
 	}
 	n = math.Min(hi, math.Max(lo, n))
 	if n == 0 {
-		n = 0 // -0 would encode as "-0"; JSON.stringify writes 0
+		n = 0
 	}
 	return &n
 }
 
-// jsNumber converts a string as JS Number(s) does; NaN when it isn't a number.
 func jsNumber(s string) float64 {
 	s = strings.TrimFunc(s, isJSSpace)
 	if s == "" {
@@ -377,7 +335,6 @@ func jsNumber(s string) float64 {
 		}
 		if base != 0 {
 			digits := s[2:]
-			// big.Int.SetString would accept a sign or underscores; JS doesn't.
 			if strings.ContainsAny(digits, "+-_") {
 				return math.NaN()
 			}
@@ -398,12 +355,10 @@ func jsNumber(s string) float64 {
 	case "-Infinity":
 		return math.Inf(-1)
 	}
-	f, _ := strconv.ParseFloat(s, 64) // out-of-range gives ±Inf or ±0, as JS does
+	f, _ := strconv.ParseFloat(s, 64)
 	return f
 }
 
-// isJSSpace is the set String.prototype.trim removes: WhiteSpace and LineTerminator.
-// It differs from unicode.IsSpace by including U+FEFF and excluding U+0085.
 func isJSSpace(r rune) bool {
 	switch r {
 	case '\t', '\n', '\v', '\f', '\r', ' ', 0xa0, 0x1680, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0xfeff:

@@ -20,8 +20,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// ---- fakes -------------------------------------------------------------------------------
-
 type fakeClock struct{ t time.Time }
 
 func (c *fakeClock) now() time.Time           { return c.t }
@@ -33,7 +31,7 @@ type fakeEnergy struct {
 	watts *float64
 	cost  Cost
 	ok    bool
-	calls int // Watts calls
+	calls int
 }
 
 func (f *fakeEnergy) Watts(string, *report.Report) *float64 { f.calls++; return f.watts }
@@ -44,7 +42,6 @@ type sent struct {
 	body map[string]any
 }
 
-// fakeDoer records requests and answers with status.
 type fakeDoer struct {
 	mu     sync.Mutex
 	status int
@@ -80,8 +77,6 @@ type harness struct {
 	msgs    []Message
 }
 
-// newHarness builds an engine with one device "pc1" (named "Workstation") and the given
-// settings JSON ("" for defaults).
 func newHarness(t *testing.T, settings string) *harness {
 	t.Helper()
 	h := &harness{clock: newClock(), energy: &fakeEnergy{}, doer: &fakeDoer{}}
@@ -107,7 +102,6 @@ func newHarness(t *testing.T, settings string) *harness {
 	return h
 }
 
-// events returns the alert events broadcast since the last call.
 func (h *harness) events() []Event {
 	var out []Event
 	for _, m := range h.msgs {
@@ -144,10 +138,6 @@ func expectNone(t *testing.T, h *harness) {
 	}
 }
 
-// ---- rule types --------------------------------------------------------------------------
-
-// Each metric rule: fires only after its minutes over the threshold, holds inside the
-// hysteresis band, resolves below it.
 func TestMetricRulesFireAndResolve(t *testing.T) {
 	cases := []struct {
 		typ               string
@@ -170,7 +160,7 @@ func TestMetricRulesFireAndResolve(t *testing.T) {
 		}, 95, 88, 86, "Workstation: Memory use 95%", "Workstation: Memory use back to normal"},
 		{TypeDisk, 90, func(r *report.Report, _ *harness, v float64) {
 			r.Disks = []report.Disk{
-				{Name: report.Ptr("/boot"), Total: report.Ptr(5e8), Used: report.Ptr(5e8)}, // ignored: under 1 GB
+				{Name: report.Ptr("/boot"), Total: report.Ptr(5e8), Used: report.Ptr(5e8)},
 				{Name: report.Ptr("/"), Total: report.Ptr(100e9), Used: report.Ptr(v * 1e9)},
 			}
 		}, 95, 89.5, 88, "Workstation: disk / is 95% full", "Workstation: disk space back under 90%"},
@@ -186,7 +176,7 @@ func TestMetricRulesFireAndResolve(t *testing.T) {
 				h.e.OnReport("pc1", r)
 			}
 			send(c.over)
-			expectNone(t, h) // not over for 2 min yet
+			expectNone(t, h)
 			h.clock.add(119 * time.Second)
 			send(c.over)
 			expectNone(t, h)
@@ -200,9 +190,9 @@ func TestMetricRulesFireAndResolve(t *testing.T) {
 				t.Fatalf("active = %+v", a)
 			}
 			send(c.over)
-			expectNone(t, h) // fires once
+			expectNone(t, h)
 			send(c.band)
-			expectNone(t, h) // under the threshold but inside hysteresis
+			expectNone(t, h)
 			send(c.under)
 			expectOne(t, h, Resolved, c.resolved)
 			if a := h.e.Active(); len(a) != 0 {
@@ -217,7 +207,7 @@ func TestDurationRestartsWhenValueDrops(t *testing.T) {
 	cpu := func(v float64) { h.e.OnReport("pc1", &report.Report{CPU: report.CPU{Usage: &v}}) }
 	cpu(90)
 	h.clock.add(90 * time.Second)
-	cpu(50) // dips: the 2 minutes start over
+	cpu(50)
 	h.clock.add(30 * time.Second)
 	cpu(90)
 	h.clock.add(90 * time.Second)
@@ -230,7 +220,7 @@ func TestDurationRestartsWhenValueDrops(t *testing.T) {
 
 func TestMissingMetricIsIgnored(t *testing.T) {
 	h := newHarness(t, rule(TypeCPUTemp, 50, 0))
-	h.e.OnReport("pc1", &report.Report{}) // nil temp, never treated as 0
+	h.e.OnReport("pc1", &report.Report{})
 	h.e.OnReport("pc1", &report.Report{Memory: report.Memory{Total: report.Ptr(8e9)}})
 	expectNone(t, h)
 	if a := h.e.Active(); len(a) != 0 {
@@ -299,7 +289,6 @@ func TestDailyCostFiresOncePerDay(t *testing.T) {
 	h.e.CheckCost()
 	expectNone(t, h)
 
-	// Next day: the alert quietly clears, then fires again if still over.
 	h.clock.add(24 * time.Hour)
 	h.energy.cost.Amount = 0.1
 	h.e.CheckCost()
@@ -314,7 +303,7 @@ func TestDailyCostFiresOncePerDay(t *testing.T) {
 
 func TestDailyCostNoPriceSet(t *testing.T) {
 	h := newHarness(t, rule(TypeDailyCost, 1, 0))
-	h.energy.cost = Cost{Amount: 99, Currency: "USD"} // ok false: no price configured
+	h.energy.cost = Cost{Amount: 99, Currency: "USD"}
 	h.e.CheckCost()
 	expectNone(t, h)
 }
@@ -332,14 +321,12 @@ func TestUpdateForgetsChangedRules(t *testing.T) {
 	h.e.OnReport("pc1", &report.Report{CPU: report.CPU{Usage: report.Ptr(99.0)}})
 	expectOne(t, h, Firing, "Workstation: CPU load 99%")
 
-	// Same rule re-sent: still firing.
 	if _, err := h.e.Update([]byte(rule(TypeCPU, 50, 0))); err != nil {
 		t.Fatal(err)
 	}
 	if len(h.e.Active()) != 1 {
 		t.Fatal("unchanged rule lost its state")
 	}
-	// Threshold changed: state dropped, no resolved event.
 	if _, err := h.e.Update([]byte(rule(TypeCPU, 60, 0))); err != nil {
 		t.Fatal(err)
 	}
@@ -391,8 +378,6 @@ func TestFahrenheitWording(t *testing.T) {
 	}
 }
 
-// ---- delivery ----------------------------------------------------------------------------
-
 const channels = `"channels":{"ntfy":{"enabled":true,"topic":"my-alerts","email":"me@example.com"},
 	"webhook":{"enabled":true,"url":"https://discord.example/api/webhooks/1/x"}}`
 
@@ -416,7 +401,6 @@ func TestDeliveryPayloads(t *testing.T) {
 		t.Fatalf("webhook: %+v", w)
 	}
 
-	// Resolved: lower priority; and nothing at all when notifyResolved is off.
 	h.e.OnReport("pc1", &report.Report{CPU: report.CPU{Usage: report.Ptr(1.0)}})
 	h.e.Wait()
 	if reqs = h.doer.sent(); len(reqs) != 4 || reqs[2].body["priority"] != 3.0 {
@@ -441,7 +425,7 @@ func TestNotifyResolvedOff(t *testing.T) {
 
 func TestTestAlertAndHTTPErrors(t *testing.T) {
 	h := newHarness(t, `{"rules":[],`+channels+`}`)
-	h.doer.status = http.StatusFound // a redirect is a failure, never followed
+	h.doer.status = http.StatusFound
 	d := h.e.Test(context.Background())
 	if d.Ntfy == nil || d.Ntfy.OK || d.Ntfy.Error != "HTTP 302 Found" || d.Webhook == nil || d.Webhook.OK {
 		t.Fatalf("delivery = %+v %+v", d.Ntfy, d.Webhook)
@@ -452,7 +436,6 @@ func TestTestAlertAndHTTPErrors(t *testing.T) {
 	}
 }
 
-// Acceptance: a webhook to 127.0.0.1 is refused, both when saved and when sent.
 func TestWebhookToLoopbackRefused(t *testing.T) {
 	for _, u := range []string{"http://127.0.0.1:8080/hook", "http://[::1]/x", "http://localhost/x",
 		"http://foo.localhost/x", "http://0.0.0.0/x", "http://[::ffff:127.0.0.1]/x", "http://169.254.169.254/x",
@@ -472,14 +455,12 @@ func TestWebhookToLoopbackRefused(t *testing.T) {
 	}
 }
 
-// Acceptance: a webhook to a name that resolves to 169.254.169.254 is refused.
 func TestWebhookToNameResolvingToMetadataRefused(t *testing.T) {
 	h := newHarness(t, `{"rules":[],"channels":{"webhook":{"enabled":true,"url":"https://metadata.example/hook"}}}`)
 	h.e.opt.LookupIP = func(_ context.Context, host string) ([]netip.Addr, error) {
 		if host != "metadata.example" {
 			t.Errorf("looked up %q", host)
 		}
-		// One public, one metadata: any blocked address refuses.
 		return []netip.Addr{netip.MustParseAddr("93.184.216.34"), netip.MustParseAddr("169.254.169.254")}, nil
 	}
 	d := h.e.Test(context.Background())
@@ -507,7 +488,6 @@ func TestPrivateAddresses(t *testing.T) {
 	if !blockedAddr(netip.MustParseAddr("100.101.102.103"), true) {
 		t.Fatal("BlockPrivate didn't block a tailnet (CGNAT) address")
 	}
-	// Tailscale's on-host service (quad-100) is always refused: it is this machine.
 	for _, a := range []string{"127.0.0.1", "0.1.2.3", "169.254.169.254", "::1", "::", "fe80::1", "::ffff:169.254.169.254", "::127.0.0.1",
 		"100.100.100.100", "::ffff:100.100.100.100", "fd7a:115c:a1e0::53"} {
 		if !blockedAddr(netip.MustParseAddr(a), false) {
@@ -521,7 +501,6 @@ func TestPrivateAddresses(t *testing.T) {
 	}
 }
 
-// The default client re-checks the address it dials, so DNS rebinding can't reach loopback.
 func TestGuardedClientRefusesLoopbackDial(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Error("request reached the loopback server")
@@ -533,8 +512,6 @@ func TestGuardedClientRefusesLoopbackDial(t *testing.T) {
 	}
 }
 
-// The hub's own LAN and Tailscale addresses are refused, as a literal, behind a name, and by
-// the dial-time check.
 func TestWebhookToOwnAddressRefused(t *testing.T) {
 	h := newHarness(t, "")
 	h.e.opt.LocalAddrs = func() []netip.Addr {
@@ -559,11 +536,8 @@ func TestWebhookToOwnAddressRefused(t *testing.T) {
 	}
 }
 
-// allowAll lets the guarded client reach httptest servers on loopback, so the tests below
-// exercise only its redirect and proxy rules.
 func allowAll(netip.Addr) bool { return false }
 
-// A redirect is reported, never followed.
 func TestGuardedClientDoesNotFollowRedirects(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Error("redirect target was requested")
@@ -584,15 +558,12 @@ func TestGuardedClientDoesNotFollowRedirects(t *testing.T) {
 	}
 }
 
-// The client never uses a proxy: one would hide where the request really goes.
 func TestGuardedClientIgnoresProxyEnvironment(t *testing.T) {
 	tr := newGuardedClient(allowAll).Transport.(*http.Transport)
 	if tr.Proxy != nil {
 		t.Fatal("guarded client has a proxy function")
 	}
 }
-
-// ---- settings and persistence ------------------------------------------------------------
 
 func TestDefaultSettings(t *testing.T) {
 	s := DefaultSettings()
@@ -673,7 +644,6 @@ func TestPersistence(t *testing.T) {
 	if evs := e2.Events(0); len(evs) != 1 || evs[0].State != Firing {
 		t.Fatalf("log after reload = %+v", evs)
 	}
-	// Still firing after reload, so it resolves rather than firing again.
 	var got []Message
 	e2.opt.Broadcast = func(m Message) { got = append(got, m) }
 	e2.OnReport("pc1", &report.Report{CPU: report.CPU{Usage: report.Ptr(1.0)}})
@@ -689,7 +659,6 @@ func TestPersistence(t *testing.T) {
 	}
 }
 
-// A burst of events writes alerts-log.json once, logDelay later; Wait writes it at once.
 func TestLogWriteDebounced(t *testing.T) {
 	paths := config.At(t.TempDir())
 	clock := newClock()
@@ -711,7 +680,6 @@ func TestLogWriteDebounced(t *testing.T) {
 		t.Fatalf("log after Wait = %s", b)
 	}
 
-	// Without Wait, the timer writes it.
 	e.OnReport("pc1", &report.Report{CPU: report.CPU{Usage: report.Ptr(1.0)}})
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -725,14 +693,12 @@ func TestLogWriteDebounced(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	// Clearing writes at once.
 	e.ClearLog()
 	if b, _ = os.ReadFile(paths.AlertsLog); string(b) != "[]" {
 		t.Fatalf("log after clear = %s", b)
 	}
 }
 
-// The power estimate is computed only when an enabled power rule covers the device.
 func TestWattsOnlyForPowerRules(t *testing.T) {
 	h := newHarness(t, rule(TypeCPU, 50, 0))
 	h.e.OnReport("pc1", &report.Report{})
@@ -755,7 +721,6 @@ func TestWattsOnlyForPowerRules(t *testing.T) {
 	}
 }
 
-// Without a hub URL, click and link still go out (upstream sends the bare path).
 func TestLinkWithoutHubURL(t *testing.T) {
 	h := newHarness(t, `{"rules":[],`+channels+`}`)
 	h.e.opt.HubURL = nil
@@ -781,8 +746,6 @@ func TestMoney(t *testing.T) {
 	}
 }
 
-// After a hub restart every device looks offline; none of them coming back is news, since the
-// hub never saw them go (skeptic pass 2, restart flood).
 func TestNoBackOnlineForDevicesNeverSeenOffline(t *testing.T) {
 	clock := newClock()
 	dev := []Device{{ID: "pc1", Name: "Box", LastSeen: clock.t.Add(-time.Minute)}}
@@ -808,7 +771,6 @@ func TestNoBackOnlineForDevicesNeverSeenOffline(t *testing.T) {
 	}
 }
 
-// A failed delivery logs and reports the host, never the path or query that holds the secret.
 func TestDeliveryErrorsHideWebhookSecret(t *testing.T) {
 	h := newHarness(t, "")
 	h.e.client = errDoer{}
@@ -833,8 +795,6 @@ func (errDoer) Do(r *http.Request) (*http.Response, error) {
 	return nil, &url.Error{Op: "Post", URL: r.URL.String(), Err: errors.New("connection refused")}
 }
 
-// An offline alert announced before a hub restart still gets "back online" when the device
-// returns afterwards (skeptic pass 3, N10).
 func TestBackOnlineAfterRestartForAnnouncedOffline(t *testing.T) {
 	paths := config.At(t.TempDir())
 	clock := newClock()
@@ -851,7 +811,7 @@ func TestBackOnlineAfterRestartForAnnouncedOffline(t *testing.T) {
 		t.Fatalf("offline alert not announced: %+v", a)
 	}
 
-	e2 := New(opts) // the hub restarts; the device is still offline
+	e2 := New(opts)
 	var got []Message
 	e2.opt.Broadcast = func(m Message) { got = append(got, m) }
 	dev[0].Online = true
@@ -862,7 +822,6 @@ func TestBackOnlineAfterRestartForAnnouncedOffline(t *testing.T) {
 	}
 }
 
-// A URL quoted inside the inner error (a bad redirect Location) is cut down too.
 func TestDeliveryErrorsScrubInnerURLs(t *testing.T) {
 	h := newHarness(t, "")
 	h.e.client = doerFunc(func(r *http.Request) (*http.Response, error) {

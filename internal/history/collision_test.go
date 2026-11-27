@@ -57,7 +57,6 @@ func TestDeviceFilenamesPortableAndDistinct(t *testing.T) {
 	}
 }
 
-// Interrupted migration must leave the mixed source intact until other IDs are safe.
 func TestCollisionMigrationFailureIsRetryable(t *testing.T) {
 	for _, live := range []bool{false, true} {
 		t.Run(fmt.Sprintf("continue-reports=%v", live), func(t *testing.T) { testCollisionMigrationRetry(t, live) })
@@ -95,7 +94,6 @@ func testCollisionMigrationRetry(t *testing.T, live bool) {
 			t.Fatal("continued reports destroyed a peer's source")
 		}
 	}
-	// Do not Close: simulate the process ending immediately after the failed migration.
 	if err := os.Remove(blocked); err != nil {
 		t.Fatal(err)
 	}

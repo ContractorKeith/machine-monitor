@@ -1,19 +1,3 @@
-// Package history keeps metric history per device:
-//
-//   - raw samples (every ~2 s) for the last hour, in memory;
-//   - 1-minute averages, plus peaks, for the last 30 days, in memory and appended to
-//     <dir>/<id>.ndjson.
-//
-// The NDJSON lines, the minute aggregation, the same-minute merge after a restart (upstream
-// v1.2.29), the 30-day prune and the downsampling behind GET /api/history/:id all match
-// upstream, so history files move freely between a machine-monitor hub and a device-monitor
-// hub. Times are Unix milliseconds as float64, like upstream's JSON: samples and minutes are
-// whole milliseconds, downsampled buckets may not be.
-//
-// A Store is safe for concurrent use: the hub adds samples while connected TUIs query.
-//
-// Ported from Forward-Future/device-monitor history.js @ c3a4c41
-// (MIT, © 2026 Matt): https://github.com/Forward-Future/device-monitor
 package history
 
 import (
@@ -35,32 +19,25 @@ import (
 )
 
 const (
-	rawMS    = 60 * 60 * 1000           // raw samples kept for an hour
-	minuteMS = 60 * 1000                // minute bucket width
-	keepMS   = 30 * 24 * 60 * 60 * 1000 // minute points kept for 30 days
+	rawMS    = 60 * 60 * 1000
+	minuteMS = 60 * 1000
+	keepMS   = 30 * 24 * 60 * 60 * 1000
 	dayMS    = 24 * 60 * 60 * 1000
 )
 
-// Point is one raw sample, one stored minute, or one downsampled bucket. A nil field is
-// unknown. Raw samples leave the *Max fields nil; minutes and buckets set them to the peak in
-// the bucket. N counts the raw samples behind a stored minute (0 for rows from before upstream
-// stored counts, and for raw samples and buckets).
-//
-// Points returned by a Store share their *float64 values with the store: read them, never
-// write through them.
 type Point struct {
 	T        float64  `json:"t"`
-	CPU      *float64 `json:"cpu"`      // %
-	GPU      *float64 `json:"gpu"`      // % of the main GPU
-	Mem      *float64 `json:"mem"`      // % used
-	CPUTemp  *float64 `json:"cpuTemp"`  // °C
-	GPUTemp  *float64 `json:"gpuTemp"`  // °C
-	GPUPower *float64 `json:"gpuPower"` // W
-	Power    *float64 `json:"power"`    // W, estimated whole-machine draw
-	RX       *float64 `json:"rx"`       // bytes/s
-	TX       *float64 `json:"tx"`       // bytes/s
-	DR       *float64 `json:"dr"`       // disk read bytes/s
-	DW       *float64 `json:"dw"`       // disk write bytes/s
+	CPU      *float64 `json:"cpu"`
+	GPU      *float64 `json:"gpu"`
+	Mem      *float64 `json:"mem"`
+	CPUTemp  *float64 `json:"cpuTemp"`
+	GPUTemp  *float64 `json:"gpuTemp"`
+	GPUPower *float64 `json:"gpuPower"`
+	Power    *float64 `json:"power"`
+	RX       *float64 `json:"rx"`
+	TX       *float64 `json:"tx"`
+	DR       *float64 `json:"dr"`
+	DW       *float64 `json:"dw"`
 
 	CPUMax     *float64 `json:"cpuMax"`
 	GPUMax     *float64 `json:"gpuMax"`
@@ -71,17 +48,14 @@ type Point struct {
 	N int `json:"n,omitempty"`
 }
 
-// fields returns the averaged fields in upstream's FIELDS order.
 func (p *Point) fields() [11]**float64 {
 	return [11]**float64{&p.CPU, &p.GPU, &p.Mem, &p.CPUTemp, &p.GPUTemp, &p.GPUPower, &p.Power, &p.RX, &p.TX, &p.DR, &p.DW}
 }
 
-// peaks returns, in upstream's MAX_FIELDS order, each peak field and the field it peaks.
 func (p *Point) peaks() [5][2]**float64 {
 	return [5][2]**float64{{&p.CPUMax, &p.CPU}, {&p.GPUMax, &p.GPU}, {&p.CPUTempMax, &p.CPUTemp}, {&p.GPUTempMax, &p.GPUTemp}, {&p.PowerMax, &p.Power}}
 }
 
-// Result is the body of GET /api/history/:id. Resolution is the bucket width in ms.
 type Result struct {
 	From       float64 `json:"from"`
 	To         float64 `json:"to"`
@@ -89,9 +63,6 @@ type Result struct {
 	Points     []Point `json:"points"`
 }
 
-// Failed appends are retried on the device's next commit, oldest first so rows stay in order.
-// A minute is given up on after maxTries failed attempts, and at most maxUnwritten are kept,
-// so a disk that never comes back can't grow memory.
 const (
 	maxTries     = 5
 	maxUnwritten = 60
@@ -99,7 +70,7 @@ const (
 
 type retry struct {
 	pts   []Point
-	tries int // failed attempts at pts[0]
+	tries int
 }
 
 type pending struct {
@@ -107,28 +78,24 @@ type pending struct {
 	samples []Point
 }
 
-// Store holds history for every device. Create one with Open.
 type Store struct {
 	dir string
 	now func() time.Time
 
 	mu      sync.RWMutex
-	raw     map[string][]Point // id -> samples (last hour)
-	minutes map[string][]Point // id -> 1-minute points (last 30 days)
+	raw     map[string][]Point
+	minutes map[string][]Point
 	pending map[string]*pending
 
-	unwritten      map[string]*retry                       // id -> minutes whose append failed, oldest first
-	write          func(f *os.File, b []byte) (int, error) // f.Write; replaced in tests to inject short writes
-	failKind       string                                  // write failure last returned by Add; "" when writes work
-	warnings       []string                                // recovery diagnostics from Open; immutable after loading
-	needsRewrite   map[string]bool                         // failed migrations must persist the full loaded history
-	migrationPeers map[string][]string                     // IDs whose legacy source would be replaced by this ID
-	sources        map[string]bool                         // original files retained until migration completes
+	unwritten      map[string]*retry
+	write          func(f *os.File, b []byte) (int, error)
+	failKind       string
+	warnings       []string
+	needsRewrite   map[string]bool
+	migrationPeers map[string][]string
+	sources        map[string]bool
 }
 
-// Open loads every <id>.ndjson in dir (config.Paths.History), creating dir if needed. It
-// drops rows older than 30 days, merges duplicate minutes and rewrites files that needed
-// either. now is the clock for prunes and Recent; nil means time.Now.
 func Open(dir string, now func() time.Time) (*Store, error) {
 	if now == nil {
 		now = time.Now
@@ -143,9 +110,6 @@ func Open(dir string, now func() time.Time) (*Store, error) {
 
 func (s *Store) nowMS() float64 { return float64(s.now().UnixMilli()) }
 
-// safeName escapes bytes outside [a-z0-9_-], including the escape marker itself.
-// Lower-case machine IDs keep their filenames; escaping upper case also prevents
-// collisions on case-insensitive filesystems. Windows device names need an escape too.
 func safeName(id string) string {
 	var b strings.Builder
 	for i := 0; i < len(id); i++ {
@@ -166,7 +130,6 @@ func safeName(id string) string {
 
 func (s *Store) file(id string) string { return filepath.Join(s.dir, safeName(id)+".ndjson") }
 
-// line is one NDJSON row: the device id, then the point.
 type line struct {
 	ID *string `json:"id"`
 	Point
@@ -205,16 +168,12 @@ func (s *Store) load() error {
 			}
 		}
 	}
-	// Finish every canonical file before removing a legacy file. If a write fails,
-	// keep all sources; a completed canonical file wins on retry, preventing double counts.
 	failed := false
 	for _, protectSource := range []bool{false, true} {
 		if failed {
 			break
 		}
 		for id := range rewrite {
-			// A mixed legacy file can itself be one ID's canonical filename. Do not
-			// replace it until the other devices' canonical files are safely written.
 			if (sourceGroups[s.file(id)] > 1) != protectSource {
 				continue
 			}
@@ -230,7 +189,6 @@ func (s *Store) load() error {
 	return err
 }
 
-// Retire legacy sources only after their complete device histories are durable.
 func (s *Store) cleanupSources() error {
 	for id := range s.minutes {
 		delete(s.sources, s.file(id))
@@ -246,22 +204,17 @@ func (s *Store) cleanupSources() error {
 	return errors.Join(errs...)
 }
 
-// Warnings reports recovered corrupt records without making readable history an error.
 func (s *Store) Warnings() []string { return slices.Clone(s.warnings) }
 
-// file is one parsed <id>.ndjson: the minutes still within 30 days, merged, and whether the
-// file on disk differs from them (expired lines, duplicate minutes or a partial last line).
 type file struct {
 	path     string
 	id       string
 	pts      []Point
 	dirty    bool
 	skipped  int
-	shadowed bool // a canonical file already holds this ID's migrated history
+	shadowed bool
 }
 
-// readFiles parses every <id>.ndjson in dir, dropping rows before cutoff, without changing
-// anything on disk. Unreadable files are skipped and their errors joined.
 func readFiles(dir string, cutoff float64) ([]file, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -298,8 +251,6 @@ func readFiles(dir string, cutoff float64) ([]file, error) {
 	return files, errors.Join(errs...)
 }
 
-// parseFiles separates rows by device before merging minutes, including legacy files
-// shared by colliding IDs. Invalid records are recovered where possible and counted.
 func parseFiles(data []byte, cutoff float64, fallback string) []file {
 	groups := map[string][]Point{}
 	skipped := 0
@@ -348,7 +299,6 @@ func parseFiles(data []byte, cutoff float64, fallback string) []file {
 	return out
 }
 
-// mergeMinutes never combines records belonging to different device IDs.
 func mergeMinutes(pts []Point) []Point {
 	slices.SortStableFunc(pts, func(a, b Point) int {
 		if a.T < b.T {
@@ -370,11 +320,8 @@ func mergeMinutes(pts []Point) []Point {
 	return out
 }
 
-// rowStart begins every row encodeLine writes.
 var rowStart = []byte(`{"id":"`)
 
-// parseLine decodes one row. A row cut short by a crash or a full disk may have the next
-// row glued onto it; then it re-syncs at the next row start, so the following minute survives.
 func parseLine(b []byte) (l line, ok bool) {
 	for {
 		l = line{}
@@ -392,17 +339,10 @@ func parseLine(b []byte) (l line, ok bool) {
 	}
 }
 
-// Snapshot is a read-only copy of a history directory's stored minutes, for tools such as
-// export that run beside a live hub. Create one with ReadDir.
 type Snapshot struct {
 	minutes map[string][]Point
 }
 
-// ReadDir loads every <id>.ndjson in dir with the same parsing, merging and 30-day cutoff as
-// Open, but never writes, renames, removes or creates anything, so it is safe while a hub
-// appends to the same files. A missing dir is an empty snapshot. Unreadable files are skipped
-// and their errors returned with the snapshot. now is the clock for the cutoff; nil means
-// time.Now.
 func ReadDir(dir string, now func() time.Time) (*Snapshot, error) {
 	if now == nil {
 		now = time.Now
@@ -420,7 +360,6 @@ func ReadDir(dir string, now func() time.Time) (*Snapshot, error) {
 	return snap, err
 }
 
-// IDs returns the ids of every device with stored minutes, sorted.
 func (s *Snapshot) IDs() []string {
 	ids := make([]string, 0, len(s.minutes))
 	for id := range s.minutes {
@@ -430,24 +369,18 @@ func (s *Snapshot) IDs() []string {
 	return ids
 }
 
-// Has reports whether id has any stored minutes.
 func (s *Snapshot) Has(id string) bool { return len(s.minutes[id]) > 0 }
 
-// MinutePoints returns id's stored minutes with from <= T <= to, oldest first.
 func (s *Snapshot) MinutePoints(id string, from, to float64) []Point {
 	return filter(s.minutes[id], func(p Point) bool { return p.T >= from && p.T <= to })
 }
 
-// encodeLine renders one row exactly as upstream's JSON.stringify({ id, ...p }) does.
 func encodeLine(id string, p Point) []byte {
-	b, _ := json.Marshal(line{ID: &id, Point: p}) // cannot fail: no maps, no NaN (inputs are finite)
+	b, _ := json.Marshal(line{ID: &id, Point: p})
 	return append(b, '\n')
 }
 
-// rewrite replaces id's file with its in-memory minutes. Caller holds mu (or is load).
 func (s *Store) rewrite(id string) error {
-	// A hub may keep collecting after migration fails. Preserve the mixed source
-	// until all peers have their own complete file, including when this ID reports first.
 	for _, peer := range s.migrationPeers[id] {
 		if s.needsRewrite[peer] {
 			if len(s.migrationPeers[peer]) > 0 {
@@ -468,17 +401,12 @@ func (s *Store) writeMinutes(id string) error {
 	}
 	err := config.WriteFile0600(s.file(id), buf.Bytes())
 	if err == nil {
-		delete(s.unwritten, id) // the file now holds every minute in memory
+		delete(s.unwritten, id)
 		delete(s.needsRewrite, id)
 	}
 	return err
 }
 
-// appendLine adds one row to id's file, all of it or nothing. Appends can't go through
-// WriteFile0600 (it replaces the whole file, which at 30 days is ~40k rows per minute), so
-// the file is opened 0600 with O_APPEND: every write lands at the end, even if another
-// process has appended since. A failed or short write is truncated back to the size before
-// it; if that fails too, the next append starts on a fresh line, and load re-syncs there.
 func (s *Store) appendLine(id string, p Point) error {
 	path := s.file(id)
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0o600)
@@ -494,7 +422,7 @@ func (s *Store) appendLine(id string, p Point) error {
 	if size := fi.Size(); size > 0 {
 		var last [1]byte
 		if _, err := f.ReadAt(last[:], size-1); err == nil && last[0] != '\n' {
-			b = append([]byte{'\n'}, b...) // an earlier write was cut short
+			b = append([]byte{'\n'}, b...)
 		}
 	}
 	n, err := s.write(f, b)
@@ -508,8 +436,6 @@ func (s *Store) appendLine(id string, p Point) error {
 	return nil
 }
 
-// truncate cuts path back to size through a second handle: an O_APPEND handle can't truncate
-// on Windows. Best effort; the write error is the one worth reporting.
 func truncate(path string, size int64) {
 	if f, err := os.OpenFile(path, os.O_WRONLY, 0); err == nil {
 		_ = f.Truncate(size)
@@ -517,9 +443,6 @@ func truncate(path string, size int64) {
 	}
 }
 
-// reportErr passes a write error through only the first time a kind of failure shows up
-// (disk full, read-only, ...), so a full disk logs one line, not one per device per minute.
-// A successful write re-arms it.
 func (s *Store) reportErr(err error) error {
 	if err == nil {
 		s.failKind = ""
@@ -537,9 +460,6 @@ func (s *Store) reportErr(err error) error {
 	return err
 }
 
-// Add records one raw sample for id; p.T is when it was taken. Finishing a minute writes it to
-// disk, and only a write failure returns an error; the sample is kept in memory regardless.
-// Values must be finite (the hub's Normalize guarantees it).
 func (s *Store) Add(id string, p Point) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -565,7 +485,6 @@ func (s *Store) Add(id string, p Point) error {
 	return err
 }
 
-// commit turns a finished minute into a stored point. Caller holds mu.
 func (s *Store) commit(id string, pend *pending) error {
 	agg := aggregate(pend.samples, minuteMS, pend.minute)
 	if len(agg) == 0 {
@@ -574,14 +493,14 @@ func (s *Store) commit(id string, pend *pending) error {
 	p := agg[0]
 	p.N = len(pend.samples)
 	mins := s.minutes[id]
-	if n := len(mins); n > 0 && mins[n-1].T == p.T { // same minute as before a restart: merge, don't double-count
+	if n := len(mins); n > 0 && mins[n-1].T == p.T {
 		mins[n-1] = merge(mins[n-1], p)
 		return s.rewrite(id)
 	}
 	mins = append(mins, p)
 	s.minutes[id] = mins
 	cutoff := s.nowMS() - keepMS
-	if mins[0].T < cutoff-dayMS { // prune about once a day
+	if mins[0].T < cutoff-dayMS {
 		i := 0
 		for i < len(mins) && mins[i].T < cutoff {
 			i++
@@ -595,9 +514,6 @@ func (s *Store) commit(id string, pend *pending) error {
 	return s.appendRetrying(id, p)
 }
 
-// appendRetrying appends p to id's file after any earlier minutes whose append failed. The
-// first failure stops the run, so nothing is written out of order, and the rest wait for the
-// next commit.
 func (s *Store) appendRetrying(id string, p Point) error {
 	q := s.unwritten[id]
 	if q == nil {
@@ -625,7 +541,6 @@ func (s *Store) appendRetrying(id string, p Point) error {
 	return nil
 }
 
-// Recent returns id's raw samples from the last d, oldest first (the live dashboard view).
 func (s *Store) Recent(id string, d time.Duration) []Point {
 	since := s.nowMS() - float64(d.Milliseconds())
 	s.mu.RLock()
@@ -633,8 +548,6 @@ func (s *Store) Recent(id string, d time.Duration) []Point {
 	return filter(s.raw[id], func(p Point) bool { return p.T >= since })
 }
 
-// MinutePoints returns id's 1-minute points covering [from, to], including the current,
-// unfinished minute built from raw samples.
 func (s *Store) MinutePoints(id string, from, to float64) []Point {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -651,8 +564,6 @@ func (s *Store) minutePoints(id string, from, to float64) []Point {
 	return append(mins, aggregate(tail, minuteMS, math.Floor(from/minuteMS)*minuteMS)...)
 }
 
-// Query returns id's points covering [from, to], at most about maxPoints of them, using raw
-// samples when the requested resolution is finer than a minute.
 func (s *Store) Query(id string, from, to, maxPoints float64) Result {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -662,8 +573,6 @@ func (s *Store) Query(id string, from, to, maxPoints float64) Result {
 	var points []Point
 	var resolution float64
 	if width < minuteMS {
-		// Fine-grained: raw samples, with minute data filling in before raw starts (e.g. right
-		// after a restart).
 		rawStart := math.Inf(1)
 		if len(raw) > 0 {
 			rawStart = raw[0].T
@@ -679,7 +588,6 @@ func (s *Store) Query(id string, from, to, maxPoints float64) Result {
 			resolution = minuteMS
 		}
 	} else {
-		// Minute data, plus the current unfinished minute from raw so the right edge is live.
 		points = s.minutePoints(id, from, to)
 		if width > minuteMS {
 			points = aggregate(points, width, from)
@@ -687,17 +595,14 @@ func (s *Store) Query(id string, from, to, maxPoints float64) Result {
 		resolution = math.Max(minuteMS, width)
 	}
 	if points == nil {
-		points = []Point{} // upstream sends [], not null
+		points = []Point{}
 	}
 	return Result{From: from, To: to, Resolution: resolution, Points: points}
 }
 
-// Remove forgets id and deletes its file.
 func (s *Store) Remove(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Complete pending migrations first: a retained legacy file could otherwise
-	// resurrect the removed device, or removal could unlink another device's source.
 	for pendingID := range s.needsRewrite {
 		if err := s.rewrite(pendingID); err != nil {
 			return err
@@ -717,8 +622,6 @@ func (s *Store) Remove(id string) error {
 	return nil
 }
 
-// Close writes every unfinished minute to disk. Call it on hub shutdown; a restart in the
-// same minute merges with what Close wrote.
 func (s *Store) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -730,7 +633,6 @@ func (s *Store) Close() error {
 	return errors.Join(errs...)
 }
 
-// filter returns a new slice of the points in ps that keep accepts.
 func filter(ps []Point, keep func(Point) bool) []Point {
 	var out []Point
 	for _, p := range ps {

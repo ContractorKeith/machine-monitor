@@ -10,9 +10,6 @@ import (
 	"testing"
 )
 
-// Fixtures in testdata are hand-built from the JSON each upstream agent prints
-// (agent/agent.sh, agent-macos.sh, agent.ps1 at c3a4c41), plus one report using every
-// field this project adds or that upstream's hub accepts but its agents never send.
 func TestFixturesRoundTrip(t *testing.T) {
 	files, err := filepath.Glob(filepath.Join("testdata", "*.json"))
 	if err != nil || len(files) < 4 {
@@ -26,7 +23,7 @@ func TestFixturesRoundTrip(t *testing.T) {
 			}
 			var r Report
 			dec := json.NewDecoder(bytes.NewReader(in))
-			dec.DisallowUnknownFields() // every key an agent sends must have a field
+			dec.DisallowUnknownFields()
 			if err := dec.Decode(&r); err != nil {
 				t.Fatalf("decode: %v", err)
 			}
@@ -42,7 +39,6 @@ func TestFixturesRoundTrip(t *testing.T) {
 	}
 }
 
-// Nulls stay nil after decoding; they never become 0.
 func TestNullStaysNil(t *testing.T) {
 	in, err := os.ReadFile(filepath.Join("testdata", "machine-monitor.json"))
 	if err != nil {
@@ -61,7 +57,6 @@ func TestNullStaysNil(t *testing.T) {
 	}
 }
 
-// An empty report encodes unknown metrics as null, and agent-only fields not at all.
 func TestZeroReportEncodesNull(t *testing.T) {
 	out, err := json.Marshal(Report{ID: "x", Platform: PlatformLinux})
 	if err != nil {
@@ -83,8 +78,6 @@ func TestZeroReportEncodesNull(t *testing.T) {
 	}
 }
 
-// generic decodes JSON to plain values and drops null object keys, since null and a
-// missing key mean the same thing in this schema. Nulls inside arrays are kept.
 func generic(t *testing.T, b []byte) any {
 	t.Helper()
 	var v any

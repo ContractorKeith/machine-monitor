@@ -12,8 +12,6 @@ import (
 	"unicode/utf8"
 )
 
-// TestParity runs every case upstream security.js was run on (testdata/parity/gen.js) and
-// checks Normalize produces the same report and processes, key for key.
 func TestParity(t *testing.T) {
 	in, err := os.ReadFile(filepath.Join("testdata", "parity", "cases.json"))
 	if err != nil {
@@ -47,7 +45,7 @@ func TestParity(t *testing.T) {
 				t.Fatalf("Normalize: %v", err)
 			}
 			procs := r.Processes
-			r.Processes, r.Agent, r.NetIfaces = nil, "", nil // not in upstream's report
+			r.Processes, r.Agent, r.NetIfaces = nil, "", nil
 			gotProcs, err := json.Marshal(procs)
 			if err != nil {
 				t.Fatal(err)
@@ -75,7 +73,6 @@ func plain(t *testing.T, b []byte) any {
 	return v
 }
 
-// norm normalizes a report body built from fields, with a valid id added.
 func norm(t *testing.T, fields map[string]any) Report {
 	t.Helper()
 	body := map[string]any{"id": "dev1"}
@@ -108,7 +105,7 @@ func TestNormalizeRejects(t *testing.T) {
 		{`{"id":"` + strings.Repeat("a", 65) + `"}`, ErrInvalidID},
 		{`{"id":"x"} {}`, ErrTrailingData},
 		{`{"id":"x"}]`, ErrTrailingData},
-		{`{"id":"x"`, nil}, // syntax error, not a sentinel
+		{`{"id":"x"`, nil},
 		{``, nil},
 	} {
 		_, err := Normalize([]byte(c.body))
@@ -138,7 +135,6 @@ func TestValidAction(t *testing.T) {
 	}
 }
 
-// numField maps a field path to how to read it back, its upstream range and a body for it.
 type numField struct {
 	name   string
 	lo, hi float64
@@ -157,7 +153,6 @@ func numFields() []numField {
 			return map[string]any{k: []any{m}}
 		}
 	}
-	// processes.pid is in TestProcesses: a nil pid drops the row.
 	return []numField{
 		{"uptime", 0, 1e10, func(v any) map[string]any { return map[string]any{"uptime": v} }, func(r Report) *float64 { return r.Uptime }},
 		{"power.cpu", 0, 5000, in("power", "cpu"), func(r Report) *float64 { return r.Power.CPU }},
@@ -197,8 +192,6 @@ func numFields() []numField {
 	}
 }
 
-// Every numeric field clamps to its upstream range, accepts numeric strings and turns
-// anything non-numeric into nil.
 func TestNumberClamps(t *testing.T) {
 	for _, f := range numFields() {
 		mid := (f.lo + math.Min(f.hi, 100)) / 2
@@ -235,7 +228,6 @@ func fmtp[T any](p *T) any {
 	return *p
 }
 
-// JS Number() parsing of strings, through num.
 func TestNumberStrings(t *testing.T) {
 	nan := math.NaN()
 	for s, want := range map[string]float64{
@@ -260,7 +252,6 @@ func TestNumberStrings(t *testing.T) {
 	}
 }
 
-// Non-finite JSON numbers (1e999) are nil, and -0 encodes as 0 like JSON.stringify.
 func TestNumberEdges(t *testing.T) {
 	r, err := Normalize([]byte(`{"id":"d","uptime":1e999,"cpu":{"temp":-0,"usage":-1e999},"memory":{"total":1e-999}}`))
 	if err != nil {
@@ -278,7 +269,6 @@ func TestNumberEdges(t *testing.T) {
 	}
 }
 
-// strField is one string field, its upstream limit, a body for it and how to read it back.
 type strField struct {
 	name  string
 	limit int
@@ -326,9 +316,6 @@ func strFields() []strField {
 	}
 }
 
-// Every string field strips control characters, trims, coerces non-strings like JS
-// String() and cuts at its upstream limit. Rows that need the field (ai.app, models.name,
-// processes.name) are dropped when it comes out nil, so only non-nil cases are read back.
 func TestStringFields(t *testing.T) {
 	for _, f := range strFields() {
 		long := strings.Repeat("x", f.limit+10)
@@ -375,24 +362,22 @@ func TestStringFields(t *testing.T) {
 	}
 }
 
-// Limits count UTF-16 code units like JS slice; a surrogate pair is never split.
 func TestStringUTF16Cut(t *testing.T) {
 	for _, c := range []struct {
 		in    string
 		limit int
 		want  string
 	}{
-		{strings.Repeat("é", 70), 64, strings.Repeat("é", 64)},             // BMP: one unit each
-		{strings.Repeat("😀", 40), 64, strings.Repeat("😀", 32)},             // two units each
-		{"a" + strings.Repeat("😀", 40), 64, "a" + strings.Repeat("😀", 31)}, // pair at the cut is dropped
-		{"\xff\xfeab", 64, "ab"}, // invalid UTF-8 is dropped
+		{strings.Repeat("é", 70), 64, strings.Repeat("é", 64)},
+		{strings.Repeat("😀", 40), 64, strings.Repeat("😀", 32)},
+		{"a" + strings.Repeat("😀", 40), 64, "a" + strings.Repeat("😀", 31)},
+		{"\xff\xfeab", 64, "ab"},
 	} {
 		got := str(c.in, c.limit)
 		if got == nil || *got != c.want || !utf8.ValidString(*got) {
 			t.Errorf("str(%q, %d) = %v, want %q", c.in, c.limit, fmtp(got), c.want)
 		}
 	}
-	// JSON with a lone surrogate decodes to U+FFFD and stays valid.
 	r, err := Normalize([]byte(`{"id":"d","hostname":"a\ud800b"}`))
 	if err != nil || r.Hostname == nil || *r.Hostname != "a\ufffdb" {
 		t.Errorf("lone surrogate: %v %v", fmtp(r.Hostname), err)
@@ -446,14 +431,12 @@ func TestLists(t *testing.T) {
 	if want := []string{"sleep", "restart", "shutdown", "sleep"}; !reflect.DeepEqual(r.Actions, want) {
 		t.Errorf("actions = %q, want %q", r.Actions, want)
 	}
-	// Non-arrays become empty lists, never nil, so they encode as [] like upstream.
 	r = norm(t, map[string]any{"features": "procs", "actions": map[string]any{"0": "sleep"}, "macs": 5, "gpus": "x", "disks": nil})
 	for name, l := range map[string]any{"features": r.Features, "actions": r.Actions, "macs": r.MACs, "gpus": r.GPUs, "disks": r.Disks, "temps": r.Temps, "fans": r.Fans, "cores": r.CPU.Cores} {
 		if v := reflect.ValueOf(l); v.IsNil() || v.Len() != 0 {
 			t.Errorf("%s = %#v, want empty non-nil", name, l)
 		}
 	}
-	// Length limits apply before filtering non-objects.
 	for _, c := range []struct {
 		key   string
 		limit int
@@ -602,7 +585,6 @@ func TestProcesses(t *testing.T) {
 	}
 }
 
-// Token and unknown keys are dropped; the additive agent field is cleaned like hostname.
 func TestDropsAndAdditive(t *testing.T) {
 	r := norm(t, map[string]any{"token": "secret", "receivedAt": 5, "agent": " machine-monitor/0.1.0\x00 "})
 	if r.Token != "" {
@@ -623,8 +605,6 @@ func TestDropsAndAdditive(t *testing.T) {
 	}
 }
 
-// FuzzNormalize checks Normalize never panics and its output always holds the invariants
-// the hub relies on, whatever bytes arrive. Seeds: the M0 fixtures and the parity bodies.
 func FuzzNormalize(f *testing.F) {
 	files, _ := filepath.Glob(filepath.Join("testdata", "*.json"))
 	for _, p := range files {
@@ -653,21 +633,18 @@ func FuzzNormalize(f *testing.F) {
 		}
 		out, err := json.Marshal(&r)
 		if err != nil {
-			t.Fatalf("marshal: %v", err) // a NaN or Inf would fail here
+			t.Fatalf("marshal: %v", err)
 		}
 		if !utf8.Valid(out) {
 			t.Fatal("invalid UTF-8 in output")
 		}
 		checkLimits(t, r)
-		// Its own output is always accepted again. (Not byte-identical: like upstream, a
-		// cut can leave trailing space that a second pass trims.)
 		if _, err := Normalize(out); err != nil {
 			t.Fatalf("renormalize: %v", err)
 		}
 	})
 }
 
-// checkLimits asserts list lengths and that no string carries control characters.
 func checkLimits(t *testing.T, r Report) {
 	t.Helper()
 	if len(r.Features) > 8 || len(r.Actions) > 8 || len(r.MACs) > 8 || len(r.CPU.Cores) > 1024 ||
@@ -685,7 +662,6 @@ func checkLimits(t *testing.T, r Report) {
 	}
 }
 
-// U+202E and the other bidi controls are stripped; upstream's cleanText keeps them.
 func TestCleanTextStripsBidi(t *testing.T) {
 	in := "a\u202ecod.exe\u200e\u200f\u202a\u202b\u202c\u202d\u2066\u2067\u2068\u2069b"
 	if got := CleanText(in, 60); got == nil || *got != "acod.exeb" {
@@ -699,7 +675,6 @@ func TestCleanTextStripsBidi(t *testing.T) {
 	}
 }
 
-// The Arabic letter mark, zero-width characters and C1 controls go too (skeptic pass 2, B16).
 func TestCleanTextStripsInvisibles(t *testing.T) {
 	in := "omar\u200bchy\u200c\u200d\u2060\ufeff\u061c\u0080\u009b41m\u009f!"
 	if got := CleanText(in, 60); got == nil || *got != "omarchy41m!" {
@@ -707,7 +682,6 @@ func TestCleanTextStripsInvisibles(t *testing.T) {
 	}
 }
 
-// The integrated flag survives Normalize only as a real boolean true.
 func TestNormalizeKeepsIntegratedFlag(t *testing.T) {
 	r, err := Normalize([]byte(`{"id":"dev-1","gpus":[{"name":"a","integrated":true},{"name":"b","integrated":"yes"},{"name":"c"}]}`))
 	if err != nil {
@@ -718,7 +692,6 @@ func TestNormalizeKeepsIntegratedFlag(t *testing.T) {
 	}
 }
 
-// CleanText uses the shared textclean policy: lookalikes go, joiners stay (skeptic pass 3, N18).
 func TestCleanTextSharedPolicy(t *testing.T) {
 	for in, want := range map[string]string{
 		"a\u2061ㅤᅟ͏︎\U000e0041\u00adb":             "ab",
