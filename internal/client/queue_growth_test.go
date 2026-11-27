@@ -2,7 +2,6 @@ package client
 
 import "testing"
 
-// A blocked consumer must not retain one empty slot for every superseded report.
 func TestCoalescingStorageBoundedWithoutConsumer(t *testing.T) {
 	q := newEventQueue()
 	for range 10000 {

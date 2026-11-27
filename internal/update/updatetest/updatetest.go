@@ -1,6 +1,3 @@
-// Package updatetest is a fake GitHub release server for tests: real archives, a real
-// checksums.txt and a real Sigstore-style bundle signed by a throwaway CA that the returned
-// update.Source trusts.
 package updatetest
 
 import (
@@ -31,7 +28,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/update"
 )
 
-// Release is a fake release server. Change files with Set; re-sign with Sign.
 type Release struct {
 	Server *httptest.Server
 	Source update.Source
@@ -47,8 +43,6 @@ type Release struct {
 	fetched []string
 }
 
-// New serves release tag (e.g. "v1.2.3") with one archive per "goos/goarch" in bins, whose
-// machine-monitor binary has the given contents. checksums.txt is signed for tag.
 func New(t *testing.T, tag string, bins map[string][]byte) *Release {
 	t.Helper()
 	r := &Release{t: t, Tag: tag, Notes: "- Faster charts\n- Fixed a crash", files: map[string][]byte{}}
@@ -99,42 +93,35 @@ func (r *Release) record(req *http.Request) {
 	r.fetched = append(r.fetched, req.URL.Path)
 }
 
-// Fetched lists the request paths served so far, in order.
 func (r *Release) Fetched() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]string(nil), r.fetched...)
 }
 
-// File returns a served file.
 func (r *Release) File(name string) []byte {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.files[name]
 }
 
-// Set replaces (or adds) a served file without touching checksums.txt or its signature.
 func (r *Release) Set(name string, data []byte) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.files[name] = data
 }
 
-// Remove stops serving a file (it 404s), leaving checksums.txt as it is.
 func (r *Release) Remove(name string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.files, name)
 }
 
-// Sign writes checksums.txt.sigstore.json: a leaf certificate for identity issued by caCert,
-// and its signature over the current checksums.txt.
 func (r *Release) Sign(identity string, caKey *ecdsa.PrivateKey, caCert *x509.Certificate) {
 	r.t.Helper()
 	r.SignIssuer(identity, update.GitHubIssuer, caKey, caCert)
 }
 
-// SignIssuer is Sign with the certificate's OIDC issuer set to issuer.
 func (r *Release) SignIssuer(identity, oidcIssuer string, caKey *ecdsa.PrivateKey, caCert *x509.Certificate) {
 	r.t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -179,10 +166,8 @@ func (r *Release) SignIssuer(identity, oidcIssuer string, caKey *ecdsa.PrivateKe
 	r.Set("checksums.txt.sigstore.json", b)
 }
 
-// NewCA is a throwaway CA the Source does not trust, for bad-signature tests.
 func NewCA(t *testing.T) (*ecdsa.PrivateKey, *x509.Certificate) { return newCA(t) }
 
-// CA is the CA the Source trusts.
 func (r *Release) CA() (*ecdsa.PrivateKey, *x509.Certificate) { return r.caKey, r.caCert }
 
 func newCA(t *testing.T) (*ecdsa.PrivateKey, *x509.Certificate) {
@@ -208,7 +193,6 @@ func newCA(t *testing.T) (*ecdsa.PrivateKey, *x509.Certificate) {
 	return key, cert
 }
 
-// checksums is sha256sum output over every archive.
 func (r *Release) checksums() []byte {
 	var names []string
 	for n := range r.files {
@@ -223,8 +207,6 @@ func (r *Release) checksums() []byte {
 	return []byte(b.String())
 }
 
-// Archive builds a release archive (zip for .zip names, else tar.gz) holding a LICENSE and
-// the binary.
 func Archive(t *testing.T, name string, bin []byte) []byte {
 	t.Helper()
 	var buf bytes.Buffer

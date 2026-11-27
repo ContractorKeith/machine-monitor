@@ -10,16 +10,12 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/config"
 )
 
-// Config is client.json: the hub this machine connects to and its key (PLAN §5). Agents and
-// the connected TUI share it.
 type Config struct {
 	Hub       string `json:"hub"`
 	Key       string `json:"key"`
 	DeviceKey string `json:"deviceKey,omitempty"`
 }
 
-// LoadConfig reads client.json. A missing file is an empty Config. Upstream's names for the
-// two fields ("hubUrl", "token") are accepted too.
 func LoadConfig(path string) (Config, error) {
 	b, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -48,7 +44,6 @@ func LoadConfig(path string) (Config, error) {
 	return c, nil
 }
 
-// SaveConfig writes client.json with mode 0600.
 func SaveConfig(path string, c Config) error {
 	b, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {

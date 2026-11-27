@@ -6,12 +6,11 @@ import (
 	"testing"
 )
 
-// The Windows rename-aside path, exercised on every OS.
 func TestReplaceRenameAside(t *testing.T) {
 	dir := t.TempDir()
 	exe := filepath.Join(dir, "machine-monitor.exe")
 	os.WriteFile(exe, []byte("v1"), 0o755)
-	os.WriteFile(exe+".old", []byte("v0"), 0o755) // left by an earlier update
+	os.WriteFile(exe+".old", []byte("v0"), 0o755)
 
 	if err := replace(exe, []byte("v2"), true); err != nil {
 		t.Fatal(err)

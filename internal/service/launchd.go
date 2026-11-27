@@ -12,27 +12,20 @@ import (
 	"time"
 )
 
-// bootstrapRetry is the wait between bootstrap attempts after a bootout; tests shorten it.
 var bootstrapRetry = 500 * time.Millisecond
 
-// launchdLabel is the LaunchAgent label for a role.
 func launchdLabel(r Role) string { return "io.github.contractorkeith.machine-monitor." + string(r) }
 
-// plistPath is ~/Library/LaunchAgents/<label>.plist.
 func (m *Manager) plistPath(r Role) string {
 	return filepath.Join(m.Home, "Library", "LaunchAgents", launchdLabel(r)+".plist")
 }
 
-// logPath is where launchd sends the service's stdout and stderr. path.Join, not
-// filepath: it's a macOS path even when the plist is rendered elsewhere (tests).
 func (m *Manager) logPath(r Role) string {
 	return path.Join(m.DataDir, "logs", string(r)+".log")
 }
 
-// domain is launchctl's per-user GUI domain.
 func (m *Manager) domain() string { return "gui/" + strconv.Itoa(m.UID) }
 
-// LaunchdPlist renders the LaunchAgent for s: start at login, restart if it exits.
 func (m *Manager) LaunchdPlist(s Spec) string {
 	var b strings.Builder
 	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>
@@ -72,12 +65,11 @@ func (m *Manager) LaunchdPlist(s Spec) string {
 	return b.String()
 }
 
-// xmlEscape escapes text for an XML element. Quotes need no escaping there.
 var xmlEscape = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace
 
 func (m *Manager) installLaunchd(ctx context.Context, s Spec, out io.Writer) error {
 	path, label := m.plistPath(s.Role), launchdLabel(s.Role)
-	// launchd opens the log file but won't create its directory.
+
 	if err := os.MkdirAll(filepath.Dir(m.logPath(s.Role)), 0o700); err != nil {
 		return err
 	}
@@ -93,13 +85,13 @@ func (m *Manager) installLaunchd(ctx context.Context, s Spec, out io.Writer) err
 	default:
 		fmt.Fprintf(out, "wrote %s\n", path)
 	}
-	// Unload any previous copy so the new plist takes effect; failing means none was loaded.
+
 	booted := false
 	if _, err := m.run(ctx, "launchctl", "bootout", m.domain()+"/"+label); err == nil {
 		booted = true
 		fmt.Fprintf(out, "ran launchctl bootout %s/%s\n", m.domain(), label)
 	}
-	// bootout returns before the old job is gone, and bootstrap fails until it is: retry.
+
 	for try := 0; ; try++ {
 		_, err := m.run(ctx, "launchctl", "bootstrap", m.domain(), path)
 		if err == nil {

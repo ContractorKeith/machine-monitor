@@ -21,7 +21,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// fakeCollector returns a minimal report for one device.
 type fakeCollector struct{ id string }
 
 func (c fakeCollector) Collect(context.Context) (*report.Report, error) {
@@ -31,7 +30,6 @@ func (c fakeCollector) Collect(context.Context) (*report.Report, error) {
 
 func quiet(string, ...any) {}
 
-// realHub serves a real internal/hub over httptest.
 func realHub(t *testing.T) (*hub.Hub, *httptest.Server) {
 	t.Helper()
 	h, err := hub.New(hub.Options{Paths: config.At(t.TempDir()), Hostname: "testhub", Logf: t.Logf})
@@ -128,18 +126,17 @@ func wrong(code string) string {
 	return "000000"
 }
 
-// fakeHub records every request and answers like a hub whose key is hubKey.
 type fakeHub struct {
 	t      *testing.T
-	hubKey string    // the key this hub proves (and hands out when pairing)
-	procs  bool      // ask for processes in report replies
-	down   bool      // answer every request with 503
-	refuse bool      // answer reports with 401, as for a stale device key
-	full   string    // answer reports with 400 and this error, as for a full hub
-	cmds   []Command // put in the next report reply, then cleared
+	hubKey string
+	procs  bool
+	down   bool
+	refuse bool
+	full   string
+	cmds   []Command
 	mu     sync.Mutex
-	seen   []string // every request: "METHOD path auth body"
-	bodies [][]byte // report bodies
+	seen   []string
+	bodies [][]byte
 }
 
 func (f *fakeHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -200,7 +197,6 @@ func startFake(t *testing.T, f *fakeHub) string {
 	return srv.URL
 }
 
-// waitFor polls cond until it holds or 5 s pass.
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -215,7 +211,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 const ourKey = "0123456789abcdef01234567"
 
 func TestFakeHubNeverGetsKey(t *testing.T) {
-	f := &fakeHub{t: t, hubKey: "ffffffffffffffffffffffff"} // proves a different key
+	f := &fakeHub{t: t, hubKey: "ffffffffffffffffffffffff"}
 	u := startFake(t, f)
 	ctx, cancel := context.WithCancel(context.Background())
 	var logs []string
@@ -242,13 +238,13 @@ func TestFakeHubNeverGetsKey(t *testing.T) {
 	}
 	lmu.Lock()
 	defer lmu.Unlock()
-	if len(logs) != 1 { // the same failure is logged once
+	if len(logs) != 1 {
 		t.Errorf("logs = %v", logs)
 	}
 }
 
 func TestConnectRefusesHubThatCannotProveKey(t *testing.T) {
-	// The server hands out one key when pairing but proves another: it made the key up.
+
 	f := &fakeHub{t: t, hubKey: "ffffffffffffffffffffffff"}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/pair" {
@@ -344,7 +340,6 @@ func TestRecoversWhenHubComesBack(t *testing.T) {
 	f.set(func() { f.down = false })
 	waitFor(t, "reports after recovery", func() bool { return len(f.reports()) >= 2 })
 
-	// A failed report means the next one proves the hub again first.
 	f.set(func() { f.down = true })
 	n := len(f.requests())
 	waitFor(t, "a failed try", func() bool { return len(f.requests()) > n })
@@ -409,7 +404,7 @@ func TestLoadClientMissing(t *testing.T) {
 func TestHubDownLoggedOnce(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	u := srv.URL
-	srv.Close() // nothing listens: every try fails to dial
+	srv.Close()
 	var mu sync.Mutex
 	var logs []string
 	ctx, cancel := context.WithCancel(context.Background())
@@ -471,7 +466,6 @@ func TestPairRetrySignal(t *testing.T) {
 	}
 }
 
-// After a re-pair rotates the key, a running agent tells the user to restart it.
 func TestRefusedKeyMessageSaysRestart(t *testing.T) {
 	f := &fakeHub{t: t, hubKey: ourKey, refuse: true}
 	u := startFake(t, f)
@@ -493,7 +487,6 @@ func TestRefusedKeyMessageSaysRestart(t *testing.T) {
 	}
 }
 
-// A paired agent turned away by a full hub logs the hub's sentence, once.
 func TestFullHubRefusalLoggedOnce(t *testing.T) {
 	const msg = "This hub already has 250 devices, its limit. Remove one (Delete in the TUI) before adding another."
 	u := startFake(t, &fakeHub{t: t, hubKey: ourKey, full: msg})
@@ -508,7 +501,7 @@ func TestFullHubRefusalLoggedOnce(t *testing.T) {
 			mu.Unlock()
 		}})
 	waitFor(t, "refusal logged", func() bool { mu.Lock(); defer mu.Unlock(); return len(logs) > 0 })
-	time.Sleep(100 * time.Millisecond) // many more failed reports
+	time.Sleep(100 * time.Millisecond)
 	mu.Lock()
 	defer mu.Unlock()
 	if len(logs) != 1 || !strings.Contains(logs[0], msg) {

@@ -8,33 +8,21 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/history"
 )
 
-// eventQueue sits between the network reader and the consumer, so a busy consumer never
-// stalls the reader (the hub drops a stream that falls behind). Events that only replace
-// state are merged while they wait: a device's reports into its newest one, status events
-// into one. A busy hub sends one report per device every couple of seconds, so the queue
-// stays about one slot per device however long the consumer takes.
-//
-// A merged event moves to the newer one's place, so newer state always lands last. The
-// connection events and snapshots are barriers that nothing merges across: a report from
-// before a reconnect must not land after the fresh snapshot. Other events (order, rename,
-// remove, alerts) keep their place, and a report merged past one is newer than it anyway.
 type eventQueue struct {
 	mu      sync.Mutex
-	items   []*Event       // nil marks a slot merged into a later one
-	head    int            // items[:head] are delivered
-	live    int            // queued, not yet delivered
-	reports map[string]int // device id -> index of its queued report, since the last barrier
-	status  int            // index of the queued status event since the last barrier, or -1
+	items   []*Event
+	head    int
+	live    int
+	reports map[string]int
+	status  int
 	closed  bool
-	wake    chan struct{} // signalled when an event is queued or the queue closes
+	wake    chan struct{}
 }
 
 func newEventQueue() *eventQueue {
 	return &eventQueue{reports: map[string]int{}, status: -1, wake: make(chan struct{}, 1)}
 }
 
-// push queues e, merging it into a queued event it supersedes. It returns false when more
-// than limit events are waiting (limit < 0: no limit); e is queued either way.
 func (q *eventQueue) push(e Event, limit int) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -44,7 +32,7 @@ func (q *eventQueue) push(e Event, limit int) bool {
 		if e.Device != nil {
 			id = e.Device.ID
 		}
-		if i, ok := q.reports[id]; ok && q.items[i] != nil { // nil: delivered already
+		if i, ok := q.reports[id]; ok && q.items[i] != nil {
 			e.Samples = mergeSamples(q.items[i].Samples, e.Samples)
 			if e.Sample == nil && len(e.Samples) > 0 {
 				e.Sample = &e.Samples[len(e.Samples)-1]
@@ -77,13 +65,11 @@ func (q *eventQueue) push(e Event, limit int) bool {
 	return limit < 0 || q.live <= limit
 }
 
-// drop empties slot i after its event was merged into a newer one.
 func (q *eventQueue) drop(i int) {
 	q.items[i] = nil
 	q.live--
 }
 
-// pop takes the oldest queued event; ok is false when none is queued.
 func (q *eventQueue) pop() (e Event, ok bool, closed bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -101,7 +87,6 @@ func (q *eventQueue) pop() (e Event, ok bool, closed bool) {
 	return Event{}, false, q.closed
 }
 
-// compact reclaims delivered and superseded slots even while the consumer is blocked.
 func (q *eventQueue) compact() {
 	if len(q.items) < 64 || len(q.items) <= 2*q.live {
 		return
@@ -121,7 +106,7 @@ func (q *eventQueue) compact() {
 		if pos, ok := positions[i]; ok {
 			q.reports[id] = pos
 		} else {
-			delete(q.reports, id) // already delivered: nothing to merge into
+			delete(q.reports, id)
 		}
 	}
 	if q.status >= 0 {
@@ -134,7 +119,6 @@ func (q *eventQueue) compact() {
 	q.head = 0
 }
 
-// close ends the queue: pump delivers what is left, then closes its channel.
 func (q *eventQueue) close() {
 	q.mu.Lock()
 	q.closed = true
@@ -145,8 +129,6 @@ func (q *eventQueue) close() {
 	}
 }
 
-// pump delivers queued events to out, in order, until the queue is closed and empty or ctx
-// ends; then it closes out.
 func (q *eventQueue) pump(ctx context.Context, out chan<- Event) {
 	defer close(out)
 	for {
@@ -170,7 +152,6 @@ func (q *eventQueue) pump(ctx context.Context, out chan<- Event) {
 	}
 }
 
-// mergeSamples appends b to a, keeping the newest maxSamples, in a fresh slice.
 func mergeSamples(a, b []history.Point) []history.Point {
 	out := make([]history.Point, 0, len(a)+len(b))
 	out = append(append(out, a...), b...)

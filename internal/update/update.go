@@ -1,10 +1,3 @@
-// Package update finds machine-monitor releases on GitHub, checks them, and replaces the
-// running binary (PLAN §3 rows 33 and 35).
-//
-// A release is trusted only through checksums.txt: its Sigstore bundle must verify against
-// the Fulcio root and this repo's release workflow (verify.go), and every archive must match
-// its SHA-256 line. `machine-monitor update` and the hub's installers both go through
-// Source.Checksums.
 package update
 
 import (
@@ -20,55 +13,43 @@ import (
 	"time"
 )
 
-// Repo is where releases are published.
 const Repo = "ContractorKeith/machine-monitor"
 
-// Size limits for downloads.
 const (
-	maxAPI      = 1 << 20   // release JSON
-	maxSmall    = 1 << 20   // checksums.txt and its bundle
-	MaxArchive  = 200 << 20 // one release archive
-	maxBinary   = 200 << 20 // the binary inside it
+	maxAPI      = 1 << 20
+	maxSmall    = 1 << 20
+	MaxArchive  = 200 << 20
+	maxBinary   = 200 << 20
 	httpTimeout = 2 * time.Minute
 )
 
-// Source is a place releases come from. GitHub returns the real one; tests point API and
-// Download at a fake server and Trust at a test CA.
 type Source struct {
-	API      string // GitHub API base, e.g. https://api.github.com
-	Download string // release download base, e.g. https://github.com
-	Repo     string // owner/name
-	Trust    Trust  // who may sign checksums.txt
+	API      string
+	Download string
+	Repo     string
+	Trust    Trust
 	Client   *http.Client
 }
 
-// GitHub is the public release source for Repo.
 func GitHub() Source {
 	return Source{API: "https://api.github.com", Download: "https://github.com", Repo: Repo,
 		Trust: DefaultTrust(Repo), Client: &http.Client{Timeout: httpTimeout}}
 }
 
-// Release is one published release.
 type Release struct {
-	Tag       string    // "v1.2.3"
-	Name      string    // release title
-	Notes     string    // release notes (markdown)
-	URL       string    // release page
-	Published time.Time // zero when unknown
+	Tag       string
+	Name      string
+	Notes     string
+	URL       string
+	Published time.Time
 }
 
-// Version is the tag without its leading "v", as goreleaser names archives.
 func (r Release) Version() string { return strings.TrimPrefix(r.Tag, "v") }
 
-// tagRE is what a release tag may look like; anything else is refused before it lands in a
-// URL or an installer script.
 var tagRE = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$`)
 
-// ValidTag reports whether tag looks like a release tag ("v1.2.3", "v1.2.3-rc.1").
 func ValidTag(tag string) bool { return tagRE.MatchString(tag) }
 
-// ArchiveName is the goreleaser archive for a version and platform; it must match
-// archives.name_template in .goreleaser.yaml.
 func ArchiveName(version, goos, goarch string) string {
 	ext := ".tar.gz"
 	if goos == "windows" {
@@ -77,15 +58,12 @@ func ArchiveName(version, goos, goarch string) string {
 	return fmt.Sprintf("machine-monitor_%s_%s_%s%s", version, goos, goarch, ext)
 }
 
-// DownloadBase is the URL a release's files are under; AssetURL appends "/<name>".
 func (s Source) DownloadBase(tag string) string {
 	return fmt.Sprintf("%s/%s/releases/download/%s", strings.TrimRight(s.Download, "/"), s.Repo, tag)
 }
 
-// AssetURL is the download URL of a release file.
 func (s Source) AssetURL(tag, name string) string { return s.DownloadBase(tag) + "/" + name }
 
-// Latest is the newest published (non-draft, non-prerelease) release.
 func (s Source) Latest(ctx context.Context) (Release, error) {
 	b, err := s.Fetch(ctx, fmt.Sprintf("%s/repos/%s/releases/latest", strings.TrimRight(s.API, "/"), s.Repo), maxAPI)
 	if err != nil {
@@ -107,9 +85,6 @@ func (s Source) Latest(ctx context.Context) (Release, error) {
 	return Release{Tag: raw.Tag, Name: raw.Name, Notes: raw.Body, URL: raw.URL, Published: raw.Published}, nil
 }
 
-// Checksums downloads checksums.txt for tag and its Sigstore bundle, verifies the signature
-// (it must come from this repo's release workflow at exactly this tag), and returns the
-// archive name -> lowercase hex SHA-256 map.
 func (s Source) Checksums(ctx context.Context, tag string) (map[string]string, error) {
 	if !ValidTag(tag) {
 		return nil, fmt.Errorf("bad release tag %q", tag)
@@ -130,8 +105,6 @@ func (s Source) Checksums(ctx context.Context, tag string) (map[string]string, e
 
 var sumLineRE = regexp.MustCompile(`^([a-f0-9]{64}) [ *]?([A-Za-z0-9._+-]+)$`)
 
-// ParseChecksums reads sha256sum output ("<hex>  <name>" per line). Any malformed line is
-// an error: the file is signed, so damage means something is wrong.
 func ParseChecksums(b []byte) (map[string]string, error) {
 	out := map[string]string{}
 	for line := range strings.Lines(string(b)) {
@@ -151,7 +124,6 @@ func ParseChecksums(b []byte) (map[string]string, error) {
 	return out, nil
 }
 
-// Fetch GETs url and returns at most limit bytes; a longer body is an error.
 func (s Source) Fetch(ctx context.Context, url string, limit int64) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -184,8 +156,6 @@ func (s Source) Fetch(ctx context.Context, url string, limit int64) ([]byte, err
 	return b, nil
 }
 
-// rateLimitError explains GitHub's unauthenticated API limit (60 requests an hour per IP).
-// reset is the X-RateLimit-Reset header: Unix seconds.
 func rateLimitError(reset string) error {
 	n, err := strconv.ParseInt(reset, 10, 64)
 	if err != nil {
@@ -194,9 +164,6 @@ func rateLimitError(reset string) error {
 	return fmt.Errorf("GitHub API rate limit reached; it resets at %s", time.Unix(n, 0).Format("15:04 MST"))
 }
 
-// Newer reports whether release version latest is newer than current. Both may carry a
-// leading "v". A current version that isn't a release ("dev", a snapshot) is always older.
-// Pre-release suffixes are ignored, so 1.2.3-rc.1 and 1.2.3 compare equal.
 func Newer(latest, current string) bool {
 	l, ok := parseVersion(latest)
 	if !ok {
@@ -234,8 +201,6 @@ func parseVersion(v string) ([3]int, bool) {
 	return out, true
 }
 
-// Binary downloads the goos/goarch archive of release tag, checks it against the signed
-// checksums.txt, and returns the machine-monitor binary inside.
 func (s Source) Binary(ctx context.Context, tag, goos, goarch string) ([]byte, error) {
 	sums, err := s.Checksums(ctx, tag)
 	if err != nil {
