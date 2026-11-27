@@ -9,25 +9,19 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// WMI rows for the Windows generic GPU probe. Field names are WMI property names; the
-// classes are not localized, unlike PDH counter paths.
-
-// gpuEngine is a Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine row.
 type gpuEngine struct {
-	Name                  string // pid_1234_luid_0x00000000_0x0000D1A4_phys_0_eng_0_engtype_3D
+	Name                  string
 	UtilizationPercentage uint64
 }
 
-// gpuAdapterMemory is a Win32_PerfFormattedData_GPUPerformanceCounters_GPUAdapterMemory row.
 type gpuAdapterMemory struct {
-	Name           string // luid_0x00000000_0x0000D1A4_phys_0
+	Name           string
 	DedicatedUsage uint64
 }
 
-// videoController is a Win32_VideoController row.
 type videoController struct {
 	Name       string
-	AdapterRAM uint32 // bytes; WMI caps it at 4 GiB
+	AdapterRAM uint32
 }
 
 var (
@@ -35,9 +29,6 @@ var (
 	virtualVideo = regexp.MustCompile(`(?i)Basic|Virtual|Remote|Mirage|Parsec`)
 )
 
-// genericGPUs builds GPUs from Windows GPU perf counters, a port of agent.ps1's fallback
-// for AMD and Intel: 3D-engine utilization summed per adapter LUID, dedicated memory in use,
-// and a name and memory total from Win32_VideoController matched by position.
 func genericGPUs(engines []gpuEngine, mems []gpuAdapterMemory, vcs []videoController) []report.GPU {
 	var real []videoController
 	for _, vc := range vcs {
@@ -70,7 +61,7 @@ func genericGPUs(engines []gpuEngine, mems []gpuAdapterMemory, vcs []videoContro
 				break
 			}
 		}
-		// Skip idle adapters with no dedicated memory in use (render-only, display stubs).
+
 		if mem == nil || (byLUID[luid] == 0 && mem.DedicatedUsage < 1<<20) {
 			continue
 		}

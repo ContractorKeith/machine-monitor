@@ -8,7 +8,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/collect"
 )
 
-// smctempPaths are where Homebrew installs smctemp; launchd gives agents a PATH without them.
 var smctempPaths = []string{"/opt/homebrew/bin/smctemp", "/usr/local/bin/smctemp"}
 
 func init() {

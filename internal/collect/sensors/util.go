@@ -13,18 +13,15 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// reading is what one sensors Run found. Unknown values are nil.
 type reading struct {
 	cpuTemp    *float64
-	tempSource *string // "acpi" when cpuTemp is an ACPI thermal-zone fallback
+	tempSource *string
 	cpuPower   *float64
-	gpuTemp    *float64 // fills GPUs whose temp is still nil
+	gpuTemp    *float64
 	temps      []report.Temp
 	fans       []report.Fan
 }
 
-// apply returns the Apply for r, or nil when it found nothing. Scalars are filled only
-// when still nil, per the probe contract.
 func (s reading) apply() collect.Apply {
 	if s.cpuTemp == nil && s.cpuPower == nil && s.gpuTemp == nil && len(s.temps) == 0 && len(s.fans) == 0 {
 		return nil
@@ -54,16 +51,13 @@ func (s reading) apply() collect.Apply {
 	}
 }
 
-// command runs a vendor tool under ctx's deadline with a stripped environment.
 func command(ctx context.Context, path string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Env = strippedEnv()
-	cmd.WaitDelay = 250 * time.Millisecond // don't hang on pipes a killed child left open
+	cmd.WaitDelay = 250 * time.Millisecond
 	return cmd.Output()
 }
 
-// strippedEnv keeps only what a tool needs to start: PATH, SystemRoot on Windows, and a
-// fixed locale so number formats don't change.
 func strippedEnv() []string {
 	env := []string{"LC_ALL=C"}
 	for _, k := range []string{"PATH", "SystemRoot"} {
@@ -74,7 +68,6 @@ func strippedEnv() []string {
 	return env
 }
 
-// findTool returns the path of name on PATH, else the first extra path that exists, else "".
 func findTool(name string, extra ...string) string {
 	if p, err := exec.LookPath(name); err == nil {
 		return p
@@ -87,7 +80,6 @@ func findTool(name string, extra ...string) string {
 	return ""
 }
 
-// num parses a number; nil when s isn't one.
 func num(s string) *float64 {
 	v, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
 	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
@@ -96,7 +88,6 @@ func num(s string) *float64 {
 	return &v
 }
 
-// readNum reads a sysfs file holding one number; nil when missing or unreadable.
 func readNum(path string) *float64 {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -105,7 +96,6 @@ func readNum(path string) *float64 {
 	return num(string(b))
 }
 
-// readString reads a short sysfs text file, trimmed; "" when missing.
 func readString(path string) string {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -116,8 +106,6 @@ func readString(path string) string {
 
 func round1(v float64) float64 { return math.Round(v*10) / 10 }
 
-// temp returns v rounded to 0.1 °C, or nil when v is missing or not a plausible reading.
-// Disconnected sensors read 0 or junk like -273 and 255; unknown must be nil, not 0.
 func temp(v *float64) *float64 {
 	if v == nil || *v <= 0 || *v > 150 {
 		return nil

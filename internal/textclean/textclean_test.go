@@ -46,7 +46,6 @@ func TestClean(t *testing.T) {
 	}
 }
 
-// Text that needs no change is returned without a copy.
 func TestCleanPlainIsFree(t *testing.T) {
 	if Needs("Ünïcode ✓ 日本") {
 		t.Error("plain text flagged")
@@ -56,7 +55,6 @@ func TestCleanPlainIsFree(t *testing.T) {
 	}
 }
 
-// Strip differs from Clean only in deleting line breaks and tabs, as upstream's cleanText does.
 func TestStrip(t *testing.T) {
 	if got := Strip("a\tb\nc d\x1b[1me"); got != "abcde" {
 		t.Errorf("Strip = %q", got)
@@ -95,7 +93,7 @@ func FuzzCleanIdempotent(f *testing.F) {
 func TestCleanLatinJoiners(t *testing.T) {
 	for in, want := range map[string]string{
 		"a\u200db": "ab", "a\u200cb": "ab", "y\u200d4": "y4",
-		"e\u0301\u200db": "e\u0301b", "a\u0301\u200c": "a\u0301", // a mark on a Latin base
+		"e\u0301\u200db": "e\u0301b", "a\u0301\u200c": "a\u0301",
 	} {
 		if got := Clean(in); got != want {
 			t.Errorf("Clean(%q)=%q, want %q", in, got, want)
@@ -103,8 +101,6 @@ func TestCleanLatinJoiners(t *testing.T) {
 	}
 }
 
-// Joiners are judged by their neighbors after hidden characters are removed, so a hidden
-// character between a joiner and a joining letter doesn't change the verdict.
 func TestCleanJoinerSeesFinalNeighbors(t *testing.T) {
 	for in, want := range map[string]string{
 		"ب\u200b\u200dب":       "ب\u200dب",
@@ -120,8 +116,6 @@ func TestCleanJoinerSeesFinalNeighbors(t *testing.T) {
 	}
 }
 
-// After a mark on a joining letter, a joiner followed by another joiner goes and the last
-// one stays, so ZWJ+ZWNJ leaves the ZWNJ.
 func TestCleanJoinerRunAfterMark(t *testing.T) {
 	for in, want := range map[string]string{
 		"ن\u0651\u200d\u200c":       "ن\u0651\u200c",

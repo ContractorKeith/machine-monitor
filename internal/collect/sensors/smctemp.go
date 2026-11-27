@@ -7,8 +7,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// readSmctemp asks smctemp (optional, `brew install smctemp`) for the CPU (-c) and GPU (-g)
-// temperatures, as agent-macos.sh does. An empty path means smctemp isn't installed.
 func readSmctemp(ctx context.Context, path string) (reading, error) {
 	var s reading
 	if path == "" {
@@ -33,8 +31,6 @@ func readSmctemp(ctx context.Context, path string) (reading, error) {
 	return s, nil
 }
 
-// parseSmctemp reads the temperature on smctemp's first line. smctemp prints 0 or nothing
-// when the sensor is unsupported, which is unknown, not 0 °C.
 func parseSmctemp(out []byte) *float64 {
 	line, _, _ := strings.Cut(string(out), "\n")
 	return temp(num(line))

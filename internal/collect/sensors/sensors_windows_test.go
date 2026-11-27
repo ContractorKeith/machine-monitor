@@ -21,7 +21,6 @@ func TestReadWindows(t *testing.T) {
 	}
 }
 
-// TestQueriesLive runs the real WMI queries; neither may fail loudly or hang.
 func TestQueriesLive(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

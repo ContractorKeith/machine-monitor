@@ -14,16 +14,13 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// command runs a vendor tool under ctx's deadline with a stripped environment.
 func command(ctx context.Context, path string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Env = strippedEnv()
-	cmd.WaitDelay = 250 * time.Millisecond // don't hang on pipes a killed child left open
+	cmd.WaitDelay = 250 * time.Millisecond
 	return cmd.Output()
 }
 
-// strippedEnv keeps only what a tool needs to start: PATH, SystemRoot on Windows, and a
-// fixed locale so number formats don't change.
 func strippedEnv() []string {
 	env := []string{"LC_ALL=C"}
 	for _, k := range []string{"PATH", "SystemRoot"} {
@@ -34,7 +31,6 @@ func strippedEnv() []string {
 	return env
 }
 
-// findTool returns the path of name on PATH, else the first extra path that exists, else "".
 func findTool(name string, extra ...string) string {
 	if p, err := exec.LookPath(name); err == nil {
 		return p
@@ -47,7 +43,6 @@ func findTool(name string, extra ...string) string {
 	return ""
 }
 
-// num parses a number, returning nil for "", "[N/A]", "[Not Supported]" and the like.
 func num(s string) *float64 {
 	v, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
 	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
@@ -56,7 +51,6 @@ func num(s string) *float64 {
 	return &v
 }
 
-// readNum reads a sysfs file holding one number; nil when missing or unreadable.
 func readNum(path string) *float64 {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -65,7 +59,6 @@ func readNum(path string) *float64 {
 	return num(string(b))
 }
 
-// readText reads a short sysfs text file, trimmed; "" when missing.
 func readText(path string) string {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -74,7 +67,6 @@ func readText(path string) string {
 	return strings.TrimSpace(string(b))
 }
 
-// scale returns v*f rounded to one decimal, or nil when v is nil.
 func scale(v *float64, f float64) *float64 {
 	if v == nil {
 		return nil
@@ -82,8 +74,6 @@ func scale(v *float64, f float64) *float64 {
 	return report.Ptr(math.Round(*v*f*10) / 10)
 }
 
-// sortByVRAM orders GPUs biggest memTotal first, unknown last, keeping ties in order
-// (upstream server.js sorts the same way before storing a report).
 func sortByVRAM(gpus []report.GPU) {
 	vram := func(g report.GPU) float64 {
 		if g.MemTotal == nil {
@@ -94,7 +84,6 @@ func sortByVRAM(gpus []report.GPU) {
 	sort.SliceStable(gpus, func(i, j int) bool { return vram(gpus[i]) > vram(gpus[j]) })
 }
 
-// appendGPUs returns the Apply for a probe's result: nil when it found nothing.
 func appendGPUs(gpus []report.GPU) collect.Apply {
 	if len(gpus) == 0 {
 		return nil

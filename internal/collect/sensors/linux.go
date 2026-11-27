@@ -13,17 +13,15 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// cpuChips are the hwmon chips whose temp1 is the CPU package temperature (agent.sh).
 var cpuChips = map[string]bool{"coretemp": true, "k10temp": true, "zenpower": true, "cpu_thermal": true, "soc_thermal": true}
 
 var (
 	hwmonDir  = regexp.MustCompile(`^hwmon(\d+)$`)
 	zoneDir   = regexp.MustCompile(`^thermal_zone(\d+)$`)
 	inputFile = regexp.MustCompile(`^(temp|fan)(\d+)_input$`)
-	raplDir   = regexp.MustCompile(`^intel-rapl:(\d+)$`) // top-level zones, not sub-zones like intel-rapl:0:0
+	raplDir   = regexp.MustCompile(`^intel-rapl:(\d+)$`)
 )
 
-// numbered lists dir's entries matching re (whose first group is a number), in numeric order.
 func numbered(dir string, re *regexp.Regexp) []string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -48,9 +46,6 @@ func numbered(dir string, re *regexp.Regexp) []string {
 	return out
 }
 
-// readHwmon reads every hwmon temperature and spinning fan under sys (normally "/sys"),
-// and the CPU temperature from the first CPU chip. Each sensor's parent is its chip name,
-// with " #2", " #3" added when several chips share one (two NVMe drives).
 func readHwmon(sys string) (temps []report.Temp, fans []report.Fan, cpuTemp *float64) {
 	seen := map[string]int{}
 	for _, h := range numbered(filepath.Join(sys, "class", "hwmon"), hwmonDir) {
@@ -81,7 +76,7 @@ func readHwmon(sys string) (temps []report.Temp, fans []report.Fan, cpuTemp *flo
 		}
 		sort.Slice(sensors, func(i, j int) bool {
 			if sensors[i].kind != sensors[j].kind {
-				return sensors[i].kind > sensors[j].kind // temps before fans
+				return sensors[i].kind > sensors[j].kind
 			}
 			return sensors[i].n < sensors[j].n
 		})
@@ -101,7 +96,7 @@ func readHwmon(sys string) (temps []report.Temp, fans []report.Fan, cpuTemp *flo
 				if label == "" {
 					label = "Fan " + strconv.Itoa(s.n)
 				}
-				if v != nil && *v > 0 { // agent.ps1 reports spinning fans only
+				if v != nil && *v > 0 {
 					fans = append(fans, report.Fan{Name: report.Ptr(label), RPM: report.Ptr(*v)})
 				}
 			}
@@ -110,8 +105,6 @@ func readHwmon(sys string) (temps []report.Temp, fans []report.Fan, cpuTemp *flo
 	return temps, fans, cpuTemp
 }
 
-// thermalZoneTemp is agent.sh's fallback CPU temperature: the hottest CPU, SoC or ACPI
-// thermal zone. source is "acpi" when that zone is an ACPI one.
 func thermalZoneTemp(sys string) (t *float64, source *string) {
 	var best *float64
 	var bestType string
@@ -131,7 +124,6 @@ func thermalZoneTemp(sys string) (t *float64, source *string) {
 	return best, source
 }
 
-// gracePower sums NVIDIA Grace socket power meters (microwatts) to watts; nil when there are none.
 func gracePower(sys string) *float64 {
 	var sum float64
 	var n int
@@ -151,15 +143,12 @@ func gracePower(sys string) *float64 {
 	return report.Ptr(round1(sum / 1e6))
 }
 
-// apuPower is the package power (watts) an AMD APU's amdgpu hwmon labels PPT. It covers the
-// CPU cores as well as the graphics, so it is CPU package power; the gpu probe leaves it out
-// of the GPU's power. Upstream's agent.sh has no equivalent. nil when there is no such chip.
 func apuPower(sys string) *float64 {
 	for _, h := range numbered(filepath.Join(sys, "class", "hwmon"), hwmonDir) {
 		if readString(filepath.Join(h, "name")) != "amdgpu" || readString(filepath.Join(h, "power1_label")) != "PPT" {
 			continue
 		}
-		v := readNum(filepath.Join(h, "power1_average")) // microwatts
+		v := readNum(filepath.Join(h, "power1_average"))
 		if v == nil {
 			v = readNum(filepath.Join(h, "power1_input"))
 		}
@@ -170,24 +159,18 @@ func apuPower(sys string) *float64 {
 	return nil
 }
 
-// raplMeter turns RAPL energy counters into CPU package watts between two Runs. energy_uj
-// is root-only on most kernels since 2020, so this is often nil for a normal user and the
-// hub estimates CPU power from load instead.
 type raplMeter struct {
 	mu   sync.Mutex
 	prev map[string]raplCounter
 	at   time.Time
 }
 
-type raplCounter struct{ energy, max float64 } // microjoules; the counter wraps at max
+type raplCounter struct{ energy, max float64 }
 
-// watts reads the counters under sys at time now and returns the average package power
-// since the previous call; nil on the first call or when no counter is readable.
 func (m *raplMeter) watts(sys string, now time.Time) *float64 {
 	cur := map[string]raplCounter{}
 	for _, z := range numbered(filepath.Join(sys, "class", "powercap"), raplDir) {
-		// psys (whole platform) sits beside the packages on some laptops; adding it would
-		// count the CPU twice. Upstream sums every zone; we keep packages only.
+
 		if name := readString(filepath.Join(z, "name")); name != "" && !strings.HasPrefix(name, "package") {
 			continue
 		}
@@ -220,7 +203,7 @@ func (m *raplMeter) watts(sys string, now time.Time) *float64 {
 		d := c.energy - p.energy
 		if d < 0 {
 			if c.max <= 0 {
-				continue // wrapped, but with no known range there's no way to unwrap it
+				continue
 			}
 			d += c.max
 		}
@@ -233,14 +216,13 @@ func (m *raplMeter) watts(sys string, now time.Time) *float64 {
 	return report.Ptr(round1(joules / sec))
 }
 
-// readLinux gathers every Linux sensor. CPU power prefers Grace meters, then RAPL, then an APU's PPT.
 func readLinux(sys string, rapl *raplMeter, now time.Time) reading {
 	var s reading
 	s.temps, s.fans, s.cpuTemp = readHwmon(sys)
 	if s.cpuTemp == nil {
 		s.cpuTemp, s.tempSource = thermalZoneTemp(sys)
 	}
-	// Read RAPL every time so its baseline stays fresh even while Grace answers.
+
 	raplW := rapl.watts(sys, now)
 	if s.cpuPower = gracePower(sys); s.cpuPower == nil {
 		s.cpuPower = raplW
@@ -251,7 +233,6 @@ func readLinux(sys string, rapl *raplMeter, now time.Time) reading {
 	return s
 }
 
-// scale returns v*f, or nil when v is nil.
 func scale(v *float64, f float64) *float64 {
 	if v == nil {
 		return nil

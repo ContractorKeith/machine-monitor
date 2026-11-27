@@ -1,8 +1,5 @@
 package collect
 
-// macOS core metrics. Logic ported from Forward-Future/device-monitor agent/agent-macos.sh
-// (MIT, © 2026 Matt): https://github.com/Forward-Future/device-monitor
-
 import (
 	"context"
 	"regexp"
@@ -13,11 +10,8 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// runFunc runs a command and returns its stdout. Tests replace it with recorded output.
 type runFunc func(ctx context.Context, name string, args ...string) ([]byte, error)
 
-// macSource reads macOS: gopsutil for CPU, totals, volumes and disk I/O (IOKit, no exec),
-// and the same system commands upstream runs for the rest.
 type macSource struct {
 	ps       ps
 	run      runFunc
@@ -37,7 +31,7 @@ func (s macSource) hostName(ctx context.Context) string {
 	host := firstLine(s.out(ctx, "/usr/sbin/scutil", "--get", "ComputerName"))
 	if host == "" {
 		h, _ := s.hostname()
-		host, _, _ = strings.Cut(h, ".") // hostname -s
+		host, _, _ = strings.Cut(h, ".")
 	}
 	return host
 }
@@ -66,10 +60,8 @@ func (s macSource) static(ctx context.Context) staticInfo {
 	return info
 }
 
-// clockMHz: macOS doesn't expose a current clock to a normal user (upstream sends null).
 func (macSource) clockMHz(context.Context) *float64 { return nil }
 
-// memory is Activity Monitor's "Memory Used": app (active) + wired + compressed pages.
 func (s macSource) memory(ctx context.Context) report.Memory {
 	var m report.Memory
 	if vm, err := s.ps.VirtualMemory(ctx); err == nil && vm.Total > 0 {
@@ -79,8 +71,6 @@ func (s macSource) memory(ctx context.Context) report.Memory {
 	return m
 }
 
-// disks lists the Data volume as "Macintosh HD" and everything under /Volumes, local only.
-// APFS volumes share their container's space, so used = total − available, as Finder shows.
 func (s macSource) disks(ctx context.Context) []report.Disk {
 	parts, err := s.ps.Partitions(ctx)
 	if err != nil {
@@ -110,7 +100,6 @@ func (s macSource) disks(ctx context.Context) []report.Disk {
 	return out
 }
 
-// diskIO sums IOBlockStorageDriver statistics, which gopsutil reads through IOKit.
 func (s macSource) diskIO(ctx context.Context) (read, write uint64, ok bool) {
 	io, err := s.ps.DiskIO(ctx)
 	if err != nil || len(io) == 0 {
@@ -123,12 +112,10 @@ func (s macSource) diskIO(ctx context.Context) (read, write uint64, ok bool) {
 	return read, write, true
 }
 
-// netIO parses netstat -ibn, as upstream does.
 func (s macSource) netIO(ctx context.Context) []ifaceBytes {
 	return netstatBytes(s.out(ctx, "/usr/sbin/netstat", "-ibn"))
 }
 
-// inNetTotal: upstream counts en* only, so utun, bridge and awdl traffic isn't counted twice.
 func (macSource) inNetTotal(name string) bool { return strings.HasPrefix(name, "en") }
 
 func (s macSource) out(ctx context.Context, name string, args ...string) string {
@@ -138,7 +125,6 @@ func (s macSource) out(ctx context.Context, name string, args ...string) string 
 
 var ioregUUIDRe = regexp.MustCompile(`"IOPlatformUUID"\s*=\s*"([^"]+)"`)
 
-// ioregUUID extracts IOPlatformUUID from ioreg -rd1 -c IOPlatformExpertDevice.
 func ioregUUID(out string) string {
 	if m := ioregUUIDRe.FindStringSubmatch(out); m != nil {
 		return m[1]
@@ -146,7 +132,6 @@ func ioregUUID(out string) string {
 	return ""
 }
 
-// profilerField returns "key: value" from system_profiler output.
 func profilerField(out, key string) string {
 	for line := range strings.Lines(out) {
 		if v, ok := strings.CutPrefix(strings.TrimSpace(line), key+":"); ok {
@@ -156,7 +141,6 @@ func profilerField(out, key string) string {
 	return ""
 }
 
-// vmStatUsed computes (active + wired + compressed) × page size from vm_stat output.
 func vmStatUsed(out string) *float64 {
 	page := 4096.0
 	var active, wired, compressed float64
@@ -193,14 +177,10 @@ func vmStatUsed(out string) *float64 {
 	return report.Ptr((active + wired + compressed) * page)
 }
 
-// netstatBytes reads per-interface byte counters from netstat -ibn: the <Link#n> row of
-// each interface. The Ibytes and Obytes columns come from the header line. Address (before
-// the counters) is blank for interfaces without a MAC (utun, gif), so a row can be one
-// field short; the counters are found by their distance from the end of the line.
 func netstatBytes(out string) []ifaceBytes {
 	var res []ifaceBytes
 	seen := map[string]bool{}
-	inEnd, outEnd := 0, 0 // Ibytes and Obytes, counted back from the last column
+	inEnd, outEnd := 0, 0
 	for line := range strings.Lines(out) {
 		f := strings.Fields(line)
 		if len(f) > 0 && f[0] == "Name" {
@@ -214,7 +194,7 @@ func netstatBytes(out string) []ifaceBytes {
 		if inEnd == 0 || len(f) < 3 || !strings.HasPrefix(f[2], "<Link#") || len(f)-inEnd < 3 || len(f)-outEnd < 3 {
 			continue
 		}
-		name := strings.TrimSuffix(f[0], "*") // * marks an interface that is down
+		name := strings.TrimSuffix(f[0], "*")
 		if strings.HasPrefix(name, "lo") || seen[name] {
 			continue
 		}

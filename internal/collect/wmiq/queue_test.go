@@ -21,9 +21,6 @@ func TestDoReturnsResult(t *testing.T) {
 	}
 }
 
-// TestSlowQueryDoesNotStack plays many 2 s samples against one query that hangs: each
-// caller gives up on its deadline, but only the hung query ever runs and no goroutines
-// pile up behind it.
 func TestSlowQueryDoesNotStack(t *testing.T) {
 	q := NewQueue()
 	release := make(chan struct{})
@@ -38,7 +35,6 @@ func TestSlowQueryDoesNotStack(t *testing.T) {
 		return nil
 	}
 
-	// Warm up so the worker goroutine is part of the baseline.
 	if err := q.Do(context.Background(), func() error { return nil }); err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +58,6 @@ func TestSlowQueryDoesNotStack(t *testing.T) {
 		t.Errorf("goroutines grew from %d to %d across samples", before, after)
 	}
 
-	// Once the hung query finishes, the queue serves the next caller normally.
 	close(release)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

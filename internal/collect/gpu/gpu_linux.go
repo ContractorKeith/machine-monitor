@@ -14,8 +14,6 @@ func init() {
 	}})
 }
 
-// runLinux reads NVIDIA GPUs through nvidia-smi and AMD GPUs from sysfs. A failing
-// nvidia-smi doesn't hide the AMD cards.
 func runLinux(ctx context.Context, nvidiaSMI, sys string) (collect.Apply, error) {
 	gpus, err := queryNvidia(ctx, nvidiaSMI)
 	gpus = append(gpus, readAMD(sys)...)

@@ -17,10 +17,9 @@ import (
 
 var errFake = errors.New("fake: not available")
 
-// fakePS is a ps backed by fixtures. Fields left nil return errFake.
 type fakePS struct {
-	times  [][]cpu.TimesStat // per sample: [total, core0, core1, ...]
-	sample int               // which entry of times/diskIO/netIO the next read returns
+	times  [][]cpu.TimesStat
+	sample int
 
 	info   []cpu.InfoStat
 	count  int
@@ -107,7 +106,6 @@ func (f *fakePS) Uptime(context.Context) (uint64, error) {
 	return f.uptime, nil
 }
 
-// recorded is a runFunc that replays testdata/macos/<file> for known commands.
 func recorded(t *testing.T, files map[string]string) runFunc {
 	return func(_ context.Context, name string, args ...string) ([]byte, error) {
 		key := filepath.Base(name)
@@ -119,7 +117,6 @@ func recorded(t *testing.T, files map[string]string) runFunc {
 	}
 }
 
-// fakeWMI replays testdata/windows/wmi.json, keyed by query. Queries not in it fail.
 type fakeWMI map[string]json.RawMessage
 
 func loadWMI(t *testing.T) fakeWMI {
@@ -143,7 +140,6 @@ func (w fakeWMI) Query(_ context.Context, q string, dst any) error {
 	return json.Unmarshal(raw, dst)
 }
 
-// val dereferences a pointer for comparisons, failing the test on nil.
 func val[T any](t *testing.T, name string, p *T) T {
 	t.Helper()
 	if p == nil {
