@@ -1,16 +1,5 @@
 package hub
 
-// Agent installers (PLAN §3 row 33): GET /install.sh and GET /install.ps1, key required and
-// rate-limited, as upstream. Every refusal is itself a script that prints why and exits 1. Each returns a script that downloads the release this hub runs from GitHub,
-// checks it against a SHA-256 the hub pins into the script, installs it under the user's
-// home, pairs (saves the key in client.json) and installs the agent service.
-//
-// The hub pins hashes it has verified itself: it fetches the release's checksums.txt once
-// and checks its Sigstore signature (internal/update) before serving any installer.
-//
-// Ported from Forward-Future/device-monitor server.js (template, hubUrlFor) and
-// agent/install.sh @ c3a4c41 (MIT, © 2026 Matt): https://github.com/Forward-Future/device-monitor
-
 import (
 	"context"
 	_ "embed"
@@ -28,12 +17,8 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/update"
 )
 
-// InstallVersion is the release the installers download: the version this binary was built
-// as. main sets it from its -ldflags version; a "dev" build can't serve installers.
 var InstallVersion = "dev"
 
-// InstallSource is where installers and the hub's checksum lookup get releases. Tests point
-// it at a fake release server.
 var InstallSource = update.GitHub()
 
 //go:embed install.sh
@@ -42,13 +27,11 @@ var installSh string
 //go:embed install.ps1
 var installPs1 string
 
-// installSums caches verified checksums.txt per release URL; failures aren't cached.
 var installSums struct {
 	sync.Mutex
 	byURL map[string]map[string]string
 }
 
-// handleInstall serves install.sh or install.ps1 for the request's path.
 func (h *Hub) handleInstall(w http.ResponseWriter, r *http.Request) {
 	ps1 := strings.HasSuffix(r.URL.Path, ".ps1")
 	fail := func(status int, msg string) {
@@ -59,7 +42,6 @@ func (h *Hub) handleInstall(w http.ResponseWriter, r *http.Request) {
 			sendText(w, status, "echo '"+shQuote("machine-monitor install: "+msg)+"' >&2; exit 1\n")
 		}
 	}
-	// Key required, as upstream; refused with a script so `| sh` and `| iex` fail loudly.
 	if !h.authorized(r) {
 		fail(http.StatusUnauthorized, "the hub key is missing or wrong; copy the install command from the hub again")
 		return
@@ -86,7 +68,6 @@ func (h *Hub) handleInstall(w http.ResponseWriter, r *http.Request) {
 	if ps1 {
 		goos, quote, tmpl = "windows", psQuote, installPs1
 	}
-	// Only the archives this script can install, in a stable order.
 	var lines []string
 	for name, sum := range sums {
 		for _, o := range strings.Fields(goos) {
@@ -106,7 +87,6 @@ func (h *Hub) handleInstall(w http.ResponseWriter, r *http.Request) {
 	sendText(w, http.StatusOK, fillTemplate(tmpl, vars, quote))
 }
 
-// verifiedSums is the signature-checked checksums.txt of tag, cached after the first success.
 func verifiedSums(ctx context.Context, tag string) (map[string]string, error) {
 	src := InstallSource
 	key := src.DownloadBase(tag)
@@ -126,15 +106,11 @@ func verifiedSums(ctx context.Context, tag string) (map[string]string, error) {
 	return s, nil
 }
 
-// installNameRE is a host name or IPv4 address, and zoneRE an IPv6 zone (interface name).
 var (
 	installNameRE = regexp.MustCompile(`^[A-Za-z0-9.\-]+$`)
 	zoneRE        = regexp.MustCompile(`^[A-Za-z0-9._~\-]+$`)
 )
 
-// installHost reports whether a Host header may be pasted into a script as the hub URL: a
-// name or IPv4 address, or a bracketed IPv6 address whose zone is written "%25zone" as URLs
-// require (RFC 6874), with an optional port 1-65535.
 func installHost(host string) bool {
 	name, port := host, ""
 	if i := strings.LastIndex(host, ":"); i >= 0 && !strings.HasSuffix(host, "]") {
@@ -158,10 +134,6 @@ func installHost(host string) bool {
 	return installNameRE.MatchString(name)
 }
 
-// hubURLFor is the hub origin as the client addressed it (the guard already checked Host).
-// Behind `tailscale serve` or another HTTPS proxy the request arrives with
-// X-Forwarded-Proto: https; that header is honoured only from a proxy listed in
-// config.json "trustedProxies", since anyone else could send it.
 func (h *Hub) hubURLFor(r *http.Request) string {
 	proto := "http"
 	if r.Header.Get("X-Forwarded-Proto") == "https" && h.trustedProxy(r.RemoteAddr) {
@@ -170,17 +142,13 @@ func (h *Hub) hubURLFor(r *http.Request) string {
 	return proto + "://" + r.Host
 }
 
-// trustedProxy reports whether remoteAddr matches an address or CIDR prefix in config.json
-// "trustedProxies" (e.g. ["127.0.0.1", "::1"] for tailscale serve). None by default.
 func (h *Hub) trustedProxy(remoteAddr string) bool {
 	ip, ok := remoteIP(remoteAddr)
 	return ok && h.trustedProxies().contains(ip)
 }
 
-// proxyList is config.json "trustedProxies", parsed: addresses become one-address prefixes.
 type proxyList []netip.Prefix
 
-// trustedProxies reads and parses "trustedProxies". Entries that don't parse are skipped.
 func (h *Hub) trustedProxies() proxyList {
 	h.mu.Lock()
 	raw := h.cfg.extra["trustedProxies"]
@@ -201,7 +169,6 @@ func (h *Hub) trustedProxies() proxyList {
 	return out
 }
 
-// contains reports whether ip is in the list.
 func (l proxyList) contains(ip netip.Addr) bool {
 	ip = ip.Unmap().WithZone("")
 	for _, p := range l {
@@ -212,9 +179,6 @@ func (l proxyList) contains(ip netip.Addr) bool {
 	return false
 }
 
-// fillTemplate replaces each __NAME__ in tmpl with its value, quoted for the single-quoted
-// string it lands in, so no value can end the string early. It is one pass, so a value is
-// never itself searched for placeholders.
 func fillTemplate(tmpl string, vars map[string]string, quote func(string) string) string {
 	var pairs []string
 	for k, v := range vars {
@@ -223,11 +187,8 @@ func fillTemplate(tmpl string, vars map[string]string, quote func(string) string
 	return strings.NewReplacer(pairs...).Replace(tmpl)
 }
 
-// shQuote escapes s for a POSIX single-quoted string.
 func shQuote(s string) string { return strings.ReplaceAll(s, "'", `'\''`) }
 
-// psQuote escapes s for a PowerShell single-quoted string. PowerShell also ends such a
-// string at the typographic single quotes, so those are doubled too.
 func psQuote(s string) string {
 	for _, q := range []string{"'", "\u2018", "\u2019", "\u201a", "\u201b"} {
 		s = strings.ReplaceAll(s, q, q+q)

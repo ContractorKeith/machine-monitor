@@ -12,7 +12,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// report posts one report for id and returns the hub's reply.
 func (th *testHub) report(id string, edit func(m map[string]any)) reportReply {
 	th.t.Helper()
 	w := th.req("POST", "/api/report", "", th.agentReport(id, edit))
@@ -22,7 +21,6 @@ func (th *testHub) report(id string, edit func(m map[string]any)) reportReply {
 	return decode[reportReply](th.t, w)
 }
 
-// allowing is a report edit for an agent run with --allow-power-actions.
 func allowing(actions ...string) func(m map[string]any) {
 	return func(m map[string]any) {
 		m["features"] = []string{"actions"}
@@ -46,8 +44,8 @@ func TestActionRefusals(t *testing.T) {
 		{"nope-1", "restart", 404},
 		{"dev-1", "reboot", 400},
 		{"dev-1", "", 400},
-		{"dev-1", "restart", 409}, // actions are off unless the agent allows them
-		{"dev-1", "wake", 400},    // no MAC reported
+		{"dev-1", "restart", 409},
+		{"dev-1", "wake", 400},
 	}
 	for _, c := range cases {
 		if code, body := th.action(c.id, c.action); code != c.want {
@@ -75,7 +73,7 @@ func TestWake(t *testing.T) {
 
 	th := newTestHub(t)
 	th.report("dev-1", func(m map[string]any) { m["macs"] = []string{"AA-BB-CC-DD-EE-01"} })
-	th.clk.Add(time.Hour) // asleep: wake works on offline devices
+	th.clk.Add(time.Hour)
 	srv := httptest.NewServer(th.h)
 	defer srv.Close()
 	s := openStream(t, srv, th.Token())
@@ -90,7 +88,7 @@ func TestWake(t *testing.T) {
 	if ev["id"] != "dev-1" || ev["result"].(map[string]any)["ok"] != true {
 		t.Errorf("actionResult %v", ev)
 	}
-	th.Close() // ends the stream, so srv.Close doesn't wait on it
+	th.Close()
 	for range s.ch {
 	}
 }
@@ -146,7 +144,6 @@ func TestCommandExpiresAndNeedsPermission(t *testing.T) {
 	}
 
 	th.action("dev-1", "restart")
-	// The user turned power actions off on the device before it picked the command up.
 	if rep := th.report("dev-1", nil); len(rep.Commands) != 0 {
 		t.Errorf("command delivered to a device that no longer allows it: %+v", rep.Commands)
 	}
@@ -201,7 +198,7 @@ func TestProcessesOnDemand(t *testing.T) {
 		}
 	}
 
-	th.clk.Add(ProcsWatch) // the viewer left
+	th.clk.Add(ProcsWatch)
 	if rep := th.report("dev-1", withProcs); rep.Procs {
 		t.Error("procs still asked for after the watch ran out")
 	}
@@ -224,7 +221,6 @@ func TestProcessesOnDemand(t *testing.T) {
 	}
 }
 
-// TestHubOwnProcesses: the hub lists its own processes, busiest first, only while watched.
 func TestHubOwnProcesses(t *testing.T) {
 	var mu sync.Mutex
 	calls := 0
@@ -260,7 +256,6 @@ func TestHubOwnProcesses(t *testing.T) {
 	}
 }
 
-// openHub is a test hub with extra options and the real clock.
 func openHub(t *testing.T, opt Options) *testHub {
 	t.Helper()
 	clk := &clock{t: time.Now()}

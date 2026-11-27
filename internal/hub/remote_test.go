@@ -17,7 +17,6 @@ import (
 
 func strp(s string) *string { return &s }
 
-// fakeTailscale is a Tailscale reader that counts its calls.
 func fakeTailscale(calls *atomic.Int32) func(context.Context, int) tailscale.Status {
 	return func(_ context.Context, port int) tailscale.Status {
 		calls.Add(1)
@@ -32,7 +31,6 @@ func TestRemoteStatus(t *testing.T) {
 	th := openTestHub(t, config.At(t.TempDir()), &clock{t: time.Unix(1e9, 0)},
 		func(o *Options) { o.Tailscale = fakeTailscale(&calls) })
 
-	// The MagicDNS name isn't known until Tailscale has been read.
 	if w := th.req("GET", "/api/devices", th.Token(), "", "Host", "nas.tail1.ts.net"); w.Code != 421 {
 		t.Fatalf("unknown tailnet name before a read: %d", w.Code)
 	}
@@ -55,7 +53,6 @@ func TestRemoteStatus(t *testing.T) {
 		t.Errorf("platform = %q, want Node's name", p)
 	}
 
-	// Cached for 30 s, unless ?fresh.
 	th.keyed("GET", "/api/remote", "")
 	if n := calls.Load(); n != 1 {
 		t.Errorf("%d reads, want 1 (cached)", n)
@@ -65,7 +62,6 @@ func TestRemoteStatus(t *testing.T) {
 		t.Errorf("%d reads, want 2 (fresh)", n)
 	}
 
-	// The status feeds the Host check, /api/info and alert links, as upstream.
 	if w := th.req("GET", "/api/devices", th.Token(), "", "Host", "nas.tail1.ts.net"); w.Code != 200 {
 		t.Errorf("tailnet name after a read: %d", w.Code)
 	}
@@ -88,7 +84,6 @@ func TestRemoteWithoutTailscale(t *testing.T) {
 	}
 }
 
-// Run refreshes Tailscale in the background, so the first request needn't wait on the CLI.
 func TestRunReadsTailscale(t *testing.T) {
 	var calls atomic.Int32
 	th := openTestHub(t, config.At(t.TempDir()), &clock{t: time.Unix(1e9, 0)},
@@ -104,7 +99,6 @@ func TestRunReadsTailscale(t *testing.T) {
 	}
 }
 
-// probeOnce sends the discovery probe to addr and returns the reply, or nil after wait.
 func probeOnce(t *testing.T, addr string, wait time.Duration) map[string]any {
 	t.Helper()
 	c, err := net.Dial("udp4", addr)
@@ -125,7 +119,7 @@ func probeOnce(t *testing.T, addr string, wait time.Duration) map[string]any {
 }
 
 func TestRunAnswersDiscovery(t *testing.T) {
-	pc, err := net.ListenPacket("udp4", "127.0.0.1:0") // a free port
+	pc, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}

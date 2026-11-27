@@ -1,19 +1,5 @@
 package hub
 
-// Remote actions (PLAN §3 rows 24–25, M7): POST /api/devices/:id/action. "wake" sends
-// Wake-on-LAN packets from the hub to the device's stored MACs. "sleep", "restart" and
-// "shutdown" are queued for the device's next report, HMAC-signed with the device key (hub key for legacy devices), and
-// only for a device whose agent advertises the action (it runs with --allow-power-actions).
-//
-// Upstream signs "device-monitor-cmd:<id>:<action>". Here the signature also covers the
-// device id and the time the command was queued, so an agent can refuse a command copied
-// from another device's reply or replayed after its TTL; see SignCommand.
-//
-// Enrolled devices use a private per-device key; legacy devices use the hub token.
-//
-// Ported from Forward-Future/device-monitor server.js (commands, /api/devices/:id/action)
-// @ c3a4c41 (MIT, © 2026 Matt): https://github.com/Forward-Future/device-monitor
-
 import (
 	"crypto/hmac"
 	"crypto/rand"
@@ -29,38 +15,29 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// CommandTTL is how long a queued power action waits for the device's next report, and
-// how long an agent accepts it after it was queued, as upstream.
 const CommandTTL = 60 * time.Second
 
-// wakeFunc sends the magic packets; tests replace it.
 var wakeFunc = discovery.Wake
 
-// queuedCmd is a power action waiting for the device's next report.
 type queuedCmd struct {
 	id     string
 	action string
 	t      time.Time
 }
 
-// actionState is the command queue and the processes-on-demand state (procs.go). It has
-// its own lock, never held while taking mu.
 type actionState struct {
 	mu       sync.Mutex
-	commands map[string][]queuedCmd   // device id -> commands for its next report
-	watch    map[string]time.Time     // device id -> send processes until
-	procs    map[string]*ProcSnapshot // device id -> last process list it sent
+	commands map[string][]queuedCmd
+	watch    map[string]time.Time
+	procs    map[string]*ProcSnapshot
 }
 
-// SignCommand is hex(HMAC-SHA256(key, "machine-monitor-cmd:<device>:<id>:<action>:<t>")),
-// t in Unix ms. Agents check it before running a command.
 func SignCommand(key, device, id, action string, t int64) string {
 	m := hmac.New(sha256.New, []byte(key))
 	fmt.Fprintf(m, "machine-monitor-cmd:%s:%s:%s:%d", device, id, action, t)
 	return hex.EncodeToString(m.Sum(nil))
 }
 
-// newCommandID is 6 random bytes in hex: the 12 hex chars actionResult.id must match.
 func newCommandID() (string, error) {
 	b := make([]byte, 6)
 	if _, err := rand.Read(b); err != nil {
@@ -84,7 +61,7 @@ func (h *Hub) handleAction(w http.ResponseWriter, r *http.Request) {
 
 	h.mu.Lock()
 	d := h.registry[id]
-	if d == nil { // removed meanwhile
+	if d == nil {
 		h.mu.Unlock()
 		sendJSON(w, http.StatusNotFound, errorBody("not found"))
 		return
@@ -130,16 +107,12 @@ func (h *Hub) handleAction(w http.ResponseWriter, r *http.Request) {
 	if h.act.commands == nil {
 		h.act.commands = map[string][]queuedCmd{}
 	}
-	// One of each action at a time: asking again replaces the earlier one, as upstream.
 	q := slices.DeleteFunc(h.act.commands[id], func(c queuedCmd) bool { return c.action == action })
 	h.act.commands[id] = append(q, queuedCmd{id: cid, action: action, t: h.now()})
 	h.act.mu.Unlock()
 	sendJSON(w, http.StatusOK, map[string]any{"ok": true, "id": cid})
 }
 
-// replyFor builds the report reply for device id: whether a viewer wants its processes,
-// and its queued commands still within CommandTTL that its report allows (actions), signed.
-// The queue is emptied either way: a command is delivered at most once.
 func (h *Hub) replyFor(id string, actions []string) reportReply {
 	h.mu.Lock()
 	key := h.cfg.DeviceKeys[id]
@@ -165,7 +138,6 @@ func (h *Hub) replyFor(id string, actions []string) reportReply {
 	return rep
 }
 
-// forgetActions drops a removed device's queue, watch and process list.
 func (h *Hub) forgetActions(id string) {
 	h.act.mu.Lock()
 	defer h.act.mu.Unlock()

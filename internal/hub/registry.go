@@ -1,10 +1,5 @@
 package hub
 
-// Device registry, devices.json, and report intake.
-//
-// Ported from Forward-Future/device-monitor server.js (handleReport, deviceView) @ c3a4c41
-// (MIT, © 2026 Matt): https://github.com/Forward-Future/device-monitor
-
 import (
 	"bytes"
 	"context"
@@ -24,7 +19,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// Device is one registry entry, as stored in devices.json. Times are Unix ms.
 type Device struct {
 	ID        string   `json:"id"`
 	Name      string   `json:"name"`
@@ -34,12 +28,11 @@ type Device struct {
 	FirstSeen int64    `json:"firstSeen"`
 	LastSeen  int64    `json:"lastSeen"`
 	Order     int      `json:"order"`
-	Renamed   bool     `json:"renamed,omitempty"` // the user named it; reports no longer rename it
-	HW        *HW      `json:"hw,omitempty"`      // for power estimates while offline
-	MACs      []string `json:"macs,omitempty"`    // for Wake-on-LAN while it's off
+	Renamed   bool     `json:"renamed,omitempty"`
+	HW        *HW      `json:"hw,omitempty"`
+	MACs      []string `json:"macs,omitempty"`
 }
 
-// HW is the hardware a device last reported.
 type HW struct {
 	FormFactor *string  `json:"formFactor"`
 	Threads    *float64 `json:"threads"`
@@ -52,33 +45,25 @@ func (d *Device) powerHW() power.HW {
 	return power.HW{FormFactor: d.HW.FormFactor, Threads: d.HW.Threads}
 }
 
-// Latest is a device's last normalized report plus what the hub adds to it.
 type Latest struct {
 	report.Report
-	ReceivedAt int64            `json:"receivedAt"` // Unix ms
+	ReceivedAt int64            `json:"receivedAt"`
 	PowerEst   *power.Breakdown `json:"powerEst"`
 }
 
-// View is a device as /api/devices and SSE snapshots show it.
 type View struct {
 	Device
 	Online  bool            `json:"online"`
 	Latest  *Latest         `json:"latest"`
-	History []history.Point `json:"history"` // raw samples from the last LiveHistory
+	History []history.Point `json:"history"`
 }
 
-// reportReply is the body of a successful POST /api/report: it tells the agent what clients
-// want from it. Procs asks for the process list (procs.go); Commands are signed power
-// actions (commands.go).
 type reportReply struct {
 	OK       bool      `json:"ok"`
 	Procs    bool      `json:"procs,omitempty"`
 	Commands []command `json:"commands,omitempty"`
 }
 
-// command is a queued remote action, HMAC-signed so an agent can tell it from one a LAN
-// MITM injected into the plain-HTTP reply. T is when it was queued (Unix ms); see
-// SignCommand.
 type command struct {
 	ID     string `json:"id"`
 	Action string `json:"action"`
@@ -110,7 +95,6 @@ func (h *Hub) loadRegistry() error {
 	return nil
 }
 
-// saveRegistry writes devices.json now, unless it would write what the last save did.
 func (h *Hub) saveRegistry() error {
 	h.saveMu.Lock()
 	defer h.saveMu.Unlock()
@@ -130,15 +114,11 @@ func (h *Hub) saveRegistry() error {
 	return nil
 }
 
-// Retry delays for devices.json after a failed write (a read-only or full disk).
 const (
 	saveRetryMin = 5 * time.Second
 	saveRetryMax = 5 * time.Minute
 )
 
-// scheduleSave writes devices.json within saveDelay, coalescing bursts. While writes fail,
-// the delay grows from saveRetryMin to saveRetryMax and the failure is logged only once,
-// so a read-only data directory doesn't fill the log. Caller holds mu.
 func (h *Hub) scheduleSave() {
 	if h.saveT != nil || h.stopped {
 		return
@@ -157,8 +137,6 @@ func (h *Hub) scheduleSave() {
 	})
 }
 
-// saved records how a delayed save went: the first failure is logged and starts the
-// backoff, later ones double it, and the first success after them is logged.
 func (h *Hub) saved(err error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -176,13 +154,10 @@ func (h *Hub) saved(err error) {
 
 func (h *Hub) nowMS() int64 { return h.now().UnixMilli() }
 
-// online reports whether d has reported within OfflineAfter.
 func (h *Hub) online(d *Device) bool {
 	return h.nowMS()-d.LastSeen < OfflineAfter.Milliseconds()
 }
 
-// sortedIDs lists registered ids by first sighting (upstream's insertion order). Caller
-// holds mu.
 func (h *Hub) sortedIDs() []string {
 	ids := make([]string, 0, len(h.registry))
 	for id := range h.registry {
@@ -198,7 +173,6 @@ func (h *Hub) sortedIDs() []string {
 	return ids
 }
 
-// view builds a device's View. Caller holds mu.
 func (h *Hub) view(id string) View {
 	d := h.registry[id]
 	hist := h.history.Recent(id, LiveHistory)
@@ -208,7 +182,6 @@ func (h *Hub) view(id string) View {
 	return View{Device: *d, Online: h.online(d), Latest: h.latest[id], History: hist}
 }
 
-// views lists every device's View. Caller holds mu.
 func (h *Hub) views() []View {
 	out := []View{}
 	for _, id := range h.sortedIDs() {
@@ -217,8 +190,6 @@ func (h *Hub) views() []View {
 	return out
 }
 
-// deviceLock returns id's ingest lock, creating it unless id is new and the registry is full
-// (then nil). Locks of removed devices are dropped by handleRemove.
 func (h *Hub) deviceLock(id string) *sync.Mutex {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -235,13 +206,8 @@ func (h *Hub) deviceLock(id string) *sync.Mutex {
 
 var errDeviceKey = errors.New("bad device key")
 
-// ingest takes one raw report body (already authenticated) through Normalize into the
-// registry, history, power estimate, SSE and alerts. Reports for one device are applied one
-// at a time, in full, so LastSeen, history samples and "report" events stay in order.
 func (h *Hub) ingest(raw []byte) (reportReply, error) { return h.ingestFrom(raw, false) }
 
-// ingestFrom is ingest; own marks the hub's in-process self-report, which never crosses the
-// network and so needs no device key even when connect enrolled this machine's own id.
 func (h *Hub) ingestFrom(raw []byte, own bool) (reportReply, error) {
 	r, err := report.Normalize(raw)
 	if errors.Is(err, report.ErrInvalidID) {
@@ -251,7 +217,7 @@ func (h *Hub) ingestFrom(raw []byte, own bool) (reportReply, error) {
 		return reportReply{}, err
 	}
 	procs := r.Processes
-	r.Processes = nil // processes on demand are kept apart (procs.go), never with the report
+	r.Processes = nil
 
 	lk := h.deviceLock(r.ID)
 	if lk == nil {
@@ -261,7 +227,6 @@ func (h *Hub) ingestFrom(raw []byte, own bool) (reportReply, error) {
 	defer lk.Unlock()
 	now := h.nowMS()
 	est := power.Estimate(&r)
-	// Biggest GPU first, so the main gauge shows e.g. the GB300 rather than a small display card.
 	sort.SliceStable(r.GPUs, func(i, j int) bool { return val(r.GPUs[i].MemTotal) > val(r.GPUs[j].MemTotal) })
 	latest := &Latest{Report: r, ReceivedAt: now, PowerEst: est}
 
@@ -311,14 +276,13 @@ func (h *Hub) ingestFrom(raw []byte, own bool) (reportReply, error) {
 	if r.ActionResult != nil {
 		h.broadcast(map[string]any{"type": "actionResult", "id": r.ID, "name": dev.Name, "result": r.ActionResult})
 	}
-	h.alerts.OnReport(r.ID, &r) // outside mu: the engine calls back into alertDevices
+	h.alerts.OnReport(r.ID, &r)
 	if procs != nil {
 		h.storeProcs(r.ID, procs)
 	}
 	return h.replyFor(r.ID, r.Actions), nil
 }
 
-// sampleOf is the history sample for one report: main (first) GPU, memory as a percentage.
 func sampleOf(now int64, r *report.Report, est *power.Breakdown) history.Point {
 	var g report.GPU
 	if len(r.GPUs) > 0 {
@@ -326,7 +290,6 @@ func sampleOf(now int64, r *report.Report, est *power.Breakdown) history.Point {
 	}
 	p := history.Point{T: float64(now), CPU: r.CPU.Usage, GPU: g.Usage, CPUTemp: r.CPU.Temp,
 		GPUTemp: g.Temp, GPUPower: g.Power}
-	// Upstream treats a missing "used" as 0 %; unknown stays nil here, per the project rule.
 	if t, u := r.Memory.Total, r.Memory.Used; t != nil && *t > 0 && u != nil {
 		p.Mem = report.Ptr(*u / *t * 100)
 	}
@@ -349,8 +312,6 @@ func val(v *float64) float64 {
 	return *v
 }
 
-// deviceEvent is a View without history, for "report" events (upstream sends
-// { ...reg, online: true, latest }).
 type deviceEvent struct{ v View }
 
 func (d deviceEvent) MarshalJSON() ([]byte, error) {
@@ -369,8 +330,6 @@ type reportEvent struct {
 	Sample history.Point `json:"sample"`
 }
 
-// alertDevices lists devices for the alerts engine. The engine may hold its own lock, so
-// this must never call into it.
 func (h *Hub) alertDevices() []alerts.Device {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -386,7 +345,6 @@ func (h *Hub) alertDevices() []alerts.Device {
 	return out
 }
 
-// onlineFlags is every device's online flag.
 func (h *Hub) onlineFlags() map[string]bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -397,23 +355,16 @@ func (h *Hub) onlineFlags() map[string]bool {
 	return online
 }
 
-// broadcastStatus sends every device's online flag: the heartbeat that lets clients notice
-// devices that went offline. Called from Run's goroutine only.
 func (h *Hub) broadcastStatus() {
 	h.sentOnline = h.onlineFlags()
 	h.broadcast(map[string]any{"type": "status", "online": h.sentOnline})
 }
 
-// checkOnline sends a "status" event at once when a device has gone offline since the last
-// one sent, so clients see a device go offline when it crosses OfflineAfter rather
-// than at the next heartbeat. It returns how long until the next check: the soonest
-// moment an online device would cross, at most a second (a new device may report in the
-// meantime). Called from Run's goroutine only.
 func (h *Hub) checkOnline() time.Duration {
 	online := h.onlineFlags()
 	changed := false
 	for id, on := range online {
-		if prev, ok := h.sentOnline[id]; !on && (prev || !ok) { // a report says it came back
+		if prev, ok := h.sentOnline[id]; !on && (prev || !ok) {
 			changed = true
 		}
 	}
@@ -433,8 +384,6 @@ func (h *Hub) checkOnline() time.Duration {
 	return max(next, 10*time.Millisecond)
 }
 
-// collectLoop samples this machine every Interval and ingests it like any agent's report.
-// The report gets the hub key implicitly: it never leaves the process.
 func (h *Hub) collectLoop(ctx context.Context) {
 	t := time.NewTicker(h.opt.Interval)
 	defer t.Stop()
@@ -465,7 +414,7 @@ func (h *Hub) collectLoop(ctx context.Context) {
 			}
 			continue
 		}
-		if !report.ValidID(r.ID) { // the collector doesn't know this machine's id yet
+		if !report.ValidID(r.ID) {
 			if !warned {
 				h.logf("hub: this machine's collector reports no device id; not monitoring it")
 				warned = true

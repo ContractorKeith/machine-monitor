@@ -18,15 +18,11 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/update/updatetest"
 )
 
-// fakeBinary stands in for machine-monitor: it records each call's arguments.
-// connect also records what it read on stdin.
-// FAKE_FAIL=<command> makes that command exit 3. A successful connect writes client.json.
 const fakeBinary = "#!/bin/sh\necho \"$*\" >> \"$HOME/calls.log\"\n" +
 	"if [ \"$1\" = connect ]; then cat >> \"$HOME/stdin.log\"; fi\n" +
 	"if [ \"$1\" = \"${FAKE_FAIL:-}\" ]; then exit 3; fi\n" +
 	"if [ \"$1\" = connect ]; then mkdir -p \"${MACHINE_MONITOR_DIR:-$HOME/cfg}\"; echo '{}' > \"${MACHINE_MONITOR_DIR:-$HOME/cfg}/client.json\"; fi\n"
 
-// withRelease points the installers at a fake release of version.
 func withRelease(t *testing.T, version string) *updatetest.Release {
 	t.Helper()
 	bins := map[string][]byte{}
@@ -84,7 +80,6 @@ func TestInstallScriptsPinVerifiedChecksums(t *testing.T) {
 			t.Errorf("%s: in install.sh %v, in install.ps1 %v", name, inSh, inPs)
 		}
 	}
-	// checksums.txt is fetched and verified once, then cached.
 	th.keyed("GET", "/install.sh", "")
 	n := 0
 	for _, p := range rel.Fetched() {
@@ -144,7 +139,6 @@ func TestInstallHubURL(t *testing.T) {
 	if w := th.req("GET", "/install.sh", th.Token(), "", "Host", "[::1]'x"); w.Code == 200 {
 		t.Fatalf("odd Host accepted: %d", w.Code)
 	}
-	// An IPv6 zone in URL form makes a working hub URL.
 	w := th.req("GET", "/install.sh", th.Token(), "", "Host", "[fe80::1%25eth0]:7777")
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "HUB='http://[fe80::1%25eth0]:7777'") {
 		t.Fatalf("zoned IPv6 Host: %d\n%s", w.Code, w.Body)
@@ -155,7 +149,7 @@ func TestInstallHost(t *testing.T) {
 	for host, want := range map[string]bool{
 		"hub.lan": true, "hub.lan:7777": true, "192.168.1.5:65535": true, "[::1]": true, "[::1]:7777": true,
 		"[fe80::1%25eth0]:7777": true, "[fe80::1%25en0.5]": true,
-		"[fe80::1%a]":          false, // not URL form: http://[fe80::1%a] is not a valid URL
+		"[fe80::1%a]":          false,
 		"[fe80::1%25]":         false,
 		"[fe80::1%25eth0%25x]": false,
 		"[fe80::1%25eth/0]":    false,
@@ -163,7 +157,7 @@ func TestInstallHost(t *testing.T) {
 		"127.0.0.1:0":          false,
 		"127.0.0.1:":           false,
 		"127.0.0.1:07777":      false,
-		"fe80::1":              false, // IPv6 needs brackets
+		"fe80::1":              false,
 		"[127.0.0.1]":          false,
 		"[::1":                 false,
 		"[::1]'x":              false,
@@ -176,7 +170,6 @@ func TestInstallHost(t *testing.T) {
 	}
 }
 
-// A value with quotes in it can't end the string it is pasted into.
 func TestFillTemplateQuoting(t *testing.T) {
 	evil := `a'b"c$(touch pwned)` + "`x`" + `\'; exit 3; '`
 	if _, err := exec.LookPath("bash"); err == nil && runtime.GOOS != "windows" {
@@ -193,20 +186,15 @@ func TestFillTemplateQuoting(t *testing.T) {
 	}
 }
 
-// The documented ways to run install.sh: the one-liner, and the download-first form for
-// curl older than 7.76 (no --fail-with-body). Both use $KEY and $URL.
 const (
 	oneLiner      = `curl -sSL --fail-with-body -H "Authorization: Bearer $KEY" "$URL/install.sh" | sh`
 	downloadFirst = `curl -fsSL -H "Authorization: Bearer $KEY" -o install.sh "$URL/install.sh" && sh install.sh`
 )
 
-// installRun runs the one-liner with the hub's key against a live hub, in a temp HOME.
 func installRun(t *testing.T, th *testHub) (home, hubURL string, out []byte, err error) {
 	return installRunWith(t, th, th.Token(), oneLiner)
 }
 
-// installRunWith runs command (oneLiner or downloadFirst) with key; extra is added to the
-// environment.
 func installRunWith(t *testing.T, th *testHub, key, command string, extra ...string) (home, hubURL string, out []byte, err error) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -235,7 +223,6 @@ func installRunWith(t *testing.T, th *testHub, key, command string, extra ...str
 	return home, srv.URL, out, err
 }
 
-// wantFailure checks that an install exited non-zero, said msg, and left no binary behind.
 func wantFailure(t *testing.T, what, home string, out []byte, err error, msg string) {
 	t.Helper()
 	var exit *exec.ExitError
@@ -279,7 +266,6 @@ func TestInstallShEndToEnd(t *testing.T) {
 			t.Fatal("the key is in the binary's arguments")
 		}
 	}
-	// Running it again replaces the binary in place.
 	if _, _, out, err := installRun(t, th); err != nil {
 		t.Fatalf("second install: %v\n%s", err, out)
 	}
@@ -302,7 +288,6 @@ func TestInstallShRefusesBadChecksum(t *testing.T) {
 	}
 }
 
-// A failed download inside the script (the archive 404s) stops it with a non-zero exit.
 func TestInstallShFailsOnDownloadError(t *testing.T) {
 	rel := withRelease(t, "1.2.3")
 	for _, p := range []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64"} {
@@ -317,7 +302,6 @@ func TestInstallShFailsOnDownloadError(t *testing.T) {
 	}
 }
 
-// A failing step after the download (here: pairing) stops the script before the service.
 func TestInstallShFailsWhenPairingFails(t *testing.T) {
 	withRelease(t, "1.2.3")
 	th := newTestHub(t)
@@ -328,8 +312,6 @@ func TestInstallShFailsWhenPairingFails(t *testing.T) {
 	}
 }
 
-// Both documented forms fail with a non-zero exit when the hub refuses. The one-liner also
-// shows why: curl --fail-with-body hands sh the hub's error script.
 func TestInstallShFailsLoudlyOnHubError(t *testing.T) {
 	rel := withRelease(t, "1.2.5")
 	key, cert := updatetest.NewCA(t)
@@ -349,7 +331,6 @@ func TestInstallShFailsLoudlyOnHubError(t *testing.T) {
 	}
 }
 
-// A script cut off mid-download runs nothing: all of it is inside main, called last.
 func TestInstallShTruncatedRunsNothing(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("install.sh is for Linux and macOS")
@@ -379,7 +360,7 @@ func TestInstallShTruncatedRunsNothing(t *testing.T) {
 func TestInstallShShellCheck(t *testing.T) {
 	sc, err := exec.LookPath("shellcheck")
 	if err == nil {
-		err = exec.Command(sc, "--version").Run() // a version-manager shim may be unconfigured
+		err = exec.Command(sc, "--version").Run()
 	}
 	if err != nil {
 		t.Skip("no working shellcheck")
@@ -389,7 +370,6 @@ func TestInstallShShellCheck(t *testing.T) {
 	}
 }
 
-// install.ps1 parses in whatever PowerShell is here: Windows PowerShell 5.1 on Windows runners.
 func TestInstallPs1Parses(t *testing.T) {
 	ps, err := exec.LookPath("powershell")
 	if err != nil {
@@ -413,9 +393,6 @@ func TestInstallPs1Parses(t *testing.T) {
 	t.Logf("parsed with PowerShell %s", bytes.TrimSpace(out))
 }
 
-// install.ps1, run for real by PowerShell 7 on Linux or macOS against a live hub, up to
-// launching the binary (a .exe unpacked from a zip can't run there). Not run on Windows,
-// where it would install a real agent and put a directory on the user's PATH.
 func TestInstallPs1DownloadsAndVerifies(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("would install a real agent")
@@ -451,7 +428,6 @@ func TestInstallPs1DownloadsAndVerifies(t *testing.T) {
 	if _, err := os.Stat(exe); err == nil {
 		t.Fatal("binary installed after a failed check")
 	}
-	// irm throws on the hub's refusal, so iex never runs and PowerShell exits non-zero.
 	exe, out, err = run("wrong")
 	wantFailure(t, "wrong key", t.TempDir(), out, err, "the hub key is missing or wrong")
 	if _, err := os.Stat(exe); err == nil {
@@ -459,11 +435,8 @@ func TestInstallPs1DownloadsAndVerifies(t *testing.T) {
 	}
 }
 
-// cfgDir points the data dir inside the fake home on every OS.
 const cfgDir = `export MACHINE_MONITOR_DIR="$HOME/cfg"; `
 
-// A failure after the binary is installed rolls the install back: a fresh install leaves no
-// binary or client.json behind, and a replaced binary is put back (skeptic pass 2).
 func TestInstallShRollsBack(t *testing.T) {
 	withRelease(t, "1.2.3")
 	th := newTestHub(t)
@@ -480,7 +453,6 @@ func TestInstallShRollbackRestoresReplacedBinary(t *testing.T) {
 	withRelease(t, "1.2.3")
 	th := newTestHub(t)
 	const old = "#!/bin/sh\n# the old binary\n"
-	// The home directory is made by installRunWith, so seed it through the command.
 	seed := `mkdir -p "$HOME/.local/bin" "$MACHINE_MONITOR_DIR" && printf '%s' "$OLD" > "$HOME/.local/bin/machine-monitor" && ` +
 		`chmod 755 "$HOME/.local/bin/machine-monitor" && echo '{"old":1}' > "$MACHINE_MONITOR_DIR/client.json" && `
 	home, _, out, err := installRunWith(t, th, th.Token(), cfgDir+seed+oneLiner, "FAKE_FAIL=service", "OLD="+old)
@@ -493,8 +465,6 @@ func TestInstallShRollbackRestoresReplacedBinary(t *testing.T) {
 	}
 }
 
-// A symlinked binary and client.json come back as symlinks after a failed install, and a
-// dangling link is not deleted (skeptic pass 3, N11).
 func TestInstallShRollbackRestoresSymlinks(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("install.sh is for Unix")

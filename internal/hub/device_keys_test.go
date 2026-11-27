@@ -15,7 +15,7 @@ import (
 
 func TestDeviceEnrollment(t *testing.T) {
 	th := newTestHub(t)
-	th.report("dev-1", nil) // legacy reports work
+	th.report("dev-1", nil)
 	enroll := func(id string) string {
 		w := th.keyed("POST", "/api/pair/code", "{}")
 		code := decode[map[string]any](t, w)["code"]
@@ -75,8 +75,6 @@ func TestDeviceEnrollment(t *testing.T) {
 	th.report("legacy", nil)
 }
 
-// The hub's own report never crosses the network, so enrolling its own id (connect run on
-// the hub's machine) must not stop it monitoring itself.
 func TestOwnReportIgnoresDeviceKey(t *testing.T) {
 	var mu sync.Mutex
 	var logs []string
@@ -113,7 +111,6 @@ func TestOwnReportIgnoresDeviceKey(t *testing.T) {
 	}
 }
 
-// A damaged deviceKeys value names the file and the fix, not a bare json error.
 func TestCorruptDeviceKeysNamesFile(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "config.json")
 	os.WriteFile(p, []byte(`{"token":"abc","deviceKeys":"oops"}`), 0o600)
@@ -124,7 +121,6 @@ func TestCorruptDeviceKeysNamesFile(t *testing.T) {
 	}
 }
 
-// A fresh hub writes no "deviceKeys": null.
 func TestFreshConfigHasNoNullDeviceKeys(t *testing.T) {
 	th := newTestHub(t)
 	b, err := os.ReadFile(th.opt.Paths.Config)
