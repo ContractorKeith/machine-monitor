@@ -62,6 +62,7 @@ type Hub struct {
 	act         actionState
 
 	mu          sync.Mutex
+	sendQOnce   sync.Once
 	cfg         hubConfig
 	registry    map[string]*Device
 	latest      map[string]*Latest

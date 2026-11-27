@@ -35,7 +35,7 @@ func TestNotATerminal(t *testing.T) {
 
 func TestConnectSaysHowToReport(t *testing.T) {
 	h, srv, _ := connectHub(t)
-	stubAgent(t)
+	stubTUI(t)
 	var out, errOut bytes.Buffer
 	if rc := run([]string{"connect", srv.URL + "/?key=" + h.Token()}, &out, &errOut); rc != 0 {
 		t.Fatalf("exit %d: %s", rc, errOut.String())

@@ -43,7 +43,7 @@ func pairCode(t *testing.T, h *hub.Hub, srv *httptest.Server) string {
 	return v.Code
 }
 
-func stubAgent(t *testing.T) *[2]string {
+func stubTUI(t *testing.T) *[2]string {
 	got := new([2]string)
 	old, oldTTY := connectTUI, stdoutIsTerminal
 	connectTUI = func(hubURL, key string, _ io.Writer) int { got[0], got[1] = hubURL, key; return 0 }
@@ -75,7 +75,7 @@ func TestConnectWithoutTerminalNeedsCode(t *testing.T) {
 
 func TestConnectNamesReplacedHub(t *testing.T) {
 	h, srv, clientPath := connectHub(t)
-	stubAgent(t)
+	stubTUI(t)
 	if err := agent.SaveClient(clientPath, agent.Client{HubURL: "http://10.0.0.9:7777", Key: "0123456789abcdef"}); err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestConnectPromptsThenOpensTUI(t *testing.T) {
 		wrong = "000001"
 	}
 	setStdin(t, wrong+"\n"+code+"\n")
-	got := stubAgent(t)
+	got := stubTUI(t)
 	var out, errOut bytes.Buffer
 	if rc := run([]string{"connect", srv.URL}, &out, &errOut); rc != 0 {
 		t.Fatalf("exit %d: %s", rc, errOut.String())
@@ -120,7 +120,7 @@ func TestConnectPromptsThenOpensTUI(t *testing.T) {
 
 func TestConnectWithCodeFlagAndNoAgent(t *testing.T) {
 	h, srv, clientPath := connectHub(t)
-	got := stubAgent(t)
+	got := stubTUI(t)
 	code := pairCode(t, h, srv)
 	wrong := "000000"
 	if code == wrong {
@@ -145,7 +145,7 @@ func TestConnectWithCodeFlagAndNoAgent(t *testing.T) {
 
 func TestConnectWithDashboardLink(t *testing.T) {
 	h, srv, clientPath := connectHub(t)
-	stubAgent(t)
+	stubTUI(t)
 	var out, errOut bytes.Buffer
 	if rc := run([]string{"connect", "--no-agent", srv.URL + "/?key=" + h.Token()}, &out, &errOut); rc != 0 {
 		t.Fatalf("exit %d: %s", rc, errOut.String())
@@ -165,7 +165,7 @@ func TestConnectWithDashboardLink(t *testing.T) {
 
 func TestConnectKeyFromStdin(t *testing.T) {
 	h, srv, clientPath := connectHub(t)
-	stubAgent(t)
+	stubTUI(t)
 	setStdin(t, h.Token()+"\n")
 	var out, errOut bytes.Buffer
 	if rc := run([]string{"connect", "--no-agent", "--key-stdin", srv.URL}, &out, &errOut); rc != 0 {
@@ -209,7 +209,7 @@ func TestAgentRejectsKeyInURL(t *testing.T) {
 
 func TestConnectWithoutTTYDoesNotOpenTUI(t *testing.T) {
 	h, srv, _ := connectHub(t)
-	got := stubAgent(t)
+	got := stubTUI(t)
 	stdoutIsTerminal = func(io.Writer) bool { return false }
 	var out, errOut bytes.Buffer
 	if rc := run([]string{"connect", srv.URL + "/?key=" + h.Token()}, &out, &errOut); rc != 0 || got[0] != "" ||
@@ -226,7 +226,7 @@ func stubDiscovery(t *testing.T, hubs []discovery.Hub, err error) {
 
 func TestConnectDiscoversHubs(t *testing.T) {
 	h, srv, _ := connectHub(t)
-	got := stubAgent(t)
+	got := stubTUI(t)
 	stubDiscovery(t, []discovery.Hub{{Name: "other", URL: "http://10.9.9.9:7777"}, {Name: "testhub", URL: srv.URL}}, nil)
 	setStdin(t, "2\n"+pairCode(t, h, srv)+"\n")
 	var out, errOut bytes.Buffer

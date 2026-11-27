@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -636,5 +637,31 @@ func TestViewKeys(t *testing.T) {
 		if viewKeys[want] != k {
 			t.Errorf("%s tab is labelled %s, want %s", viewNames[want], viewKeys[want], k)
 		}
+	}
+}
+
+func TestStatusLineShowsHistoryWriteFailure(t *testing.T) {
+	dir := t.TempDir()
+	s, err := history.Open(dir, func() time.Time { return hubNow })
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := testOptions()
+	o.History = s
+	m := New(o).(model)
+	next, _ := m.Update(reportMsg{r: workstation(16)})
+	m = next.(model)
+	if got := m.statusLine(); strings.Contains(got, "history not saved") {
+		t.Fatalf("healthy store: status %q", got)
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	r := workstation(16)
+	for i := range 3 {
+		s.Add(localID, localSample(hubNow.Add(time.Duration(i)*time.Minute).UnixMilli(), r))
+	}
+	if got := m.statusLine(); !strings.Contains(got, "history not saved") {
+		t.Fatalf("failing store: status %q, want a history warning", got)
 	}
 }
