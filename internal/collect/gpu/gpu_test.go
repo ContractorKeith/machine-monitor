@@ -175,6 +175,18 @@ func TestGenericGPUs(t *testing.T) {
 	}
 }
 
+func TestGenericGPUsLeaveNamesBlankWhenCountsDiffer(t *testing.T) {
+	got := genericGPUs(recEngines, recMems, recControllers[:1])
+	if len(got) != 2 {
+		t.Fatalf("got %d GPUs, want 2", len(got))
+	}
+	for _, g := range got {
+		if *g.Name != "GPU" || g.MemTotal != nil {
+			t.Errorf("one controller for two adapters must not name either: %s", asJSON(t, got))
+		}
+	}
+}
+
 func TestAppendGPUsSortsByVRAM(t *testing.T) {
 	gpus := []report.GPU{
 		{Name: report.Ptr("small"), MemTotal: report.Ptr(8.0)},

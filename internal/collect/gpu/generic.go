@@ -65,20 +65,21 @@ func genericGPUs(engines []gpuEngine, mems []gpuAdapterMemory, vcs []videoContro
 		if mem == nil || (byLUID[luid] == 0 && mem.DedicatedUsage < 1<<20) {
 			continue
 		}
-		g := report.GPU{
+		gpus = append(gpus, report.GPU{
 			Name:    report.Ptr("GPU"),
 			Vendor:  report.Ptr("generic"),
 			Usage:   report.Ptr(math.Min(100, math.Round(byLUID[luid]*10)/10)),
 			MemUsed: report.Ptr(float64(mem.DedicatedUsage)),
+		})
+	}
+	if len(real) != len(gpus) {
+		return gpus
+	}
+	for i, vc := range real {
+		gpus[i].Name = report.Ptr(vc.Name)
+		if vc.AdapterRAM > 0 {
+			gpus[i].MemTotal = report.Ptr(float64(vc.AdapterRAM))
 		}
-		if len(real) > 0 {
-			vc := real[min(len(gpus), len(real)-1)]
-			g.Name = report.Ptr(vc.Name)
-			if vc.AdapterRAM > 0 {
-				g.MemTotal = report.Ptr(float64(vc.AdapterRAM))
-			}
-		}
-		gpus = append(gpus, g)
 	}
 	return gpus
 }
