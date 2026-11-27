@@ -1,15 +1,5 @@
 package tui
 
-// Energy view (PLAN §3 rows 17–19, §7 view 5): over 24 h, 7 d or 30 d, what every device
-// draws now and used on average, its energy, cost and projected monthly cost, a bar chart of
-// energy per hour or day, and the usage totals table (online time, average and peak loads
-// and temperatures, bytes moved). Hub mode reads GET /api/energy; local mode totals the
-// session store the same way.
-//
-// The tiles, price wording, projections and tables follow upstream's Advanced page
-// (public/index.html renderAdv, advBounds, drawAdvChart), Forward-Future/device-monitor
-// @ c3a4c41 (MIT, © 2026 Matt): https://github.com/Forward-Future/device-monitor
-
 import (
 	"context"
 	"fmt"
@@ -27,19 +17,17 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/power"
 )
 
-// energyRanges are the Energy view's ranges, as upstream's.
 var energyRanges = []struct{ name, label string }{
 	{"24 h", "last 24 hours"}, {"7 days", "last 7 days"}, {"30 days", "last 30 days"},
 }
 
 const (
-	energyDefaultRange = 1                // 7 days, upstream's default
-	energyRefresh      = 60 * time.Second // as upstream
+	energyDefaultRange = 1
+	energyRefresh      = 60 * time.Second
 	monthDays          = 30.44
-	energyAxisW        = 9 // bar chart y-axis labels: "12.5 kWh"
+	energyAxisW        = 9
 )
 
-// energyState is the Energy view's range, scroll and last result.
 type energyState struct {
 	rng    int
 	data   *client.Energy
@@ -48,7 +36,6 @@ type energyState struct {
 	scroll int
 }
 
-// Energy-view messages.
 type (
 	energyMsg struct {
 		seq  int
@@ -56,11 +43,9 @@ type (
 		err  error
 	}
 	energyRefreshMsg struct{ seq int }
-	energyFetchMsg   struct{ seq int } // a debounced fetch is due
+	energyFetchMsg   struct{ seq int }
 )
 
-// energyBounds are the bucket edges for range r ending around now, in Unix ms: whole local
-// hours for 24 h (the current hour last), local midnights otherwise (today last).
 func energyBounds(now time.Time, r int) []float64 {
 	var out []float64
 	y, mo, d := now.Date()
@@ -81,7 +66,6 @@ func energyBounds(now time.Time, r int) []float64 {
 	return out
 }
 
-// fetchEnergy reads energy totals for the current range.
 func (m *model) fetchEnergy() tea.Cmd {
 	m.ev.seq++
 	m.ev.err = nil
@@ -99,7 +83,6 @@ func (m *model) fetchEnergy() tea.Cmd {
 	}
 }
 
-// energyKey handles the Energy view's keys: range and scrolling.
 func (m model) energyKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	k := m.keys
 	switch {
@@ -133,19 +116,16 @@ func (m model) energyKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// clampEnergy keeps the Energy view's scroll in range.
 func (m *model) clampEnergy() {
 	m.ev.scroll = max(0, min(m.ev.scroll, len(m.energyLines())-m.bodyHeight()))
 }
 
-// energyView renders the visible part of the Energy view.
 func (m model) energyView() string {
 	lines := m.energyLines()
 	end := min(len(lines), m.ev.scroll+m.bodyHeight())
 	return strings.Join(lines[min(m.ev.scroll, end):end], "\n")
 }
 
-// energyFooter lists the view's keys and where the scroll is.
 func (m model) energyFooter() string {
 	s := "[ ] range · ↑/↓ scroll"
 	if n, h := len(m.energyLines()), m.bodyHeight(); n > h {
@@ -157,16 +137,13 @@ func (m model) energyFooter() string {
 	return s
 }
 
-// energyRow is one device on the Energy view: its totals (nil before any) and what it draws
-// now (nil when offline or unknown).
 type energyRow struct {
 	d     device
 	u     *hub.Usage
 	now   *power.Breakdown
-	color int // index into deviceStyles
+	color int
 }
 
-// energyRows pairs every device, in display order, with its totals.
 func (m model) energyRows() []energyRow {
 	byID := map[string]*hub.Usage{}
 	if m.ev.data != nil {
@@ -179,7 +156,7 @@ func (m model) energyRows() []energyRow {
 		r := energyRow{d: d, u: byID[d.id], color: i}
 		if m.isOnline(d) && d.last != nil {
 			if b := power.Estimate(d.last); b != nil {
-				if d.watts != nil { // the hub's own estimate wins
+				if d.watts != nil {
 					b.Watts = *d.watts
 				}
 				r.now = b
@@ -190,8 +167,6 @@ func (m model) energyRows() []energyRow {
 	return rows
 }
 
-// priceSettings is the price in force: the hub's (or the user's local) saved price, or a
-// guess from this machine's time zone.
 func (m model) priceSettings() (s power.Settings, guessed bool) {
 	if m.ev.data != nil && m.ev.data.Settings != nil {
 		return *m.ev.data.Settings, false
@@ -202,7 +177,6 @@ func (m model) priceSettings() (s power.Settings, guessed bool) {
 	return m.guess, true
 }
 
-// energyLines builds the whole Energy view, before scrolling.
 func (m model) energyLines() []string {
 	t, w := m.theme, m.width
 	var tabs []string
@@ -304,8 +278,6 @@ func (m model) energyLines() []string {
 		t.dim.Render("Energy is only counted while the device is reporting."))
 }
 
-// devCost is a device's cost: the hub's, priced minute by minute, or its energy at the
-// guessed flat rate when no price is saved.
 func devCost(u *hub.Usage, price power.Settings) float64 {
 	if u.Cost != nil {
 		return *u.Cost
@@ -313,7 +285,6 @@ func devCost(u *hub.Usage, price power.Settings) float64 {
 	return u.Wh / 1000 * price.Rate
 }
 
-// deviceStyles colour devices in the chart and tables, cycling as upstream's DEVICE_COLORS.
 func (m model) deviceStyles() []lipgloss.Style {
 	if m.opts.NoColor {
 		return []lipgloss.Style{lipglossNone}
@@ -327,7 +298,6 @@ func (m model) deviceStyles() []lipgloss.Style {
 	return out
 }
 
-// mark is a device's colour swatch.
 func (m model) mark(i int) string {
 	st := m.deviceStyles()
 	g := "■"
@@ -337,7 +307,6 @@ func (m model) mark(i int) string {
 	return st[i%len(st)].Render(g)
 }
 
-// energyChart is the stacked bar chart of energy per hour or day, one colour per device.
 func (m model) energyChart(rows []energyRow, bounds []float64) []string {
 	t, w := m.theme, m.width
 	n := len(bounds) - 1
@@ -359,7 +328,6 @@ func (m model) energyChart(rows []energyRow, bounds []float64) []string {
 	if len(with) == 0 {
 		return append(out, t.dim.Render("No energy recorded in this range yet."))
 	}
-	// At least one cell per bar: a window too narrow for every bucket shows the latest ones.
 	pw := max(1, w-energyAxisW-1)
 	first := max(0, n-pw)
 	shown := n - first
@@ -380,8 +348,6 @@ func (m model) energyChart(rows []energyRow, bounds []float64) []string {
 		wraps = append(wraps, wrapOf(st))
 	}
 
-	// Each bar is a column of cells, bottom up; a cell takes the colour of the device whose
-	// share covers its middle, and the top cell is a partial block.
 	eighths := []rune(" ▁▂▃▄▅▆▇█")
 	grid := make([][]string, h)
 	for y := range grid {
@@ -393,7 +359,7 @@ func (m model) energyChart(rows []energyRow, bounds []float64) []string {
 	for i := first; i < n; i++ {
 		x0 := int(slot*float64(i-first) + (slot-float64(bw))/2)
 		cells := totals[i] / yMax * float64(h)
-		for y := range h { // y = 0 is the bottom row
+		for y := range h {
 			fill := math.Min(1, cells-float64(y))
 			if fill <= 0 {
 				break
@@ -425,7 +391,6 @@ func (m model) energyChart(rows []energyRow, bounds []float64) []string {
 	for y := range h {
 		out = append(out, t.dim.Render(padLeft(axisLabel(y, h, yMax), energyAxisW))+" "+strings.Join(grid[y], ""))
 	}
-	// Bucket labels, spaced so they don't touch; one that would run off the end is left out.
 	labelW := 0
 	for i := first; i < n; i++ {
 		labelW = max(labelW, len([]rune(m.bucketLabel(bounds, i))))
@@ -443,8 +408,6 @@ func (m model) energyChart(rows []energyRow, bounds []float64) []string {
 	return append(out, t.dim.Render(strings.Repeat(" ", energyAxisW+1)+string(axis)))
 }
 
-// axisLabel is the bar chart's y label for row y of h (0 at the top): the maximum, half way
-// and zero.
 func axisLabel(y, h int, yMax float64) string {
 	switch {
 	case y == 0:
@@ -457,13 +420,10 @@ func axisLabel(y, h int, yMax float64) string {
 	return ""
 }
 
-// fmtKwhAxis is an axis kWh label: "2.5 kWh".
 func fmtKwhAxis(v float64) string {
 	return trimZero(strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.2f", v), "0"), ".")) + " kWh"
 }
 
-// bucketLabel names bucket i: the hour for 24 h, the weekday and day for 7 days, the month
-// and day for 30 days.
 func (m model) bucketLabel(bounds []float64, i int) string {
 	d := m.msTime(bounds[i])
 	switch m.ev.rng {
@@ -476,8 +436,6 @@ func (m model) bucketLabel(bounds []float64, i int) string {
 	}
 }
 
-// powerTable is upstream's power table: now, average, peak, energy, cost and share per
-// device, then the total.
 func (m model) powerTable(rows []energyRow, price power.Settings, nowW, kwh, cost float64) []string {
 	t := m.theme
 	total := kwh * 1000
@@ -516,7 +474,6 @@ func (m model) powerTable(rows []energyRow, price power.Settings, nowW, kwh, cos
 	return m.table(cols, body)
 }
 
-// powerSource says which parts of a device's power were measured.
 func powerSource(e *power.Breakdown) string {
 	switch {
 	case e == nil:
@@ -531,8 +488,6 @@ func powerSource(e *power.Breakdown) string {
 	return "Estimated from load"
 }
 
-// usageTable is upstream's usage table: online time and share of the range, CPU and GPU
-// average/peak, memory average, peak temperatures, and bytes moved.
 func (m model) usageTable(rows []energyRow, span float64) []string {
 	t := m.theme
 	cols := []tcol{{"Device", 0}, {"Online", 11}, {"CPU avg/pk", 10}, {"GPU avg/pk", 10}, {"Mem", 4},
@@ -579,15 +534,11 @@ func (m model) usageTable(rows []energyRow, span float64) []string {
 	return m.table(cols, body)
 }
 
-// tcol is a table column: its heading and width. Width 0 is the name column, which takes
-// what is left (at least 10); a negative width is left-aligned. Columns that don't fit the
-// window are dropped from the right.
 type tcol struct {
 	head string
 	w    int
 }
 
-// table lays out a header and rows in the window's width.
 func (m model) table(cols []tcol, rows [][]string) []string {
 	const nameMin = 10
 	used := nameMin
@@ -639,7 +590,6 @@ func (m model) table(cols []tcol, rows [][]string) []string {
 	return out
 }
 
-// fmtW formats watts as upstream: whole watts, or kW from 1000 W.
 func fmtW(w *float64) string {
 	switch {
 	case w == nil:
@@ -650,7 +600,6 @@ func fmtW(w *float64) string {
 	return fmt.Sprintf("%.0f W", math.Round(*w))
 }
 
-// fmtKwh formats kWh as upstream: 2 decimals under 10, 1 under 100, whole above.
 func fmtKwh(k float64) string {
 	switch {
 	case k < 10:
@@ -661,7 +610,6 @@ func fmtKwh(k float64) string {
 	return thousands(int64(math.Round(k))) + " kWh"
 }
 
-// thousands writes n with comma separators.
 func thousands(n int64) string {
 	s := fmt.Sprint(n)
 	if n < 0 {
@@ -673,11 +621,9 @@ func thousands(n int64) string {
 	return s
 }
 
-// currencySymbols are the prefixes for common currencies; others print their code after.
 var currencySymbols = map[string]string{"USD": "$", "CAD": "CA$", "AUD": "A$", "NZD": "NZ$", "EUR": "€",
 	"GBP": "£", "JPY": "¥", "INR": "₹", "KRW": "₩", "CNY": "CN¥", "BRL": "R$", "MXN": "MX$"}
 
-// money formats an amount like upstream: whole units from 100, cents below.
 func money(v float64, cur string) string {
 	digits := 2
 	if math.Abs(v) >= 100 {
@@ -686,13 +632,12 @@ func money(v float64, cur string) string {
 	return moneyN(v, cur, digits)
 }
 
-// moneyN formats an amount with digits decimals.
 func moneyN(v float64, cur string, digits int) string {
 	if math.IsNaN(v) || math.IsInf(v, 0) {
 		return none
 	}
 	pow := math.Pow(10, float64(digits))
-	num := fmt.Sprintf("%.*f", digits, math.Round(math.Abs(v)*pow)/pow) // half away from zero, as Intl
+	num := fmt.Sprintf("%.*f", digits, math.Round(math.Abs(v)*pow)/pow)
 	if whole, frac, ok := strings.Cut(num, "."); ok {
 		n := 0
 		fmt.Sscan(whole, &n)
@@ -712,7 +657,6 @@ func moneyN(v float64, cur string, digits int) string {
 	return sign + num + " " + cur
 }
 
-// fmtKwhPrice formats a price per kWh: 3 decimals under 1.
 func fmtKwhPrice(r float64, cur string) string {
 	if r < 1 {
 		return moneyN(r, cur, 3)
@@ -720,7 +664,6 @@ func fmtKwhPrice(r float64, cur string) string {
 	return moneyN(r, cur, 2)
 }
 
-// fmtPrice is the price line: "$0.165/kWh", or the time-of-use range.
 func fmtPrice(s power.Settings) string {
 	if len(s.TOU) == 0 {
 		return fmtKwhPrice(s.Rate, s.Currency) + "/kWh"
@@ -729,7 +672,6 @@ func fmtPrice(s power.Settings) string {
 	return fmtKwhPrice(lo, s.Currency) + "–" + fmtKwhPrice(hi, s.Currency) + "/kWh by time of day"
 }
 
-// priceSource says where the price came from, as upstream.
 func priceSource(s power.Settings, guessed bool) string {
 	name := "your area"
 	r, known := power.LookupRegion(s.Region)
@@ -747,16 +689,12 @@ func priceSource(s power.Settings, guessed bool) string {
 	return "The rate you entered."
 }
 
-// ---- cost today (dashboard header) -----------------------------------------------------
-
-// todayState is what every device has cost since local midnight.
 type todayState struct {
 	seq  int
-	cost *float64 // nil until the first read
+	cost *float64
 	cur  string
 }
 
-// Cost-today messages.
 type (
 	todayMsg struct {
 		seq  int
@@ -766,7 +704,6 @@ type (
 	todayRefreshMsg struct{ seq int }
 )
 
-// fetchToday reads energy since local midnight, for the dashboard's cost today.
 func (m *model) fetchToday() tea.Cmd {
 	src := m.source()
 	if src == nil {
@@ -777,7 +714,7 @@ func (m *model) fetchToday() tea.Cmd {
 	now := m.now().In(m.loc())
 	y, mo, d := now.Date()
 	start := float64(time.Date(y, mo, d, 0, 0, 0, 0, now.Location()).UnixMilli())
-	end := math.Max(float64(now.UnixMilli()), start+60e3) // the hub wants an ascending pair
+	end := math.Max(float64(now.UnixMilli()), start+60e3)
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(parent, viewTimeout)
 		defer cancel()
@@ -786,7 +723,6 @@ func (m *model) fetchToday() tea.Cmd {
 	}
 }
 
-// updateToday handles the cost-today messages; ok is false for anything else.
 func (m model) updateToday(msg tea.Msg) (model, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case todayMsg:
@@ -816,7 +752,6 @@ func (m model) updateToday(msg tea.Msg) (model, tea.Cmd, bool) {
 	return m, nil, false
 }
 
-// todayText is the header's "$1.23 today", or "" before the first read.
 func (m model) todayText() string {
 	if m.today.cost == nil {
 		return ""

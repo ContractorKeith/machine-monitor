@@ -9,10 +9,8 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/power"
 )
 
-// maxCardWidth caps the card so it stays readable on a wide terminal.
 const maxCardWidth = 100
 
-// dashboard is view 1: a summary line and this machine's card.
 func (m model) dashboard() string {
 	d := m.cur()
 	if d == nil || d.last == nil {
@@ -30,11 +28,9 @@ func (m model) dashboard() string {
 	return m.theme.dim.Render(summary) + "\n" + m.card(*d, min(m.width, maxCardWidth), false)
 }
 
-// card draws one device: identity, gauges, temperatures, sparklines and I/O rates. A
-// selected card (hub mode) gets a heavier border and a marker before its name.
 func (m model) card(d device, w int, selected bool) string {
 	t := m.theme
-	iw := max(10, w-4) // inside the border and one space of padding each side
+	iw := max(10, w-4)
 	var lines []string
 	box := lipgloss.NewStyle().Border(t.border).BorderForeground(t.borderStyle.GetForeground()).Padding(0, 1)
 	name := t.title.Render(d.name)
@@ -48,7 +44,7 @@ func (m model) card(d device, w int, selected bool) string {
 		name = t.title.Render(marker + d.name)
 	}
 	r := d.last
-	if r == nil { // on the hub's list, but no report since the hub started
+	if r == nil {
 		lines = append(lines, pad(name, iw), pad(t.dim.Render("no report yet"), iw))
 		return box.Render(strings.Join(lines, "\n"))
 	}
@@ -88,8 +84,6 @@ func (m model) card(d device, w int, selected bool) string {
 	return box.Render(strings.Join(lines, "\n"))
 }
 
-// ioLine is the card's network and disk rates in w cells: in columns when they fit, else
-// packed, else without the labels, so the disk-write rate isn't the one cut off.
 func (m model) ioLine(rx, tx, rd, wr *float64, w int) string {
 	t := m.theme
 	net, disk := t.label.Render("NET"), t.label.Render("DISK")
@@ -105,14 +99,12 @@ func (m model) ioLine(rx, tx, rd, wr *float64, w int) string {
 	return pad(fmt.Sprintf("↓%s ↑%s r%s w%s", fmtRate(rx), fmtRate(tx), fmtRate(rd), fmtRate(wr)), w)
 }
 
-// gauge is one card row: a label, a bar filling the free width, and right-hand figures.
 func (m model) gauge(label string, p *float64, right string, w int) string {
 	const labelW = 5
 	bw := max(4, w-labelW-1-lipgloss.Width(right))
 	return pad(m.theme.label.Render(pad(label, labelW))+m.theme.bar(p, bw)+" "+right, w)
 }
 
-// sparkRow is a labelled sparkline sparkHeight rows tall, or nothing when no sample is known.
 func (m model) sparkRow(label string, s series, w int) []string {
 	if !s.known() {
 		return nil
@@ -130,7 +122,6 @@ func (m model) sparkRow(label string, s series, w int) []string {
 	return out
 }
 
-// shortBytes is "8.0/24 GiB" for GPU memory, which has little room on the card.
 func shortBytes(used, total *float64) string {
 	if used == nil || total == nil {
 		return fmtBytesP(used)

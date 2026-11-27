@@ -1,8 +1,5 @@
 package tui
 
-// Full-width line charts for the History view: several series on one braille grid (ntcharts),
-// or an ASCII scatter under the fallback.
-
 import (
 	"math"
 	"strings"
@@ -14,21 +11,15 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/history"
 )
 
-// brailleEmpty is the braille cell with no dots; ntcharts' patterns OR dots onto it.
 const brailleEmpty = '⠀'
 
-// asciiMarks are the ASCII fallback's marks, one per series.
 var asciiMarks = []rune{'*', '+', 'o'}
 
-// plotSeries is one line to draw: a value per point (nil = unknown) and its style.
 type plotSeries struct {
 	get   func(*history.Point) *float64
 	style lipgloss.Style
 }
 
-// plot is a w×h chart of series over pts, x from..to, y 0..yMax. Points further apart than
-// gap ms are not joined, so an offline stretch shows as a hole. cursor is the column drawn
-// as the cursor, or -1.
 type plot struct {
 	pts      []history.Point
 	series   []plotSeries
@@ -39,14 +30,12 @@ type plot struct {
 	cursor   int
 }
 
-// render draws the plot as h lines of w cells. Where series overlap in a cell, the first
-// series' colour wins (its dots are all still drawn).
 func (p plot) render(t theme) []string {
 	if p.w <= 0 || p.h <= 0 {
 		return nil
 	}
 	var cells [][]rune
-	var owner [][]int8 // series index colouring each cell, -1 for none
+	var owner [][]int8
 	if t.ascii {
 		cells, owner = p.ascii()
 	} else {
@@ -98,18 +87,15 @@ func (p plot) render(t theme) []string {
 	return lines
 }
 
-// wrap is a style's escape sequences before and after text. Rendering a style is slow next
-// to the rest of a chart, so charts render each style once and wrap their runs in it.
 type wrap struct{ pre, post string }
 
 func wrapOf(st lipgloss.Style) wrap {
-	pre, post, _ := strings.Cut(st.Render("X"), "X") // escape sequences never contain X
+	pre, post, _ := strings.Cut(st.Render("X"), "X")
 	return wrap{pre, post}
 }
 
 func (w wrap) render(s string) string { return w.pre + s + w.post }
 
-// cursorRune marks the cursor column where it crosses no line.
 func (t theme) cursorRune() rune {
 	if t.ascii {
 		return '|'
@@ -117,7 +103,6 @@ func (t theme) cursorRune() rune {
 	return '│'
 }
 
-// braille draws each series on its own ntcharts braille grid and ORs the dots together.
 func (p plot) braille() ([][]rune, [][]int8) {
 	cells := make([][]rune, p.h)
 	owner := make([][]int8, p.h)
@@ -128,12 +113,9 @@ func (p plot) braille() ([][]rune, [][]int8) {
 			cells[y][x], owner[y][x] = brailleEmpty, -1
 		}
 	}
-	for si := len(p.series) - 1; si >= 0; si-- { // last first, so the first series owns shared cells
+	for si := len(p.series) - 1; si >= 0; si-- {
 		s := p.series[si]
 		grid := graph.NewBrailleGrid(p.w, p.h, p.from, p.to, 0, p.yMax)
-		// Many points can share a dot column (30 days in 300 columns), so each column keeps
-		// the span of dots its points and joining lines cover, and lines are only traced
-		// between different columns. The result is the same as joining every point.
 		gw := 2 * p.w
 		lo, hi := make([]int, gw), make([]int, gw)
 		for x := range lo {
@@ -186,7 +168,6 @@ func (p plot) braille() ([][]rune, [][]int8) {
 	return cells, owner
 }
 
-// ascii marks each series' average in every column with its own character.
 func (p plot) ascii() ([][]rune, [][]int8) {
 	cells := make([][]rune, p.h)
 	owner := make([][]int8, p.h)
@@ -226,7 +207,6 @@ func (p plot) ascii() ([][]rune, [][]int8) {
 	return cells, owner
 }
 
-// niceMax rounds v up to 1, 2, 2.5 or 5 times a power of ten, as upstream's chart axes.
 func niceMax(v float64) float64 {
 	if !(v > 0) || math.IsInf(v, 0) {
 		return 1

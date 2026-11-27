@@ -20,8 +20,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/tailscale"
 )
 
-// feed sends msgs and feeds back what their commands answer within a moment, through
-// batches: hub requests and reads. Commands that wait (ticks, the stream) are dropped.
 func feed(t *testing.T, m model, msgs ...tea.Msg) model {
 	t.Helper()
 	var runCmd func(cmd tea.Cmd)
@@ -54,10 +52,8 @@ func feed(t *testing.T, m model, msgs ...tea.Msg) model {
 	return m
 }
 
-// frameText is the frame without styling.
 func frameText(m model) string { return ansi.Strip(m.render()) }
 
-// clockModel is hub mode on the three fixture devices with a clock the test moves.
 func clockModel(t *testing.T, hub Hub, w, h int) (model, *time.Time) {
 	t.Helper()
 	now := hubNow
@@ -71,8 +67,6 @@ func clockModel(t *testing.T, hub Hub, w, h int) (model, *time.Time) {
 	return m, &now
 }
 
-// TestStaleStream (L7): when the stream says nothing for 10 s, the dashboard stops
-// showing devices as online; the next event brings them back.
 func TestStaleStream(t *testing.T) {
 	m, now := clockModel(t, newFakeHub(nil), 120, 40)
 	if got := len(m.online()); got != 2 {
@@ -83,12 +77,11 @@ func TestStaleStream(t *testing.T) {
 	if m.conn.stale || len(m.online()) != 2 {
 		t.Fatal("stale after 5 s")
 	}
-	*now = now.Add(6 * time.Second) // 11 s of silence
+	*now = now.Add(6 * time.Second)
 	m = feed(t, m, hubTickMsg{})
 	if !m.conn.stale || len(m.online()) != 0 || len(m.offline()) != 3 {
 		t.Fatalf("not stale after 11 s: stale=%v online=%d", m.conn.stale, len(m.online()))
 	}
-	// The client's reconnect attempts are not word from the hub.
 	m = feed(t, m, hubMsg{client.Event{Type: client.EventDisconnected, Err: context.DeadlineExceeded, Retry: time.Second}},
 		hubMsg{client.Event{Type: client.EventConnected}})
 	if !m.conn.stale {
@@ -107,17 +100,10 @@ func TestStaleStream(t *testing.T) {
 	}
 }
 
-// TestLaggingStream is skeptic report N1: over a link slower than the stream, reports kept
-// arriving, later and later, with nothing to say so. Reports lateAfter late (by the hub's
-// own clock, so a clock difference doesn't count) mark the data late in the header and
-// footer until they are under lateClear again. The cards keep the hub's online flags
-// (review of #70: "0 online · 250 offline" while data was merely late), and a lag wavering
-// below lateAfter (a link that only just keeps up) never warns.
 func TestLaggingStream(t *testing.T) {
 	m, now := clockModel(t, newFakeHub(nil), 120, 40)
-	hubClock := now.Add(-3 * time.Hour) // the hub's clock is far off; only the lag counts
+	hubClock := now.Add(-3 * time.Hour)
 	start := *now
-	// late sends a report that arrives lag after the hub took it, 5 s after the last one.
 	late := func(lag time.Duration) {
 		t.Helper()
 		*now = now.Add(5 * time.Second)
@@ -125,8 +111,7 @@ func TestLaggingStream(t *testing.T) {
 		d.LastSeen = hubClock.Add(now.Sub(start) - lag).UnixMilli()
 		m = feed(t, m, hubMsg{client.Event{Type: client.EventReport, ID: d.ID, Device: &d}})
 	}
-	late(0) // the reference
-	// Break-even: the lag wavers but never reaches lateAfter.
+	late(0)
 	for _, lag := range []time.Duration{12, 18, 14, 19, 16, 18} {
 		late(lag * time.Second)
 		if m.conn.late || m.conn.stale {
@@ -144,18 +129,16 @@ func TestLaggingStream(t *testing.T) {
 			t.Errorf("frame lacks %q:\n%s", want, f)
 		}
 	}
-	late(17 * time.Second) // under lateAfter but not lateClear: still late
+	late(17 * time.Second)
 	if !m.conn.late {
 		t.Error("late cleared at 17 s, above lateClear")
 	}
-	late(3 * time.Second) // caught up
+	late(3 * time.Second)
 	if m.conn.late || strings.Contains(frameText(m), "behind") {
 		t.Errorf("still late once reports are on time: lag=%v", m.conn.lag)
 	}
 }
 
-// TestTemperatureUnit: °F applies to cards, the Device view and History, and is saved on
-// this machine for the next start.
 func TestTemperatureUnit(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tui.json")
 	o := hubOptions(newFakeHub(nil))
@@ -182,7 +165,7 @@ func TestTemperatureUnit(t *testing.T) {
 		t.Fatalf("esc went to %v", m.view)
 	}
 	f := frameText(m)
-	if !strings.Contains(f, "162°F") || strings.Contains(f, "72°C") { // 72.4 °C
+	if !strings.Contains(f, "162°F") || strings.Contains(f, "72°C") {
 		t.Errorf("card not in °F:\n%s", f)
 	}
 	m = feed(t, m, keyMsg("2"))
@@ -203,7 +186,6 @@ func TestTemperatureUnit(t *testing.T) {
 	}
 }
 
-// settingsFake is a hub with the Settings and Add device APIs.
 type settingsFake struct {
 	*fakeHub
 	mu     sync.Mutex
@@ -211,7 +193,7 @@ type settingsFake struct {
 	put    []power.Settings
 	remote error
 	codes  int
-	now    func() time.Time // the test's clock, for code expiry; nil is hubNow
+	now    func() time.Time
 }
 
 func (f *settingsFake) EnergySettings(context.Context) (*power.Settings, error) {
@@ -258,9 +240,6 @@ func (f *settingsFake) InstallCommands(u string) (string, string) {
 
 func ptrS(s string) *string { return &s }
 
-// TestSettingsHub: the hub's price is read and saved through the price editor (TOU too),
-// a broadcast price change reaches the view, and Tailscale, role, hub link and version
-// show.
 func TestSettingsHub(t *testing.T) {
 	f := &settingsFake{fakeHub: newFakeHub(nil)}
 	m, _ := clockModel(t, f, 120, 40)
@@ -275,7 +254,6 @@ func TestSettingsHub(t *testing.T) {
 	if !m.set.form.open {
 		t.Fatal("editor not open")
 	}
-	// Rate: replace with 0.21; currency: EUR; TOU: 16-21 at 0.4.
 	m = feed(t, m, keyMsg("down"))
 	for range 10 {
 		m = feed(t, m, keyMsg("backspace"))
@@ -302,20 +280,17 @@ func TestSettingsHub(t *testing.T) {
 		t.Errorf("after save:\n%s", frameText(m))
 	}
 
-	// Another TUI changed the price: the event updates this one.
 	ev := client.Event{Type: client.EventEnergySettings, Raw: []byte(`{"type":"energySettings","settings":{"region":"GB","rate":0.245,"currency":"GBP"}}`)}
 	m = feed(t, m, hubMsg{ev})
 	if !strings.Contains(frameText(m), "£0.245/kWh") {
 		t.Errorf("event not applied:\n%s", frameText(m))
 	}
 
-	// A bad rate is refused in the form, before any request.
 	m = feed(t, m, keyMsg("e"), keyMsg("down"), keyMsg("x"), keyMsg("enter"))
 	if !strings.Contains(m.set.form.err, "rate") || len(f.put) != 1 {
 		t.Errorf("bad rate: err %q, puts %d", m.set.form.err, len(f.put))
 	}
 
-	// An older hub without /api/remote.
 	f.remote = client.ErrNotAvailable
 	m = feed(t, m, keyMsg("esc"), keyMsg("esc"), keyMsg(","))
 	if !strings.Contains(frameText(m), "not available on this hub") {
@@ -323,7 +298,6 @@ func TestSettingsHub(t *testing.T) {
 	}
 }
 
-// TestSettingsLocalPrice: local mode saves the price on this machine and uses it.
 func TestSettingsLocalPrice(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tui.json")
 	o := testOptions()
@@ -369,8 +343,6 @@ func TestParseTOU(t *testing.T) {
 	}
 }
 
-// TestAddDevice: `a` asks the hub for a code and shows it with a countdown that runs out,
-// the one-line installs, and copies them.
 func TestAddDevice(t *testing.T) {
 	f := &settingsFake{fakeHub: newFakeHub(nil)}
 	m, now := clockModel(t, f, 160, 40)
@@ -379,7 +351,6 @@ func TestAddDevice(t *testing.T) {
 	if m.view != viewAddDevice || f.codes != 1 {
 		t.Fatalf("view %v, %d codes", m.view, f.codes)
 	}
-	// The install lines hide the key until s.
 	if f := frameText(m); strings.Contains(f, "Bearer KEY") || !strings.Contains(f, `-H "Authorization: Bearer ••••••••" http://192.168.1.5:7777/install.sh | sh`) {
 		t.Errorf("key not hidden:\n%s", f)
 	}
@@ -406,13 +377,11 @@ func TestAddDevice(t *testing.T) {
 	if f.codes != 2 {
 		t.Errorf("n asked for %d codes", f.codes)
 	}
-	// A device uses the code; a later drop doesn't undo that.
 	m = feed(t, m, hubMsg{client.Event{Type: client.EventPaired}},
 		hubMsg{client.Event{Type: client.EventDisconnected, Err: context.Canceled, Retry: time.Second}})
 	if !strings.Contains(frameText(m), "Paired: a device used the code.") {
 		t.Errorf("paired:\n%s", frameText(m))
 	}
-	// A fresh code, then the hub goes away: the code went with it.
 	m = feed(t, m, keyMsg("n"), hubMsg{client.Event{Type: client.EventDisconnected, Err: context.Canceled, Retry: time.Second}})
 	if !strings.Contains(frameText(m), "Lost the hub, and the code with it.") {
 		t.Errorf("lost hub:\n%s", frameText(m))
@@ -425,15 +394,12 @@ func TestAddDevice(t *testing.T) {
 	if m.view != viewDashboard {
 		t.Errorf("esc went to %v", m.view)
 	}
-	// A narrow window wraps the install lines instead of cutting them.
 	m = feed(t, m, tea.WindowSizeMsg{Width: 60, Height: 30}, keyMsg("a"))
 	if f := strings.ReplaceAll(strings.ReplaceAll(frameText(m), "\n", ""), " ", ""); !strings.Contains(f, "/install.sh|sh") {
 		t.Errorf("install line cut at 60 columns:\n%s", frameText(m))
 	}
 }
 
-// TestCardFilter: `/` on the dashboard narrows the cards and the offline row by name;
-// esc clears it.
 func TestCardFilter(t *testing.T) {
 	m, _ := clockModel(t, newFakeHub(nil), 160, 48)
 	m = feed(t, m, keyMsg("/"))
@@ -463,7 +429,6 @@ func TestCardFilter(t *testing.T) {
 	}
 }
 
-// energyFake is a hub whose energy read reports a fixed cost per device.
 type energyFake struct {
 	*fakeAlertsHub
 }
@@ -481,8 +446,6 @@ func (energyFake) Energy(_ context.Context, bounds []float64) (*client.Energy, e
 	return &d, nil
 }
 
-// TestHeaderCostAndAlerts: the dashboard's summary carries the cost since midnight and the
-// active-alerts count.
 func TestHeaderCostAndAlerts(t *testing.T) {
 	af := alertsFixture()
 	af.state.Active = []alerts.Active{{RuleID: "r1", Device: "mac-0001"}, {RuleID: "r2", Device: "mac-0001"}}
@@ -502,15 +465,12 @@ func TestHeaderCostAndAlerts(t *testing.T) {
 	}
 }
 
-// TestCosmetics: the skeptic report's TUI weaknesses.
 func TestCosmetics(t *testing.T) {
 	m, _ := clockModel(t, newFakeHub(nil), 200, 50)
-	// At 200 columns three cards share the width; the disk-write rate must still show.
 	m3on := feed(t, m, hubMsg{client.Event{Type: client.EventStatus, Online: map[string]bool{"nas-0002": true}}})
 	if f := frameText(m3on); strings.Count(f, "w 3.2 MiB/s") != 2 || !strings.Contains(f, "w 600 KiB/s") {
 		t.Errorf("NET/DISK cut at 200 columns:\n%s", f)
 	}
-	// At 40×10 the open view keeps its name in the tab bar.
 	for _, v := range []string{"1", "4", "5"} {
 		m2 := feed(t, m, tea.WindowSizeMsg{Width: 40, Height: 10}, keyMsg(v))
 		head := strings.Split(frameText(m2), "\n")[0]
@@ -518,25 +478,19 @@ func TestCosmetics(t *testing.T) {
 			t.Errorf("40 columns, view %s: header %q", name, head)
 		}
 	}
-	// History keeps naming the hub.
 	m3 := feed(t, m, keyMsg("4"))
 	if head := strings.Split(frameText(m3), "\n")[0]; !strings.Contains(head, "hub hub.lan:7777") {
 		t.Errorf("History header %q", head)
 	}
-	// 24 h crosses midnight: both ends name their day.
 	m3.hv.rng = 2
 	if info := ansi.Strip(m3.histInfo()); !strings.Contains(info, "Fri 12:00 – Sat 12:00") {
 		t.Errorf("24 h label %q", info)
 	}
-	// A device silent for 11 s is not "just now".
 	if got := m.ago(hubNow.Add(-11 * time.Second).UnixMilli()); got != "11s ago" {
 		t.Errorf("ago(11s) = %q", got)
 	}
 }
 
-// TestHeaderCostFromInit: the cost today and the alert count reach the header through the
-// real start-up path. Init runs on a model Bubble Tea throws away, so a read it numbered
-// there was dropped as stale when it answered (review of #55).
 func TestHeaderCostFromInit(t *testing.T) {
 	for _, mode := range []string{"hub", "local"} {
 		t.Run(mode, func(t *testing.T) {
@@ -545,7 +499,7 @@ func TestHeaderCostFromInit(t *testing.T) {
 				af := alertsFixture()
 				o = Options{Hub: energyFake{af}, Interval: time.Hour, Now: func() time.Time { return hubNow }}
 			} else {
-				o = localViewOptions(t) // two hours of samples, priced
+				o = localViewOptions(t)
 			}
 			m := New(o).(model)
 			next, _ := m.Update(tea.WindowSizeMsg{Width: 160, Height: 48})
@@ -576,8 +530,6 @@ func TestHeaderCostFromInit(t *testing.T) {
 	}
 }
 
-// TestAlertsInFahrenheit: with °F on, the rules table and the editor read thresholds in °F
-// while the hub keeps °C, and the hub's tempUnit follows, so the alert texts it writes match.
 func TestAlertsInFahrenheit(t *testing.T) {
 	f := alertsFixture()
 	m := alertsModel(t, f, 120, 40)
@@ -587,12 +539,9 @@ func TestAlertsInFahrenheit(t *testing.T) {
 	}
 	m, _ = send(t, m, keyMsg("6"))
 	frame := frameText(m)
-	// The rules: 90 °C and 85 °C. (The active alert's text is the hub's own, written in °C
-	// before the switch.)
 	if !strings.Contains(frame, "194°F") || !strings.Contains(frame, "185°F") {
 		t.Errorf("rules table not in °F:\n%s", frame)
 	}
-	// Edit the GPU rule (85 °C): the editor shows 185 °F; type 194 and save: the hub gets 90.
 	i := slices.IndexFunc(m.al.cfg.Rules, func(r alerts.Rule) bool { return r.Type == alerts.TypeGPUTemp })
 	m.al.cursor = i
 	m, _ = send(t, m, keyMsg("enter"))
@@ -606,7 +555,6 @@ func TestAlertsInFahrenheit(t *testing.T) {
 	if th := last.Rules[i].Threshold; th == nil || *th != 90 || last.TempUnit != "F" {
 		t.Errorf("saved threshold %v, unit %q", th, last.TempUnit)
 	}
-	// Back to °C: the hub follows again.
 	n := len(f.saved)
 	_, _ = send(t, m, keyMsg(","), keyMsg("u"))
 	if len(f.saved) != n+1 || f.saved[n].TempUnit != "C" {

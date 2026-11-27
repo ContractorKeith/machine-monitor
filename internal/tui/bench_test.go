@@ -7,11 +7,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// frameBudget is the acceptance bound for one full frame (PLAN §8, M2).
 const frameBudget = 16 * time.Millisecond
 
-// bigModel is a model at w×h holding a 64-core report with a full sparkline history and
-// 600 processes, showing view v.
 func bigModel(w, h int, v view) model {
 	o := testOptions()
 	o.Procs = procList(600)
@@ -30,7 +27,6 @@ func bigModel(w, h int, v view) model {
 	return m
 }
 
-// BenchmarkFrame renders a full frame of each view with a 64-core report at 160×48.
 func BenchmarkFrame(b *testing.B) {
 	for v := range viewCount {
 		b.Run(viewNames[v], func(b *testing.B) {
@@ -43,8 +39,6 @@ func BenchmarkFrame(b *testing.B) {
 	}
 }
 
-// TestFrameBudget fails if the average frame of any view takes 16 ms or more, so the
-// benchmark's acceptance bound is checked on every CI run, not only when benchmarked.
 func TestFrameBudget(t *testing.T) {
 	for v := range viewCount {
 		m := bigModel(160, 48, v)
