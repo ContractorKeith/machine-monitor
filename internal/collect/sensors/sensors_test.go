@@ -12,7 +12,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// asJSON renders v the way it goes on the wire, so expectations read like a report.
 func asJSON(t *testing.T, v any) string {
 	t.Helper()
 	b, err := json.Marshal(v)
@@ -22,7 +21,6 @@ func asJSON(t *testing.T, v any) string {
 	return string(b)
 }
 
-// writeTree builds a sysfs-like tree in a temp dir from path → contents.
 func writeTree(t *testing.T, files map[string]string) string {
 	t.Helper()
 	root := t.TempDir()
@@ -49,7 +47,7 @@ func TestReadHwmon(t *testing.T) {
 	if got := asJSON(t, temps); got != wantTemps {
 		t.Errorf("temps\ngot  %s\nwant %s", got, wantTemps)
 	}
-	// fan2 is stopped and left out; fan10 sorts after fan1 numerically.
+
 	wantFans := `[{"name":"CPU Fan","rpm":812},{"name":"Fan 10","rpm":1200}]`
 	if got := asJSON(t, fans); got != wantFans {
 		t.Errorf("fans\ngot  %s\nwant %s", got, wantFans)
@@ -60,7 +58,7 @@ func TestReadHwmon(t *testing.T) {
 }
 
 func TestThermalZoneFallback(t *testing.T) {
-	// No CPU hwmon chip: the hottest CPU/ACPI zone wins.
+
 	temp, source := thermalZoneTemp(fixture)
 	if temp == nil || *temp != 64 || source != nil {
 		t.Errorf("zones = %v %v, want 64 from x86_pkg_temp", temp, source)
@@ -76,7 +74,7 @@ func TestThermalZoneFallback(t *testing.T) {
 }
 
 func TestGracePower(t *testing.T) {
-	// Two Grace sockets summed; the non-Grace power_meter is ignored.
+
 	if p := gracePower(fixture); p == nil || *p != 270.5 {
 		t.Errorf("grace = %v, want 270.5", p)
 	}
@@ -102,19 +100,17 @@ func TestRAPL(t *testing.T) {
 	if w := m.watts(writeTree(t, zone("1000000000")), t0); w != nil {
 		t.Errorf("first reading = %v, want nil", *w)
 	}
-	// 90 J over 2 s = 45 W. Only package-0 counts: not the core sub-zone, not psys.
+
 	if w := m.watts(writeTree(t, zone("1090000000")), t0.Add(2*time.Second)); w == nil || *w != 45 {
 		t.Errorf("watts = %v, want 45", w)
 	}
-	// The counter wrapped at max_energy_range_uj: 262143000000 → 50000000 is
-	// 328850 + 50000000 uJ = 50.3 J over 1 s.
+
 	m = raplMeter{}
 	m.watts(writeTree(t, zone("262143000000")), t0)
 	if w := m.watts(writeTree(t, zone("50000000")), t0.Add(time.Second)); w == nil || *w != 50.3 {
 		t.Errorf("wrapped watts = %v, want 50.3", w)
 	}
-	// A wrap with an unreadable max_energy_range_uj can't be unwrapped: skip the zone, never
-	// report negative watts.
+
 	noMax := func(e string) map[string]string {
 		return map[string]string{"class/powercap/intel-rapl:0/name": "package-0", "class/powercap/intel-rapl:0/energy_uj": e}
 	}
@@ -126,7 +122,7 @@ func TestRAPL(t *testing.T) {
 	if w := m.watts(writeTree(t, noMax("80000000")), t0.Add(2*time.Second)); w == nil || *w != 30 {
 		t.Errorf("after wrap without max = %v, want 30", w)
 	}
-	// Unreadable energy_uj (root-only): nil, never 0.
+
 	m = raplMeter{}
 	empty := t.TempDir()
 	m.watts(empty, t0)
@@ -202,8 +198,6 @@ func TestSmctempMissing(t *testing.T) {
 	}
 }
 
-// Rows in the shape LibreHardwareMonitor publishes for a Ryzen CPU and Radeon GPU, with the
-// edge cases agent.ps1 handles: a 0 °C reading, a stopped fan, non-package power.
 var recLHM = []lhmSensor{
 	{Name: "Core (Tctl/Tdie)", SensorType: "Temperature", Parent: "/amdcpu/0", Value: 71.625},
 	{Name: "CCD1 (Tdie)", SensorType: "Temperature", Parent: "/amdcpu/0", Value: 66.5},
@@ -242,7 +236,6 @@ func TestFromACPI(t *testing.T) {
 	}
 }
 
-// On an AMD APU the PPT sensor is CPU package power, used when RAPL and Grace give nothing.
 func TestAPUPackagePower(t *testing.T) {
 	apu := filepath.Join("testdata", "apu", "sys")
 	s := readLinux(apu, &raplMeter{}, time.Now())
@@ -251,7 +244,7 @@ func TestAPUPackagePower(t *testing.T) {
 	if r.Power == nil || r.Power.CPU == nil || *r.Power.CPU != 23 {
 		t.Errorf("APU report = %s, want power.cpu 23", asJSON(t, r))
 	}
-	// A value another probe already set wins.
+
 	r = &report.Report{Power: &report.Power{CPU: report.Ptr(10.0)}}
 	s.apply()(r)
 	if *r.Power.CPU != 10 {

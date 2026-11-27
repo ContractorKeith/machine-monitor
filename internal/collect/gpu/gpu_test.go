@@ -13,7 +13,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// asJSON renders v the way it goes on the wire, so expectations read like a report.
 func asJSON(t *testing.T, v any) string {
 	t.Helper()
 	b, err := json.Marshal(v)
@@ -23,8 +22,6 @@ func asJSON(t *testing.T, v any) string {
 	return string(b)
 }
 
-// fakeTools puts testdata/bin first on PATH. The fakes are shell scripts, so tests that
-// exec them skip on Windows.
 func fakeTools(t *testing.T) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -140,8 +137,6 @@ func TestParseIoreg(t *testing.T) {
 	}
 }
 
-// Rows in the shape Windows publishes for a Radeon dGPU plus Intel iGPU, with a Basic Display
-// Adapter, a Copy engine and an idle adapter to exercise agent.ps1's filters.
 var (
 	recEngines = []gpuEngine{
 		{Name: "pid_4120_luid_0x00000000_0x0000D1A4_phys_0_eng_0_engtype_3D", UtilizationPercentage: 21},
@@ -164,8 +159,7 @@ var (
 
 func TestGenericGPUs(t *testing.T) {
 	got := asJSON(t, genericGPUs(recEngines, recMems, recControllers))
-	// D1A4: 3D engines 21+17, Copy ignored. E2B0: idle with no memory, skipped.
-	// F001: idle but holding memory, kept; named by position like agent.ps1.
+
 	want := `[{"name":"AMD Radeon RX 7800 XT","vendor":"generic","usage":38,"temp":null,"memUsed":3221225472,"memTotal":4293918720,"power":null,"powerLimit":null,"fan":null,"clockMHz":null},` +
 		`{"name":"Intel(R) UHD Graphics 770","vendor":"generic","usage":0,"temp":null,"memUsed":268435456,"memTotal":1073741824,"power":null,"powerLimit":null,"fan":null,"clockMHz":null}]`
 	if got != want {
@@ -202,7 +196,6 @@ func TestAppendGPUsSortsByVRAM(t *testing.T) {
 	}
 }
 
-// An APU's amdgpu hwmon labels its power PPT (the whole package). It is not GPU power.
 func TestReadAMDAPUPowerIsNotGPUPower(t *testing.T) {
 	gpus := readAMD(filepath.Join("testdata", "apu", "sys"))
 	if len(gpus) != 1 || gpus[0].Usage == nil || *gpus[0].Usage != 6 {

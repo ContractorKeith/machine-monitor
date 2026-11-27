@@ -9,14 +9,11 @@ import (
 
 var (
 	ioregModel = regexp.MustCompile(`"model" = "([^"]*)"`)
-	// Device Utilization % on Apple Silicon, GPU Activity(%) on older Intel/AMD Macs.
+
 	ioregUtil    = []*regexp.Regexp{regexp.MustCompile(`"Device Utilization %"=([0-9]+)`), regexp.MustCompile(`"GPU Activity\(%\)"=([0-9]+)`)}
 	ioregMemUsed = regexp.MustCompile(`"In use system memory"=([0-9]+)`)
 )
 
-// parseIoreg turns `ioreg -r -d 1 -w 0 -c IOAccelerator` output into GPUs, one per "+-o"
-// entry that has PerformanceStatistics. Name is nil when ioreg has no model; the caller
-// falls back to the CPU name. Memory total is unknown (unified memory).
 func parseIoreg(out []byte) []report.GPU {
 	var gpus []report.GPU
 	var cur *report.GPU
@@ -54,7 +51,6 @@ func parseIoreg(out []byte) []report.GPU {
 	return gpus
 }
 
-// appleNames fills missing GPU names with "<CPU name> GPU", as upstream does, or "Apple GPU".
 func appleNames(gpus []report.GPU, cpuName *string) {
 	fallback := "Apple GPU"
 	if cpuName != nil && *cpuName != "" {

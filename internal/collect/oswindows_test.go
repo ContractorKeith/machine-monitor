@@ -35,7 +35,7 @@ func TestWindowsStatic(t *testing.T) {
 	if got := val(t, "formFactor", info.formFactor); got != report.FormFactorDesktop {
 		t.Errorf("formFactor = %q", got)
 	}
-	// 4501 MHz × 112 % performance.
+
 	if got := val(t, "clock", s.clockMHz(context.Background())); got != 5041 {
 		t.Errorf("clock = %v, want 5041", got)
 	}

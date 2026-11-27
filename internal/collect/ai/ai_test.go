@@ -28,17 +28,12 @@ const (
 		"3":{"class_type":"KSampler","inputs":{"sampler_name":"euler"}}},{},[]]}}`
 )
 
-// sentinelEnv is set in the test process; a fake that sees it was run without the
-// stripped environment and fails.
 const sentinelEnv = "MACHINE_MONITOR_AI_TEST_SENTINEL"
 
-// TestMain doubles as the fake nvidia-smi and lms: the detector runs this test binary with
-// "fake-nvidia-smi" or "fake-lms" first. Arguments, not env vars, select the fake because
-// the probe strips the environment.
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 {
 		if os.Getenv(sentinelEnv) != "" {
-			os.Exit(3) // the environment leaked through
+			os.Exit(3)
 		}
 		args := strings.Join(os.Args[2:], " ")
 		switch os.Args[1] {
@@ -60,7 +55,6 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// fakeApps serves Ollama and ComfyUI on loopback and returns their ports.
 func fakeApps(t *testing.T, ollama, comfyStats, comfyHistory string) (ollamaPort, comfyPort string) {
 	t.Helper()
 	serve := func(routes map[string]string) string {
@@ -81,7 +75,6 @@ func fakeApps(t *testing.T, ollama, comfyStats, comfyHistory string) (ollamaPort
 	return
 }
 
-// testDetector returns a detector wired to fakes, with nothing installed or running.
 func testDetector(ollamaPort, comfyPort string) *detector {
 	return &detector{
 		host:       "127.0.0.1",
@@ -158,7 +151,6 @@ func TestDetectAll(t *testing.T) {
 	}
 }
 
-// ComfyUI with no GPU process (macOS, Windows, AMD) is found through /system_stats.
 func TestComfyFallback(t *testing.T) {
 	_, comfyPort := fakeApps(t, "", `{"system":{"comfyui_version":"0.3.40"}}`, fakeHistory)
 	d := testDetector("1", comfyPort)
@@ -167,14 +159,12 @@ func TestComfyFallback(t *testing.T) {
 		t.Fatalf("got %s", jsonOf(t, got))
 	}
 
-	// A ComfyUI that never ran a workflow adds no group.
 	_, comfyPort = fakeApps(t, "", `{"system":{"comfyui_version":"0.3.40"}}`, `{}`)
 	if got := testDetector("1", comfyPort).detect(context.Background()); len(got) != 0 {
 		t.Errorf("idle ComfyUI: got %s", jsonOf(t, got))
 	}
 }
 
-// LM Studio is only asked when its process is running, since `lms` would start it.
 func TestLMStudioNotRunning(t *testing.T) {
 	d := testDetector("1", "1")
 	d.lms = []string{self(t), "fake-lms"}
@@ -183,8 +173,6 @@ func TestLMStudioNotRunning(t *testing.T) {
 	}
 }
 
-// run reports an empty, non-nil AI when it checked and found nothing, and appends to
-// groups another probe may have added.
 func TestRunNothingLoaded(t *testing.T) {
 	ollamaPort, comfyPort := fakeApps(t, `{"models":[]}`, "", "")
 	apply, err := testDetector(ollamaPort, comfyPort).run(context.Background())
@@ -209,7 +197,6 @@ func TestRunCanceled(t *testing.T) {
 	}
 }
 
-// Only loopback answers count: a redirect elsewhere is not followed.
 func TestNoRedirects(t *testing.T) {
 	srv := httptest.NewServer(http.RedirectHandler("http://example.com/api/ps", http.StatusFound))
 	defer srv.Close()
@@ -268,20 +255,16 @@ func TestModelSizeStaysInRoot(t *testing.T) {
 	}
 }
 
-// The exec fakes fail when they see the test process's environment, so a missing
-// cmd.Env = strippedEnv() turns every exec test red.
 func TestExecEnvStripped(t *testing.T) {
 	if out := runCmd(context.Background(), self(t), "fake-lms", "ps", "--json"); out != fakeLMS {
 		t.Fatalf("fake-lms under runCmd = %q", out)
 	}
-	cmd := exec.Command(self(t), "fake-lms", "ps", "--json") // inherits the environment
+	cmd := exec.Command(self(t), "fake-lms", "ps", "--json")
 	if err := cmd.Run(); err == nil {
 		t.Fatal("the fake did not notice the sentinel")
 	}
 }
 
-// Windows, as agent.ps1: LM Studio and ComfyUI memory come from GPU process memory by pid,
-// and ComfyUI is checked when its port has a listener, without /system_stats.
 func TestWindowsGPUProcessMemory(t *testing.T) {
 	_, comfyPort := fakeApps(t, "", "", fakeHistory)
 	d := testDetector("1", comfyPort)
@@ -312,14 +295,13 @@ func TestWindowsGPUProcessMemory(t *testing.T) {
 		*got[1].App != "ComfyUI" || got[1].Mem == nil || *got[1].Mem != 3e9 || len(got[1].Models) != 2 {
 		t.Fatalf("got %s", jsonOf(t, got))
 	}
-	if s := got[1].Models[1].Size; s == nil || *s != 42 { // found under the main.py directory
+	if s := got[1].Models[1].Size; s == nil || *s != 42 {
 		t.Errorf("lora size = %v, want 42 from %s", s, comfyHomeDir)
 	}
 	if queries != 1 {
 		t.Errorf("GPU memory queried %d times, want 1", queries)
 	}
 
-	// A listener Windows won't name the owner of: ComfyUI is still found, with no memory.
 	d.listener = func(context.Context, string) (bool, int) { return true, 0 }
 	d.cmdline = func(context.Context, int) string { t.Error("command line asked without an owner"); return "" }
 	got = d.detect(context.Background())
@@ -327,7 +309,6 @@ func TestWindowsGPUProcessMemory(t *testing.T) {
 		t.Fatalf("unnamed owner: got %s", jsonOf(t, got))
 	}
 
-	// No listener: ComfyUI isn't asked. No GPU memory for the pid: mem is null.
 	d.listener = func(context.Context, string) (bool, int) { return false, 0 }
 	d.gpuMem = func(context.Context) map[int]float64 { return nil }
 	got = d.detect(context.Background())

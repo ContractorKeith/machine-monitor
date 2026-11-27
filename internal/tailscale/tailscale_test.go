@@ -60,7 +60,7 @@ func TestParseStatus(t *testing.T) {
 }
 
 func TestParseStatusDaemonDown(t *testing.T) {
-	// tailscaled not running: the CLI prints an error to stderr and nothing to stdout.
+
 	for _, out := range []string{"", "failed to connect to local tailscaled", "{"} {
 		if got := asJSON(t, parseStatus([]byte(out), nil, 7777)); got != `{"installed":true,"running":false,"state":"NotRunning","ip":null,"dnsName":null,"httpsUrl":null,"urls":[],"tailnet":null}` {
 			t.Errorf("%q: %s", out, got)
@@ -105,7 +105,7 @@ func TestParsePeers(t *testing.T) {
 	if got := parsePeers(fixture(t, "needs-login.json"), 7777); got != nil {
 		t.Errorf("not logged in: %v", got)
 	}
-	// Capped at 40 URLs.
+
 	var b strings.Builder
 	b.WriteString(`{"BackendState":"Running","Peer":{`)
 	for i := range 30 {
@@ -120,8 +120,6 @@ func TestParsePeers(t *testing.T) {
 	}
 }
 
-// A fake CLI checks that run passes args, strips the environment and keeps stdout on a
-// non-zero exit.
 func TestRunFakeCLI(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script CLI")
@@ -150,8 +148,6 @@ func mustAbs(t *testing.T, p string) string {
 	return a
 }
 
-// With none of the allow-listed variables set, the child must still get an empty
-// environment, not the parent's (a nil exec.Cmd.Env inherits everything).
 func TestRunStripsEnvWithEmptyAllowList(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script CLI")
@@ -167,7 +163,7 @@ func TestRunStripsEnvWithEmptyAllowList(t *testing.T) {
 	defer func(c func() [][]string) { candidates = c }(candidates)
 	candidates = func() [][]string { return [][]string{{exe}} }
 	for _, k := range allowedEnv {
-		t.Setenv(k, "") // restores the original value after the test
+		t.Setenv(k, "")
 		os.Unsetenv(k)
 	}
 	t.Setenv("MM_SENTINEL", "secret")

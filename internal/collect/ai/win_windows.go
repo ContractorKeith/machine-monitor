@@ -2,10 +2,6 @@
 
 package ai
 
-// Windows GPU process memory, port listener and command line, as agent.ps1
-// (Get-GpuProcessMemory, GetActiveTcpListeners, Get-NetTCPConnection and Win32_Process) at
-// c3a4c41. MIT License, Copyright (c) 2026 Matt.
-
 import (
 	"context"
 	"fmt"
@@ -39,7 +35,7 @@ func init() {
 				if c.Pid > 0 {
 					return true, int(c.Pid)
 				}
-				listening = true // a listener whose owner Windows won't name
+				listening = true
 			}
 		}
 		return listening, 0

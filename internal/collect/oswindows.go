@@ -1,8 +1,5 @@
 package collect
 
-// Windows core metrics. Logic ported from Forward-Future/device-monitor agent/agent.ps1
-// (MIT, © 2026 Matt): https://github.com/Forward-Future/device-monitor
-
 import (
 	"context"
 	"log/slog"
@@ -13,31 +10,26 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// wmiQuerier runs a WQL query into dst, a pointer to a slice of structs whose field names
-// match the WMI properties. Tests replace it with recorded results.
 type wmiQuerier interface {
 	Query(ctx context.Context, query string, dst any) error
 }
 
-// windowsSource reads Windows: gopsutil for CPU times, memory, network and uptime; WMI
-// classes (not localized PDH counter paths) for the rest, as upstream does.
 type windowsSource struct {
 	ps          ps
 	wmi         wmiQuerier
-	machineGUID func() (string, error) // HKLM\SOFTWARE\Microsoft\Cryptography MachineGuid
-	hostname    func() string          // %COMPUTERNAME%
+	machineGUID func() (string, error)
+	hostname    func() string
 
-	maxClock float64 // Win32_Processor.MaxClockSpeed, MHz; read by static
+	maxClock float64
 }
 
-// WMI classes, trimmed to the properties we read.
 type (
 	win32OperatingSystem struct{ Caption string }
 	win32Processor       struct {
 		Name          string
 		MaxClockSpeed uint32
 	}
-	win32SystemEnclosure struct{ ChassisTypes []int32 } // WMI returns the array as int32
+	win32SystemEnclosure struct{ ChassisTypes []int32 }
 	win32ProcessorInfo   struct{ PercentProcessorPerformance uint64 }
 	win32LogicalDisk     struct {
 		DeviceID   string
@@ -89,8 +81,7 @@ func (s *windowsSource) static(ctx context.Context) staticInfo {
 		ff := report.FormFactorDesktop
 		for _, e := range enc {
 			for _, t := range e.ChassisTypes {
-				// portable, laptop, notebook, hand held, sub notebook, docking station
-				// (attached), tablet, convertible, detachable
+
 				if slices.Contains([]int32{8, 9, 10, 11, 12, 14, 18, 21, 30, 31, 32}, t) {
 					ff = report.FormFactorLaptop
 				}
@@ -101,8 +92,6 @@ func (s *windowsSource) static(ctx context.Context) staticInfo {
 	return info
 }
 
-// clockMHz is the max clock scaled by "% Processor Performance" (which tops 100 under
-// turbo), as Task Manager shows it.
 func (s *windowsSource) clockMHz(ctx context.Context) *float64 {
 	var perf []win32ProcessorInfo
 	if s.maxClock <= 0 || !s.query(ctx, wqlPerf, &perf) || len(perf) == 0 || perf[0].PercentProcessorPerformance == 0 {
@@ -111,9 +100,6 @@ func (s *windowsSource) clockMHz(ctx context.Context) *float64 {
 	return report.Ptr(math.Round(s.maxClock * float64(perf[0].PercentProcessorPerformance) / 100))
 }
 
-// memory is ullTotalPhys − ullAvailPhys from GlobalMemoryStatusEx (via gopsutil). This is a
-// deliberate difference from upstream's TotalVisibleMemorySize − FreePhysicalMemory: the
-// totals differ by the memory firmware reserves.
 func (s *windowsSource) memory(ctx context.Context) report.Memory {
 	vm, err := s.ps.VirtualMemory(ctx)
 	if err != nil || vm.Total == 0 {
@@ -122,7 +108,6 @@ func (s *windowsSource) memory(ctx context.Context) report.Memory {
 	return report.Memory{Total: report.Ptr(float64(vm.Total)), Used: report.Ptr(float64(vm.Total - vm.Available))}
 }
 
-// disks lists local fixed drives (DriveType 3) with their labels.
 func (s *windowsSource) disks(ctx context.Context) []report.Disk {
 	var ld []win32LogicalDisk
 	if !s.query(ctx, wqlDisks, &ld) {
@@ -143,7 +128,6 @@ func (s *windowsSource) disks(ctx context.Context) []report.Disk {
 	return out
 }
 
-// diskIO reads the cumulative byte counters of all physical disks.
 func (s *windowsSource) diskIO(ctx context.Context) (read, write uint64, ok bool) {
 	var pd []win32PhysicalDisk
 	if !s.query(ctx, wqlDiskIO, &pd) || len(pd) == 0 {

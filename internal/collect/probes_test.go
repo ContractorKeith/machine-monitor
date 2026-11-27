@@ -11,14 +11,12 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// sampleProbes runs one sample through pr and returns the report.
 func sampleProbes(pr *probeRunner) *report.Report {
 	r := &report.Report{}
 	pr.start(context.Background())(r)
 	return r
 }
 
-// gpuNamed appends a GPU with the given name.
 func gpuNamed(name string) Apply {
 	return func(r *report.Report) { r.GPUs = append(r.GPUs, report.GPU{Name: report.Ptr(name)}) }
 }
@@ -32,7 +30,7 @@ func gpuNames(r *report.Report) []string {
 }
 
 func TestProbesRunConcurrentlyAndApplyInNameOrder(t *testing.T) {
-	// Each Run waits for all three to start, so this deadlocks unless they run concurrently.
+
 	var started sync.WaitGroup
 	started.Add(3)
 	probe := func(name string, delay time.Duration) Probe {
@@ -60,7 +58,7 @@ func TestProbeEveryReappliesLastResult(t *testing.T) {
 	for range 7 {
 		got = append(got, gpuNames(sampleProbes(pr))...)
 	}
-	// Runs on samples 1, 4 and 7; samples between reapply the last result.
+
 	want := []string{"1", "1", "1", "2", "2", "2", "3"}
 	if runs.Load() != 3 || len(got) != len(want) {
 		t.Fatalf("runs = %d, GPUs = %v; want 3 runs and %v", runs.Load(), got, want)
@@ -97,7 +95,7 @@ func TestProbeFailuresAreSoft(t *testing.T) {
 	if got := gpuNames(sampleProbes(pr)); len(got) != 2 {
 		t.Errorf("sample 2 GPUs = %v, want flaky reapplied", got)
 	}
-	// A failed run drops the probe's last result until it next succeeds.
+
 	fail.Store(true)
 	if got := gpuNames(sampleProbes(pr)); len(got) != 1 || got[0] != "ok" {
 		t.Errorf("sample 3 GPUs = %v, want [ok]", got)
@@ -125,8 +123,7 @@ func TestProbeDeadline(t *testing.T) {
 			<-ctx.Done()
 			return gpuNamed("late"), ctx.Err()
 		}},
-		// Ignores ctx: the collector must stop waiting at the deadline, and not start a
-		// second Run while the first is still going.
+
 		{Name: "stubborn", Timeout: 20 * time.Millisecond, Run: func(context.Context) (Apply, error) {
 			stubbornRuns.Add(1)
 			<-release

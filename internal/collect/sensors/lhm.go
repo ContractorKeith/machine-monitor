@@ -7,24 +7,18 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// WMI rows for the Windows sensors probe. Field names are WMI property names.
-
-// lhmSensor is a Sensor row from root\LibreHardwareMonitor or root\OpenHardwareMonitor,
-// which those apps publish while running.
 type lhmSensor struct {
-	Name       string  // "CPU Package", "Core (Tctl/Tdie)", "GPU Core", "Fan #1"
-	SensorType string  // "Temperature", "Fan", "Power", "Load", ...
-	Parent     string  // hardware identifier, e.g. "/amdcpu/0", "/gpu-nvidia/0"
-	Value      float32 // °C, RPM, W
+	Name       string
+	SensorType string
+	Parent     string
+	Value      float32
 }
 
-// thermalZone is a Win32_PerfFormattedData_Counters_ThermalZoneInformation row.
 type thermalZone struct {
 	Name                     string
-	HighPrecisionTemperature uint32 // tenths of a kelvin
+	HighPrecisionTemperature uint32
 }
 
-// PowerShell's -match in agent.ps1 is case-insensitive; these are too.
 var (
 	lhmCPU        = regexp.MustCompile(`(?i)cpu`)
 	lhmGPU        = regexp.MustCompile(`(?i)gpu`)
@@ -33,9 +27,6 @@ var (
 	lhmGPUTempKey = regexp.MustCompile(`(?i)GPU Core|GPU Temperature`)
 )
 
-// fromLHM turns hardware-monitor sensors into a reading, a port of agent.ps1: every
-// temperature, every spinning fan, the CPU package power and temperature, and a GPU
-// temperature for GPUs that have none.
 func fromLHM(sensors []lhmSensor) reading {
 	var s reading
 	for _, x := range sensors {
@@ -66,8 +57,6 @@ func fromLHM(sensors []lhmSensor) reading {
 	return s
 }
 
-// fromACPI is agent.ps1's CPU temperature fallback without a hardware monitor: the first
-// thermal zone with a reading, converted from tenths of a kelvin.
 func fromACPI(zones []thermalZone) *float64 {
 	for _, z := range zones {
 		if z.HighPrecisionTemperature > 0 {

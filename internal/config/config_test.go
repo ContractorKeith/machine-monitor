@@ -38,7 +38,7 @@ func TestWriteFile0600(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nested")
 	path := filepath.Join(dir, "config.json")
 
-	for _, body := range []string{`{"a":1}`, `{"b":2}`} { // create, then replace
+	for _, body := range []string{`{"a":1}`, `{"b":2}`} {
 		if err := WriteFile0600(path, []byte(body)); err != nil {
 			t.Fatal(err)
 		}

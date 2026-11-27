@@ -63,14 +63,14 @@ func TestMacMemory(t *testing.T) {
 	if val(t, "total", m.Total) != 16<<30 {
 		t.Errorf("total = %v", *m.Total)
 	}
-	// Activity Monitor: (active 293043 + wired 118464 + compressed 216452) × 16 KiB pages.
+
 	if got, want := val(t, "used", m.Used), float64(293043+118464+216452)*16384; got != want {
 		t.Errorf("used = %v, want %v", got, want)
 	}
 	if got := vmStatUsed("Mach Virtual Memory Statistics: (page size of 4096 bytes)\nPages active: 10.\n"); got != nil {
 		t.Errorf("partial vm_stat = %v, want nil", *got)
 	}
-	// A page-size line cut off after "page size of " keeps the 4 KiB default, not a panic.
+
 	cut := "Mach Virtual Memory Statistics: (page size of \nPages active: 1.\nPages wired down: 1.\nPages occupied by compressor: 1.\n"
 	if got := val(t, "used", vmStatUsed(cut)); got != 3*4096 {
 		t.Errorf("truncated header: used = %v, want 3 × 4096", got)
@@ -85,7 +85,7 @@ func TestMacDisks(t *testing.T) {
 			{Mountpoint: "/System/Volumes/Data", Opts: []string{"rw", "local"}},
 			{Mountpoint: "/System/Volumes/VM", Opts: []string{"rw", "local"}},
 			{Mountpoint: "/Volumes/Backup", Opts: []string{"rw", "local"}},
-			{Mountpoint: "/Volumes/share", Opts: []string{"rw"}}, // SMB: not local
+			{Mountpoint: "/Volumes/share", Opts: []string{"rw"}},
 			{Mountpoint: "/dev", Opts: []string{"rw", "local"}},
 		},
 		usage: map[string]*disk.UsageStat{
@@ -99,7 +99,7 @@ func TestMacDisks(t *testing.T) {
 	if len(got) != 2 || *got[0].Name != "Macintosh HD" || *got[1].Name != "Backup" {
 		t.Fatalf("disks = %v, want [Macintosh HD Backup]", names(got))
 	}
-	// APFS container math: used = total − available, not the volume's own usage.
+
 	if *got[0].Used != float64(394*gb) || *got[0].Total != float64(994*gb) {
 		t.Errorf("Macintosh HD = %v/%v", *got[0].Used, *got[0].Total)
 	}
@@ -125,8 +125,6 @@ func TestMacNet(t *testing.T) {
 	}
 }
 
-// TestNetstatColumnsFromHeader reads a netstat layout without the Coll column: the byte
-// counters must come from the header, for rows with and without an Address.
 func TestNetstatColumnsFromHeader(t *testing.T) {
 	out := `Name  Mtu   Network     Address            Ipkts Ierrs  Ibytes Opkts Oerrs  Obytes
 en0   1500  <Link#4>    a4:83:e7:12:34:56    100     0    5000    80     0    4000
