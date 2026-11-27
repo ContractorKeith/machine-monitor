@@ -15,8 +15,6 @@ import (
 	"github.com/charmbracelet/x/exp/teatest/v2"
 )
 
-// testOptions is a TUI on fakes that samples once: the interval is long enough that no
-// tick fires during a test, so every frame is deterministic.
 func testOptions() Options {
 	return Options{
 		Collector: fakeCollector{workstation(16)},
@@ -25,9 +23,6 @@ func testOptions() Options {
 	}
 }
 
-// probe wraps the model so a test can read its state while the program runs: on a probeMsg
-// it hands over the current model. Messages are handled in order, so a probe answered after
-// some keys sees their effect.
 type probe struct {
 	tea.Model
 	ch chan model
@@ -45,7 +40,6 @@ func (p probe) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return p, cmd
 }
 
-// waitUntil probes the running program until ready holds for its model.
 func waitUntil(t *testing.T, tm *teatest.TestModel, ch chan model, ready func(model) bool) model {
 	t.Helper()
 	deadline := time.After(5 * time.Second)
@@ -63,12 +57,10 @@ func waitUntil(t *testing.T, tm *teatest.TestModel, ch chan model, ready func(mo
 	}
 }
 
-// loaded is true once the first sample is in and, on the Processes view, the list too.
 func loaded(m model) bool {
 	return m.report() != nil && (m.view != viewProcesses || m.procs != nil)
 }
 
-// start runs the TUI at w×h through teatest and waits for the first sample.
 func start(t *testing.T, o Options, w, h int) (*teatest.TestModel, chan model) {
 	t.Helper()
 	ch := make(chan model)
@@ -77,7 +69,6 @@ func start(t *testing.T, o Options, w, h int) (*teatest.TestModel, chan model) {
 	return tm, ch
 }
 
-// typeKeys types keys; '\r' is Enter.
 func typeKeys(tm *teatest.TestModel, keys string) {
 	for _, k := range keys {
 		if k == '\r' {
@@ -88,7 +79,6 @@ func typeKeys(tm *teatest.TestModel, keys string) {
 	}
 }
 
-// finish quits the program and returns its final model.
 func finish(t *testing.T, tm *teatest.TestModel) model {
 	t.Helper()
 	if err := tm.Quit(); err != nil {
@@ -97,8 +87,6 @@ func finish(t *testing.T, tm *teatest.TestModel) model {
 	return tm.FinalModel(t, teatest.WithFinalTimeout(5*time.Second)).(probe).Model.(model)
 }
 
-// drive runs the program at w×h, feeds it a CPU/GPU history for the sparklines, types
-// keys, waits for the view to load, quits and returns the final model.
 func drive(t *testing.T, o Options, w, h int, keys string) model {
 	t.Helper()
 	tm, ch := start(t, o, w, h)
@@ -112,7 +100,7 @@ func drive(t *testing.T, o Options, w, h int, keys string) model {
 		}
 		tm.Send(reportMsg{r: &r})
 	}
-	// The first key picks the view; let it load (the process list is async) before the rest.
+
 	for i, k := range []rune(keys) {
 		typeKeys(tm, string(k))
 		if i == 0 {
@@ -123,7 +111,6 @@ func drive(t *testing.T, o Options, w, h int, keys string) model {
 	return finish(t, tm)
 }
 
-// plain is a frame without ANSI styling, for readable goldens.
 func plain(m model) string { return ansi.Strip(m.render()) }
 
 func TestGolden(t *testing.T) {
@@ -144,7 +131,6 @@ func TestGolden(t *testing.T) {
 	}
 }
 
-// TestGoldenInteractions covers the keys that change a view's contents.
 func TestGoldenInteractions(t *testing.T) {
 	cases := []struct {
 		name, keys string
@@ -174,7 +160,6 @@ func TestGoldenInteractions(t *testing.T) {
 	}
 }
 
-// TestResize checks every frame fills the window exactly as it changes size.
 func TestResize(t *testing.T) {
 	tm, ch := start(t, testOptions(), 80, 24)
 	sizes := [][2]int{{160, 48}, {40, 12}, {200, 60}, {100, 30}}
@@ -196,7 +181,6 @@ func TestResize(t *testing.T) {
 	}
 }
 
-// checkFrame asserts a frame is exactly w columns by h lines.
 func checkFrame(t *testing.T, m model, w, h int) {
 	t.Helper()
 	lines := strings.Split(m.render(), "\n")
@@ -230,7 +214,6 @@ func TestTempBands(t *testing.T) {
 	}
 }
 
-// TestNoColor checks the monochrome theme sets no colours, only attributes.
 func TestNoColor(t *testing.T) {
 	o := testOptions()
 	o.NoColor = true
@@ -256,7 +239,6 @@ func TestNoColor(t *testing.T) {
 	}
 }
 
-// hasColorSGR reports whether s sets a foreground or background colour.
 func hasColorSGR(s string) bool {
 	for _, seq := range strings.Split(s, "\x1b[")[1:] {
 		end := strings.IndexByte(seq, 'm')
@@ -273,7 +255,6 @@ func hasColorSGR(s string) bool {
 	return false
 }
 
-// TestASCII checks the fallback draws no braille or block glyphs.
 func TestASCII(t *testing.T) {
 	o := testOptions()
 	o.ASCII = true
@@ -312,7 +293,6 @@ func TestFormat(t *testing.T) {
 	}
 }
 
-// loadedModel is a model at w×h holding one workstation sample and the process list.
 func loadedModel(t *testing.T, o Options, w, h int) model {
 	t.Helper()
 	m := New(o).(model)
@@ -327,7 +307,6 @@ func loadedModel(t *testing.T, o Options, w, h int) model {
 	return m
 }
 
-// press sends key presses to m; "ctrl+c" and "enter" are named keys.
 func press(m model, keys ...string) (model, tea.Cmd) {
 	var cmd tea.Cmd
 	for _, k := range keys {
@@ -360,7 +339,6 @@ func TestBarNaN(t *testing.T) {
 	}
 }
 
-// TestTinyTerminal checks a 1- or 2-row window gets only the body, never overflowing.
 func TestTinyTerminal(t *testing.T) {
 	for _, h := range []int{1, 2} {
 		m := loadedModel(t, testOptions(), 80, h)
@@ -394,7 +372,6 @@ func TestHelpSwallowsViewKeys(t *testing.T) {
 	}
 }
 
-// TestFilterSortCache checks the cached visible list follows every change.
 func TestFilterSortCache(t *testing.T) {
 	m := loadedModel(t, testOptions(), 80, 24)
 	m, _ = press(m, "3", "/", "o", "l", "l", "a", "m", "a", "enter")
@@ -415,7 +392,6 @@ func TestFilterSortCache(t *testing.T) {
 	}
 }
 
-// TestSparkGaps checks unknown samples leave gaps and an all-unknown row is dropped.
 func TestSparkGaps(t *testing.T) {
 	var s series
 	for range 3 {
@@ -460,7 +436,6 @@ func TestDeviceEmptyStrings(t *testing.T) {
 	}
 }
 
-// TestCardHotTemp checks the band colour reaches the card: the goldens are ANSI-stripped.
 func TestCardHotTemp(t *testing.T) {
 	m := loadedModel(t, testOptions(), 80, 24)
 	m.view = viewDashboard

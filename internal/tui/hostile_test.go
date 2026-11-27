@@ -20,15 +20,11 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/tailscale"
 )
 
-// evil holds an OSC 8 link, a C1 CSI and C1 OSC, a DCS, a bell, a bidi override and a
-// zero-width space: anything a hostile hub or report could use against the terminal.
 const evil = "\x1b]8;;http://evil.example/\x07LINKPWN\x1b]8;;\x07\u009b31m\u009d0;t\x07\x1bP1$r\x1b\\\u202e\u200bEND"
 
-// keepFields are values the TUI matches on or parses, so poisoning them would test nothing.
 var keepFields = map[string]bool{"ID": true, "Device": true, "RuleID": true, "Type": true, "State": true,
 	"Platform": true, "Region": true, "Action": true, "Kind": true}
 
-// poison sets every string reachable from v (a pointer) to evil, except keepFields.
 func poison(v reflect.Value, name string) {
 	switch v.Kind() {
 	case reflect.Pointer, reflect.Interface:
@@ -66,10 +62,9 @@ func poisoned[T any](v T) T {
 	return v
 }
 
-// evilHub is a hub whose every response is hostile.
 type evilHub struct {
 	*fakeAlertsHub
-	fail bool // answer every request with an error holding evil
+	fail bool
 }
 
 var errEvil = errors.New("boom " + evil)
@@ -155,8 +150,6 @@ func (h *evilHub) Energy(_ context.Context, bounds []float64) (*client.Energy, e
 	return &d, nil
 }
 
-// leak reports what a frame holds that could act on a terminal. The theme's own colours
-// (SGR) are expected; everything else with an ESC, a C1 control or a bell is not.
 var sgr = regexp.MustCompile("\x1b\\[[0-9;:]*m")
 
 func leak(frame string) string {
@@ -169,8 +162,6 @@ func leak(frame string) string {
 	return ""
 }
 
-// step sends msg, runs the commands it starts and feeds their answers back, as a program
-// would; whatever is still waiting after a moment (stream, ticks) is left alone.
 func step(m model, msg tea.Msg) model {
 	next, cmd := m.Update(msg)
 	m = next.(model)
@@ -206,9 +197,6 @@ func step(m model, msg tea.Msg) model {
 	return m
 }
 
-// TestNoEscapeInAnyFrame: every string a hub or a report supplies carries OSC 8, C1 CSI,
-// DCS and bidi characters, and no view draws any of them (skeptic pass 3: N4–N7 and the
-// audit of the rest).
 func TestNoEscapeInAnyFrame(t *testing.T) {
 	for _, fail := range []bool{false, true} {
 		devs := poisoned(threeDevices())

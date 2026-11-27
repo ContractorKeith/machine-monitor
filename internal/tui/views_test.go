@@ -19,13 +19,10 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/power"
 )
 
-// Tests don't wait out the key debounce; TestFetchDebounce checks it still coalesces.
 func init() { fetchDebounce = time.Millisecond }
 
-// testPrice is the saved price every view test uses, so no golden depends on the time zone.
 var testPrice = power.Settings{Region: "US", Rate: 0.165, Currency: "USD"}
 
-// History and Energy make fakeHub a viewSource with fixed, synthetic data.
 func (f *fakeHub) History(ctx context.Context, id string, from, to float64, points int) (*history.Result, error) {
 	if err := f.record(fmt.Sprintf("history %s %.0f %.0f %d", id, from, to, points)); err != nil {
 		return nil, err
@@ -46,15 +43,13 @@ func (f *fakeHub) Energy(ctx context.Context, bounds []float64) (*client.Energy,
 	return e, nil
 }
 
-// synthHistory is deterministic history between from and to: buckets aligned to from, at
-// least a minute wide, with an offline stretch in the middle and wave-like values.
 func synthHistory(id string, from, to float64, points int) history.Result {
 	res := math.Max(60e3, math.Ceil((to-from)/float64(points)/60e3)*60e3)
 	seed := len(id)
 	var pts []history.Point
 	n := int((to - from) / res)
 	for i := 0; i <= n; i++ {
-		if i > n*45/100 && i < n*52/100 { // offline
+		if i > n*45/100 && i < n*52/100 {
 			continue
 		}
 		k := i*7 + seed
@@ -76,7 +71,6 @@ func synthHistory(id string, from, to float64, points int) history.Result {
 	return history.Result{From: from, To: to, Resolution: res, Points: pts}
 }
 
-// synthUsage is deterministic energy totals for device k over bounds.
 func synthUsage(id string, k int, bounds []float64, price power.Settings) hub.Usage {
 	n := len(bounds) - 1
 	u := hub.Usage{ID: id, Stats: map[string]hub.Stat{}, Bytes: map[string]int64{}}
@@ -107,7 +101,6 @@ func synthUsage(id string, k int, bounds []float64, price power.Settings) hub.Us
 	return u
 }
 
-// viewOptions is hub mode on the fake with the views' clock, zone and price fixed.
 func viewOptions(f *fakeHub) Options {
 	o := hubOptions(f)
 	o.Location = time.UTC
@@ -115,8 +108,6 @@ func viewOptions(f *fakeHub) Options {
 	return o
 }
 
-// histLoaded and energyLoaded hold once the data on screen is for the current window or
-// range, not one a debounced key has since replaced.
 func histLoaded(m model) bool {
 	from, to := m.histWindow()
 	r := m.hv.res
@@ -134,7 +125,7 @@ func TestViewsGolden(t *testing.T) {
 		name, keys string
 		w, h       int
 		done       func(model) bool
-		then       string // keys typed once done holds, e.g. scrolling the loaded view
+		then       string
 	}{
 		{"history_80x24", "4", 80, 24, histLoaded, ""},
 		{"history_160x48", "4", 160, 48, histLoaded, ""},
@@ -161,7 +152,6 @@ func TestViewsGolden(t *testing.T) {
 	}
 }
 
-// localViewOptions is local mode with a session store holding two hours of samples.
 func localViewOptions(t *testing.T) Options {
 	t.Helper()
 	s, err := history.Open(t.TempDir(), func() time.Time { return hubNow })
@@ -172,7 +162,7 @@ func localViewOptions(t *testing.T) Options {
 	start := hubNow.Add(-2 * time.Hour)
 	for i := range 3600 {
 		at := start.Add(time.Duration(i) * 2 * time.Second)
-		if i/300 == 7 { // ten minutes off
+		if i/300 == 7 {
 			continue
 		}
 		c := *r
@@ -210,8 +200,6 @@ func TestLocalViewsGolden(t *testing.T) {
 	}
 }
 
-// settleViews sends msgs and applies the History and Energy replies their commands produce.
-// Commands that wait (ticks, the stream) are left alone.
 func settleViews(t *testing.T, m model, msgs ...tea.Msg) model {
 	t.Helper()
 	var exec func(cmd tea.Cmd)
@@ -231,7 +219,7 @@ func settleViews(t *testing.T, m model, msgs ...tea.Msg) model {
 			case histMsg, energyMsg:
 				next, _ := m.Update(res)
 				m = next.(model)
-			case histFetchMsg, energyFetchMsg: // a debounced read is due: send it
+			case histFetchMsg, energyFetchMsg:
 				next, cmd := m.Update(res)
 				m = next.(model)
 				exec(cmd)
@@ -247,7 +235,6 @@ func settleViews(t *testing.T, m model, msgs ...tea.Msg) model {
 	return m
 }
 
-// lastCall is the fake hub's last request.
 func lastCall(f *fakeHub) string {
 	c := f.Calls()
 	if len(c) == 0 {
@@ -285,17 +272,16 @@ func TestHistoryKeys(t *testing.T) {
 	m = settleViews(t, m, keyMsg("["), keyMsg("["))
 	want("[[", now-60*minute, now, false)
 	n := len(f.Calls())
-	m = settleViews(t, m, keyMsg("[")) // already the shortest: no request
+	m = settleViews(t, m, keyMsg("["))
 	if len(f.Calls()) != n || m.hv.rng != 0 {
 		t.Fatalf("[ at 1h: rng %d, calls %d -> %d", m.hv.rng, n, len(f.Calls()))
 	}
 
-	// Zoom in at the cursor (the right edge): the window keeps its right end at now.
 	m = settleViews(t, m, keyMsg("+"))
 	want("+", now-30*minute, now, true)
-	m = settleViews(t, m, keyMsg("-")) // back to the whole hour, which follows now again
+	m = settleViews(t, m, keyMsg("-"))
 	want("-", now-60*minute, now, false)
-	m = settleViews(t, m, keyMsg("-")) // not zoomed: nothing to zoom out of
+	m = settleViews(t, m, keyMsg("-"))
 	if m.hv.zoomed {
 		t.Fatal("- past the range zoomed")
 	}
@@ -306,7 +292,6 @@ func TestHistoryKeys(t *testing.T) {
 		t.Fatalf("deepest zoom spans %.1f min", (to-from)/minute)
 	}
 
-	// Pan: a quarter of the span each way, never past now.
 	m = settleViews(t, m, keyMsg("0"))
 	want("0", now-60*minute, now, false)
 	m = settleViews(t, m, keyMsg("left"))
@@ -316,7 +301,6 @@ func TestHistoryKeys(t *testing.T) {
 	m = settleViews(t, m, keyMsg("right"), keyMsg("right"), keyMsg("right"))
 	want("→→→ (stops at now)", now-60*minute, now, false)
 
-	// The 30-day range can't pan before the hub's 30 days.
 	m = settleViews(t, m, keyMsg("]"), keyMsg("]"), keyMsg("]"), keyMsg("]"))
 	want("30d", now-histKeep, now, false)
 	n = len(f.Calls())
@@ -329,7 +313,6 @@ func TestHistoryKeys(t *testing.T) {
 		t.Fatalf("zoomed pan went %.1f days back", (now-from)/86400e3)
 	}
 
-	// Cursor: h moves it a column left, l back, and not past the edge.
 	w := m.histPlotW()
 	m = settleViews(t, m, keyMsg("h"), keyMsg("h"))
 	if c := m.cursorCol(w); c != w-3 {
@@ -340,14 +323,12 @@ func TestHistoryKeys(t *testing.T) {
 		t.Fatalf("cursor at %d after lll, want %d", c, w-1)
 	}
 
-	// j moves to the next device and reads its history.
 	m = settleViews(t, m, keyMsg("j"))
 	if m.sel != "mac-0001" || !strings.HasPrefix(lastCall(f), "history mac-0001 ") || !histLoaded(m) {
 		t.Fatalf("j: sel %s, last %q", m.sel, lastCall(f))
 	}
 }
 
-// TestHistoryStale: a reply for an older request never replaces a newer one.
 func TestHistoryStale(t *testing.T) {
 	m := hubModel(t, newFakeHub(threeDevices()), 80, 24)
 	m.view = viewHistory
@@ -402,25 +383,24 @@ func TestEnergyBounds(t *testing.T) {
 			t.Errorf("range %d: %d bounds %v..%v", c.rng, len(b), time.UnixMilli(int64(b[0])).UTC(), time.UnixMilli(int64(b[len(b)-1])).UTC())
 		}
 	}
-	// Local midnights across a DST change are 23 or 25 hours apart, not 24.
+
 	ny, err := time.LoadLocation("America/New_York")
 	if err != nil {
 		t.Skip(err)
 	}
 	b := energyBounds(time.Date(2026, 11, 3, 9, 0, 0, 0, ny), 1)
-	if d := b[5] - b[4]; d != 25*3600e3 { // Nov 1 2026 is 25 hours long in New York
+	if d := b[5] - b[4]; d != 25*3600e3 {
 		t.Errorf("DST day is %.0f h", d/3600e3)
 	}
 }
 
-// TestLocalUsage checks local energy totals against a hand calculation.
 func TestLocalUsage(t *testing.T) {
 	base := float64(hubNow.UnixMilli())
 	pts := []history.Point{
 		{T: base, Power: p(600), PowerMax: p(700), CPU: p(50), RX: p(1000)},
 		{T: base + 60e3, Power: p(300), CPU: p(10)},
-		{T: base + 120e3, CPU: p(100)},   // no power: estimated from load
-		{T: base + 180e3, Power: p(900)}, // past the last bound: not counted
+		{T: base + 120e3, CPU: p(100)},
+		{T: base + 180e3, Power: p(900)},
 	}
 	hw := power.HW{Threads: p(8)}
 	price := power.Settings{Rate: 0.2, Currency: "USD"}
@@ -470,7 +450,6 @@ func TestEnergyFormats(t *testing.T) {
 	}
 }
 
-// TestViewsResize checks the new views fill odd window sizes exactly, with and without data.
 func TestViewsResize(t *testing.T) {
 	f := newFakeHub(threeDevices())
 	m := hubModel(t, f, 160, 48)
@@ -485,9 +464,6 @@ func TestViewsResize(t *testing.T) {
 	}
 }
 
-// bigHistory is a hub-mode model on the History view's 30-day range at w×h, holding the
-// given number of points: 0 for what the view asks for (two per column), or up to the hub's
-// cap of 3000.
 func bigHistory(b testing.TB, w, h, points int) model {
 	f := newFakeHub(threeDevices())
 	m := New(viewOptions(f)).(model)
@@ -507,8 +483,6 @@ func bigHistory(b testing.TB, w, h, points int) model {
 	return m
 }
 
-// BenchmarkHistory30d renders the History view's 30-day range at 160×48, with the points
-// the view asks for and with the hub's cap.
 func BenchmarkHistory30d(b *testing.B) {
 	for _, n := range []int{0, histMaxPoints} {
 		name := "requested"
@@ -525,8 +499,6 @@ func BenchmarkHistory30d(b *testing.B) {
 	}
 }
 
-// TestHistoryFrameBudget holds the 30-day History frame and the 30-day Energy frame at
-// 160 columns under the frame budget on every run.
 func TestHistoryFrameBudget(t *testing.T) {
 	if raceDetector {
 		t.Skip("frame times under -race measure the instrumentation; the plain run checks the budget")
@@ -553,8 +525,6 @@ func TestHistoryFrameBudget(t *testing.T) {
 	}
 }
 
-// TestViewsNoColor checks the History and Energy views, with data, set no colours under
-// NO_COLOR.
 func TestViewsNoColor(t *testing.T) {
 	m := bigHistory(t, 160, 48, 0)
 	m.opts.NoColor = true
@@ -572,13 +542,12 @@ func TestViewsNoColor(t *testing.T) {
 	}
 }
 
-// TestFetchDebounce: holding a range key sends one request, for the last window.
 func TestFetchDebounce(t *testing.T) {
 	f := newFakeHub(threeDevices())
 	m := settleViews(t, hubModel(t, f, 160, 48), keyMsg("4"))
 	n := len(f.Calls())
 	var due []tea.Cmd
-	for _, k := range []string{"]", "]", "]"} { // three repeats before the debounce fires
+	for _, k := range []string{"]", "]", "]"} {
 		next, cmd := m.Update(keyMsg(k))
 		m = next.(model)
 		due = append(due, cmd)
@@ -599,7 +568,6 @@ func TestFetchDebounce(t *testing.T) {
 	}
 }
 
-// TestHistoryErrorClears: an error from one device doesn't stay on screen for the next.
 func TestHistoryErrorClears(t *testing.T) {
 	f := newFakeHub(threeDevices())
 	m := hubModel(t, f, 80, 24)
@@ -615,11 +583,10 @@ func TestHistoryErrorClears(t *testing.T) {
 	}
 }
 
-// TestEnergyNarrow: a window narrower than the buckets shows the latest ones whole.
 func TestEnergyNarrow(t *testing.T) {
 	m := hubModel(t, newFakeHub(threeDevices()), 30, 40)
 	m.opts.Location = time.UTC
-	m = settleViews(t, m, keyMsg("5"), keyMsg("]")) // 30 days in 20 plot columns
+	m = settleViews(t, m, keyMsg("5"), keyMsg("]"))
 	if m.ev.rng != 2 || !energyLoaded(m) {
 		t.Fatal("not loaded")
 	}
@@ -629,7 +596,7 @@ func TestEnergyNarrow(t *testing.T) {
 			t.Errorf("chart line %d wide: %q", w, ansi.Strip(l))
 		}
 	}
-	// 30 buckets in 20 columns: the chart starts at bucket 10 (Oct 12) and labels don't touch.
+
 	axis := strings.Fields(ansi.Strip(lines[len(lines)-1]))
 	if want := m.bucketLabel(m.ev.data.Bounds, 10); len(axis) < 2 || axis[0]+" "+axis[1] != want {
 		t.Errorf("axis %q, want it to start at %q", axis, want)
@@ -637,7 +604,6 @@ func TestEnergyNarrow(t *testing.T) {
 	checkFrame(t, m, 30, 40)
 }
 
-// TestGapThreshold: points join across at most max(10 s, 3 buckets), as upstream.
 func TestGapThreshold(t *testing.T) {
 	line := func(res, dt float64) string {
 		pts := []history.Point{{T: 0, CPU: p(50)}, {T: dt, CPU: p(50)}}
@@ -645,7 +611,7 @@ func TestGapThreshold(t *testing.T) {
 			from: 0, to: dt, yMax: 100, gap: math.Max(histGapMin, histGapBuckets*res), w: 20, h: 1, cursor: -1}
 		return strings.Join(pl.render(newTheme(true, false)), "")
 	}
-	if got := line(2000, 10e3); strings.Contains(got, " ") { // 2 s buckets, 10 s apart: joined
+	if got := line(2000, 10e3); strings.Contains(got, " ") {
 		t.Errorf("10 s apart at 2 s buckets: %q", got)
 	}
 	if got := line(2000, 11e3); !strings.Contains(got, " ") {
@@ -659,7 +625,6 @@ func TestGapThreshold(t *testing.T) {
 	}
 }
 
-// TestViewKeys: the number keys open the views PLAN §7 gives them, and tab visits all six.
 func TestViewKeys(t *testing.T) {
 	m := hubModel(t, newFakeHub(threeDevices()), 160, 48)
 	for k, want := range map[string]view{"1": viewDashboard, "2": viewDevice, "3": viewProcesses,

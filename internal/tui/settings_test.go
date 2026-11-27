@@ -8,7 +8,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/power"
 )
 
-// The price form names an overlap in a sentence (N12).
 func TestPriceProblemNamesOverlap(t *testing.T) {
 	s := power.Settings{Region: "custom", Rate: 0.2, Currency: "USD",
 		TOU: []power.Period{{From: 18, To: 23, Rate: 0.5}, {From: 16, To: 21, Rate: 0.4}}}
@@ -22,7 +21,6 @@ func TestPriceProblemNamesOverlap(t *testing.T) {
 	}
 }
 
-// loadPrefs keeps the flat rate of a saved price whose periods overlap (N9).
 func TestLoadPrefsKeepsFlatRateOnOverlap(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "prefs.json")
 	os.WriteFile(path, []byte(`{"price":{"region":"US","rate":0.2,"currency":"USD","tou":[`+
