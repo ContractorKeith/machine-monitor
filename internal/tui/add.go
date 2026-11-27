@@ -1,10 +1,5 @@
 package tui
 
-// Add device (PLAN §7 "Add device", §3 rows 26 and 33): a pairing code from the hub with its
-// countdown, and the one-line agent installs for Linux/macOS and Windows built from the
-// hub's address. Hub mode only; opened with `a` from the dashboard or Settings. The code
-// part says what `machine-monitor pair` prints on the hub's own machine, in the same words.
-
 import (
 	"context"
 	"encoding/json"
@@ -24,7 +19,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/hub"
 )
 
-// PairHub is what Add device needs from a hub. *client.Client implements it.
 type PairHub interface {
 	NewPairCode(ctx context.Context) (*client.PairCode, error)
 	Info(ctx context.Context) (*client.Info, error)
@@ -32,37 +26,32 @@ type PairHub interface {
 	InstallCommands(hubURL string) (sh, ps string)
 }
 
-// addState is the Add device view's state.
 type addState struct {
-	prev   view // the view esc returns to
+	prev   view
 	code   *client.PairCode
 	err    error
 	busy   bool
-	url    string // the hub address other machines use
-	sh, ps string // the one-line installs
-	theirs bool   // an upstream (Electron) hub: other pairing limits, a bash installer
+	url    string
+	sh, ps string
+	theirs bool
 	notice string
-	shown  bool // the install lines show the key (s); hidden until asked, for screen sharing
-	paired bool // a device used the code
-	lost   bool // the stream dropped: the code lived only in that hub's memory
+	shown  bool
+	paired bool
+	lost   bool
 }
 
-// pairMsg is a new pairing code and the hub's addresses.
 type pairMsg struct {
-	code *client.PairCode
-	info *client.Info
-	err  error
-	// theirs is true when the hub is upstream's server.js rather than machine-monitor.
+	code   *client.PairCode
+	info   *client.Info
+	err    error
 	theirs bool
 }
 
-// pairHub is the hub's pairing API, or nil.
 func (m model) pairHub() PairHub {
 	p, _ := m.opts.Hub.(PairHub)
 	return p
 }
 
-// openAdd opens Add device and asks the hub for a fresh code.
 func (m model) openAdd() (tea.Model, tea.Cmd) {
 	prev := m.view
 	if prev == viewSettings {
@@ -73,7 +62,6 @@ func (m model) openAdd() (tea.Model, tea.Cmd) {
 	return m, m.newCode()
 }
 
-// newCode asks the hub for a pairing code (and its LAN addresses, for the installs).
 func (m *model) newCode() tea.Cmd {
 	ph := m.pairHub()
 	if ph == nil || m.add.busy {
@@ -86,19 +74,18 @@ func (m *model) newCode() tea.Cmd {
 		if err != nil {
 			return pairMsg{err: err}
 		}
-		info, _ := ph.Info(ctx) // without it the installs use the address this TUI uses
+		info, _ := ph.Info(ctx)
 		return pairMsg{code: code, info: info, theirs: isUpstream(ctx, ph)}
 	})
 }
 
-// updateAdd handles Add device messages; ok is false for anything else.
 func (m model) updateAdd(msg tea.Msg) (model, tea.Cmd, bool) {
 	msg2, ok := msg.(pairMsg)
 	if !ok {
 		return m, nil, false
 	}
 	m.add.busy, m.add.err = false, msg2.err
-	cleanAll(msg2.code) // from the hub: the code and the addresses are drawn
+	cleanAll(msg2.code)
 	cleanAll(msg2.info)
 	if msg2.err == nil {
 		m.add.code = msg2.code
@@ -108,14 +95,13 @@ func (m model) updateAdd(msg tea.Msg) (model, tea.Cmd, bool) {
 		m.add.sh, m.add.ps = ph.InstallCommands(m.add.url)
 		m.add.sh, m.add.ps = clean(m.add.sh), clean(m.add.ps)
 		m.add.theirs = msg2.theirs
-		if m.add.theirs { // upstream's install.sh starts with #!/usr/bin/env bash
+		if m.add.theirs {
 			m.add.sh = strings.TrimSuffix(m.add.sh, "| sh") + "| bash"
 		}
 	}
 	return m, nil, true
 }
 
-// pairedEvent and lostHub follow the code while Add device shows it, as `pair` does.
 func (m *model) pairedEvent() {
 	if m.add.code != nil && !m.add.lost {
 		m.add.paired = true
@@ -128,7 +114,6 @@ func (m *model) lostHub() {
 	}
 }
 
-// addKey handles Add device's keys: a new code, copying an install line, back.
 func (m model) addKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
@@ -151,7 +136,6 @@ func (m model) addKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// codeLeft is how long the code stays valid.
 func (m model) codeLeft() time.Duration {
 	if m.add.code == nil {
 		return 0
@@ -159,7 +143,6 @@ func (m model) codeLeft() time.Duration {
 	return max(0, time.UnixMilli(m.add.code.Expires).Sub(m.now()))
 }
 
-// addView is the Add device view.
 func (m model) addView() string {
 	t := m.theme
 	lines := []string{t.label.Render("Add a device"), ""}
@@ -210,8 +193,6 @@ func (m model) addView() string {
 	return strings.Join(lines, "\n")
 }
 
-// pairLimits says how long a code lives and how many wrong guesses it allows. Upstream's
-// hub counts 5 tries for everyone together; ours gives each device its own 5.
 func (m model) pairLimits() string {
 	if m.add.theirs {
 		return fmt.Sprintf("and type the code. It works once, for %.0f minutes, and dies after %d wrong tries in all.",
@@ -221,9 +202,6 @@ func (m model) pairLimits() string {
 		hub.PairTTL.Minutes(), hub.PairTries)
 }
 
-// hubOwnPort gives other machines the port the hub says it listens on when the TUI reaches
-// it on loopback, through a port forward: the LAN address InstallURL picked is the hub's, so
-// its port is too. A non-loopback connection address is kept as it is.
 func hubOwnPort(raw, connectedTo string, info *client.Info) string {
 	if info == nil || info.Port <= 0 {
 		return raw
@@ -237,15 +215,12 @@ func hubOwnPort(raw, connectedTo string, info *client.Info) string {
 		return raw
 	}
 	if h := u.Hostname(); net.ParseIP(h) != nil && net.ParseIP(h).IsLoopback() || strings.EqualFold(h, "localhost") {
-		return raw // nothing better than loopback to offer
+		return raw
 	}
 	u.Host = net.JoinHostPort(u.Hostname(), strconv.Itoa(info.Port))
 	return u.String()
 }
 
-// isUpstream reports whether the hub is upstream's server.js: its open /api/info (asked at
-// the address this TUI already reaches it on, no key sent) doesn't say impl
-// "machine-monitor". A hub that can't give its URL or doesn't answer counts as ours.
 func isUpstream(ctx context.Context, ph PairHub) bool {
 	u, ok := ph.(interface{ URL() string })
 	if !ok {
@@ -270,8 +245,6 @@ func isUpstream(ctx context.Context, ph PairHub) bool {
 	return body.Impl != "machine-monitor"
 }
 
-// wrapCmd indents a command and breaks it to the window's width, so all of it shows; c and p
-// copy it whole.
 func (m model) wrapCmd(s string) string {
 	w := max(20, m.width-2)
 	var out []string
@@ -282,7 +255,6 @@ func (m model) wrapCmd(s string) string {
 	return strings.Join(append(out, "  "+s), "\n")
 }
 
-// addFooter is Add device's footer.
 func (m model) addFooter() string {
 	show := "s show key"
 	if m.add.shown {
@@ -291,8 +263,6 @@ func (m model) addFooter() string {
 	return "n new code · c copy Linux/macOS line · p copy Windows line · " + show + " · esc back"
 }
 
-// bearerRE finds the key in an install line's Authorization header.
 var bearerRE = regexp.MustCompile(`Bearer [^"']+`)
 
-// maskKey hides the hub key in an install line.
 func maskKey(s string) string { return bearerRE.ReplaceAllString(s, "Bearer ••••••••") }

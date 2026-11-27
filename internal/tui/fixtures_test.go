@@ -7,7 +7,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// fakeCollector returns the same report on every call.
 type fakeCollector struct{ r *report.Report }
 
 func (f fakeCollector) Collect(ctx context.Context) (*report.Report, error) {
@@ -15,7 +14,6 @@ func (f fakeCollector) Collect(ctx context.Context) (*report.Report, error) {
 	return &c, nil
 }
 
-// fakeProcs returns a fixed process list.
 type fakeProcs []report.Process
 
 func (f fakeProcs) Processes(ctx context.Context) ([]report.Process, error) {
@@ -30,7 +28,6 @@ const (
 
 var p = report.Ptr[float64]
 
-// workstation is a fixed report with a temperature in each band and every section filled.
 func workstation(cores int) *report.Report {
 	cs := make([]*float64, cores)
 	for i := range cs {
@@ -81,7 +78,6 @@ func workstation(cores int) *report.Report {
 	}
 }
 
-// procList is n processes with varied, deterministic values.
 func procList(n int) fakeProcs {
 	names := []string{"postgres", "ollama", "code", "firefox", "Xorg", "pipewire", "sshd", "go"}
 	users := []string{"keith", "root", "postgres"}

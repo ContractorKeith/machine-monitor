@@ -17,7 +17,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// actionFake is a fakeHub that also serves processes and actions.
 type actionFake struct {
 	*fakeHub
 	pmu   sync.Mutex
@@ -40,7 +39,6 @@ func (f *actionFake) Action(ctx context.Context, id, action string) error {
 	return f.record("action " + id + " " + action)
 }
 
-// actionDevices is threeDevices with the workstation allowing restart and shutdown.
 func actionDevices() []client.Device {
 	devs := threeDevices()
 	devs[0].Latest.Actions = []string{"restart", "shutdown"}
@@ -60,7 +58,6 @@ func newActionFake() *actionFake {
 	}}
 }
 
-// actModel is a hub-mode model on f at w×h with its snapshot applied.
 func actModel(t *testing.T, f *actionFake, w, h int) model {
 	t.Helper()
 	m := New(Options{Hub: f, Interval: time.Hour, Now: func() time.Time { return hubNow }}).(model)
@@ -73,7 +70,6 @@ func actModel(t *testing.T, f *actionFake, w, h int) model {
 	return m
 }
 
-// runActs is run for the actions' messages: it feeds back what hub requests answer.
 func runActs(t *testing.T, m model, msgs ...tea.Msg) model {
 	t.Helper()
 	for _, msg := range msgs {
@@ -114,9 +110,8 @@ func TestRemoteProcesses(t *testing.T) {
 		t.Errorf("filter on a remote list: %d rows", len(v))
 	}
 
-	m = runActs(t, m, keyMsg("esc")) // the one filter would hide every device from the dashboard
+	m = runActs(t, m, keyMsg("esc"))
 
-	// The poll goes on while the view is open and stops when it closes.
 	gen := m.act.procsGen
 	next, cmd := m.Update(remoteTickMsg{gen})
 	if cmd == nil {
@@ -130,7 +125,6 @@ func TestRemoteProcesses(t *testing.T) {
 		t.Error("a late reply restarted the poll")
 	}
 
-	// Another device: its list, never the last one's.
 	m = runActs(t, m, keyMsg("l"), keyMsg("3"))
 	if out := plain(m); strings.Contains(out, "ollama") || !strings.Contains(out, "studio doesn't send its process list") {
 		t.Errorf("unsupported device:\n%s", out)
@@ -140,11 +134,10 @@ func TestRemoteProcesses(t *testing.T) {
 func TestRemoteProcessesNotes(t *testing.T) {
 	f := newActionFake()
 	m := actModel(t, f, 120, 30)
-	m = runActs(t, m, keyMsg("j"), keyMsg("j"), keyMsg("3")) // the offline NAS
+	m = runActs(t, m, keyMsg("j"), keyMsg("j"), keyMsg("3"))
 	if out := plain(m); !strings.Contains(out, "nas-02 is offline.") {
 		t.Errorf("offline device:\n%s", out)
 	}
-	// A hub without the actions API (an older client) says so.
 	m = hubModel(t, newFakeHub(threeDevices()), 120, 30)
 	m = run(t, m, keyMsg("3"))
 	if out := plain(m); !strings.Contains(out, "not available") {
@@ -155,7 +148,7 @@ func TestRemoteProcessesNotes(t *testing.T) {
 func TestWakeKey(t *testing.T) {
 	f := newActionFake()
 	m := actModel(t, f, 160, 48)
-	m = runActs(t, m, keyMsg("w")) // the workstation is on
+	m = runActs(t, m, keyMsg("w"))
 	if len(f.Calls()) != 0 || !strings.Contains(m.hubStatus(), "already on") {
 		t.Errorf("wake on an online device: %q, footer %q", f.Calls(), m.hubStatus())
 	}
@@ -177,7 +170,7 @@ func TestPowerMenu(t *testing.T) {
 	if s := m.hubStatus(); !strings.Contains(s, "r restart · S shutdown") || strings.Contains(s, "sleep") {
 		t.Errorf("menu = %q", s)
 	}
-	m = runActs(t, m, keyMsg("s")) // sleep isn't allowed: closes the menu
+	m = runActs(t, m, keyMsg("s"))
 	if m.act.menu != "" || len(f.Calls()) != 0 {
 		t.Errorf("disallowed key: menu %q calls %q", m.act.menu, f.Calls())
 	}
@@ -204,7 +197,6 @@ func TestPowerMenu(t *testing.T) {
 		t.Errorf("actionResult footer = %q", s)
 	}
 
-	// The device drops off (or turns actions off) while the confirmation is up: not sent.
 	m = runActs(t, m, keyMsg("P"), keyMsg("r"))
 	m = runActs(t, m, hubMsg{client.Event{Type: client.EventStatus, Online: map[string]bool{ws: false}}})
 	m = runActs(t, m, keyMsg("y"))
@@ -219,7 +211,7 @@ func TestPowerMenu(t *testing.T) {
 		t.Errorf("sent a withdrawn action: %q, footer %q", f.Calls(), m.hubStatus())
 	}
 
-	m = runActs(t, m, keyMsg("l"), keyMsg("P")) // the Mac doesn't allow power actions
+	m = runActs(t, m, keyMsg("l"), keyMsg("P"))
 	if m.act.menu != "" || !strings.Contains(m.hubStatus(), "--allow-power-actions") {
 		t.Errorf("menu %q footer %q", m.act.menu, m.hubStatus())
 	}
@@ -242,4 +234,4 @@ func TestActionsGolden(t *testing.T) {
 	}
 }
 
-var _ ActionHub = (*client.Client)(nil) // the connected TUI's hub serves actions
+var _ ActionHub = (*client.Client)(nil)

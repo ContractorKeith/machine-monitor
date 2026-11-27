@@ -8,7 +8,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// deviceLines is view 2, one string per line; the view scrolls through them.
 func (m model) deviceLines() []string {
 	r := m.report()
 	switch {
@@ -150,7 +149,6 @@ func (m model) deviceLines() []string {
 	return out
 }
 
-// powerLines is the estimate breakdown, saying which parts are measured.
 func (m model) powerLines(r *report.Report) []string {
 	t := m.theme
 	b := power.Estimate(r)
@@ -184,29 +182,25 @@ func (m model) powerLines(r *report.Report) []string {
 	}
 }
 
-// labelWidth is the Device view's label column.
 const labelWidth = 14
 
-// meter is a labelled bar with a percentage and a note. Every meter in a frame has the same
-// bar width so they line up; the note may be clipped on a narrow terminal.
 func (m model) meter(label string, p *float64, note string, w int) string {
 	const noteW = 24
 	bw := max(10, min(50, w-2-labelWidth-1-5-2-noteW))
 	return "  " + m.theme.label.Render(pad(label, labelWidth)) + m.theme.bar(p, bw) + " " + padLeft(fmtPct(p), 5) + "  " + note
 }
 
-// coreGrid lays out one small bar per logical core in as many columns as fit.
 func (m model) coreGrid(cores []*float64, w int) []string {
 	if len(cores) == 0 {
 		return []string{m.theme.dim.Render("  per-core load not reported")}
 	}
-	const cellW = 20 // "  12 ██████████  45%"
+	const cellW = 20
 	ncol := max(1, (w-2)/cellW)
 	nrow := (len(cores) + ncol - 1) / ncol
 	idxW := len(fmt.Sprint(len(cores) - 1))
 	lines := make([]string, nrow)
 	for i, c := range cores {
-		row := i % nrow // fill down the columns, like htop
+		row := i % nrow
 		cell := " " + padLeft(fmt.Sprint(i), idxW) + " " + m.theme.bar(c, cellW-idxW-8) + padLeft(fmtPct(c), 5)
 		lines[row] += pad(cell, cellW)
 	}
