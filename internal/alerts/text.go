@@ -1,8 +1,5 @@
 package alerts
 
-// Ported from Forward-Future/device-monitor alerts.js (MIT, © 2026 Matt):
-// https://github.com/Forward-Future/device-monitor
-
 import (
 	"fmt"
 	"strconv"
@@ -12,8 +9,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// metric is a report's current value for a rule type, nil when unknown, plus detail for the
-// message. watts is the hub's power estimate for the report.
 func metric(typ string, r *report.Report, watts *float64) (*float64, Detail) {
 	if r == nil {
 		return nil, Detail{}
@@ -43,7 +38,6 @@ func metric(typ string, r *report.Report, watts *float64) (*float64, Detail) {
 	case TypePower:
 		return watts, Detail{}
 	case TypeDisk:
-		// The fullest disk over 1 GB; smaller ones are boot and recovery partitions.
 		var worst *float64
 		var d Detail
 		for _, disk := range r.Disks {
@@ -63,7 +57,6 @@ func metric(typ string, r *report.Report, watts *float64) (*float64, Detail) {
 	return nil, Detail{}
 }
 
-// text is an alert's title and message, worded as upstream.
 func (e *Engine) text(r Rule, id, st string, value *float64, d Detail) (title, message string) {
 	name, label := e.nameOf(id), Types[r.Type].Label
 	limit := e.format(r.Type, r.Threshold, d)
@@ -106,7 +99,6 @@ func (e *Engine) text(r Rule, id, st string, value *float64, d Detail) (title, m
 	return name + ": " + label + " back to normal", "Now " + e.format(r.Type, value, d) + " (limit " + limit + ")."
 }
 
-// format renders a value in its type's unit: °C/°F, W/kW, currency or percent.
 func (e *Engine) format(typ string, v *float64, d Detail) string {
 	if v == nil {
 		return ""
@@ -129,15 +121,11 @@ func (e *Engine) format(typ string, v *float64, d Detail) string {
 	return fmt.Sprintf("%.0f%%", jsRound(x))
 }
 
-// currencySymbols follows Intl.NumberFormat('en-US') for the currencies the power price
-// table uses; others print as "CODE 1.23" as Intl does.
 var currencySymbols = map[string]string{
 	"USD": "$", "EUR": "€", "GBP": "£", "JPY": "¥", "INR": "₹", "KRW": "₩", "CNY": "CN¥",
 	"CAD": "CA$", "AUD": "A$", "NZD": "NZ$", "MXN": "MX$", "BRL": "R$", "ILS": "₪", "VND": "₫",
 }
 
-// money formats an amount like Intl.NumberFormat('en-US', {style: 'currency'}): grouped
-// thousands, two decimals (none for JPY and KRW).
 func money(v float64, currency string) string {
 	if currency == "" {
 		currency = "USD"

@@ -27,16 +27,16 @@ func TestRegionsMatchUpstream(t *testing.T) {
 
 func TestGuessRegion(t *testing.T) {
 	for _, c := range []struct{ tz, locale, want string }{
-		{"Europe/Berlin", "en_US.UTF-8", "DE"}, // zone beats locale
+		{"Europe/Berlin", "en_US.UTF-8", "DE"},
 		{"America/Los_Angeles", "", "US-CA"},
-		{"Asia/Calcutta", "", "IN"},           // legacy alias
-		{"America/Indiana/Knox", "", "US-IN"}, // prefix
+		{"Asia/Calcutta", "", "IN"},
+		{"America/Indiana/Knox", "", "US-IN"},
 		{"Australia/Perth", "", "AU"},
-		{"America/New_York", "en_US.UTF-8", "US"}, // shared zone, US average
-		{"America/Chicago", "es_MX.UTF-8", "MX"},  // unknown zone, locale decides
-		{"", "en-GB", "GB"},                       // navigator.language style
+		{"America/New_York", "en_US.UTF-8", "US"},
+		{"America/Chicago", "es_MX.UTF-8", "MX"},
+		{"", "en-GB", "GB"},
 		{"", "de_DE@euro", "DE"},
-		{"", "en_ZZ.UTF-8", "US"}, // unknown country
+		{"", "en_ZZ.UTF-8", "US"},
 		{"", "C", "US"},
 		{"", "", "US"},
 	} {

@@ -1,8 +1,5 @@
 package alerts
 
-// SSRF guard ported from Forward-Future/device-monitor alerts.js (MIT, © 2026 Matt):
-// https://github.com/Forward-Future/device-monitor
-
 import (
 	"bytes"
 	"context"
@@ -21,43 +18,30 @@ import (
 	"time"
 )
 
-// deliveryTimeout bounds one ntfy or webhook request, as upstream.
 const deliveryTimeout = 10 * time.Second
 
-// Doer sends an HTTP request. *http.Client satisfies it.
 type Doer interface {
 	Do(*http.Request) (*http.Response, error)
 }
 
-// Result is how one delivery went.
 type Result struct {
 	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
 }
 
-// Delivery is the result per channel; a nil field means the channel is off.
 type Delivery struct {
 	Ntfy    *Result `json:"ntfy,omitempty"`
 	Webhook *Result `json:"webhook,omitempty"`
 }
 
-// tailscaleService is tailscaled's on-host service address ("quad-100": its DNS and local
-// web client), IPv4 and IPv6. Every machine running Tailscale answers it itself, and
-// net.InterfaceAddrs doesn't list it, so the own-address check below can't catch it.
 var tailscaleService = []netip.Addr{netip.MustParseAddr("100.100.100.100"), netip.MustParseAddr("fd7a:115c:a1e0::53")}
 
-// cgnat is 100.64.0.0/10, where Tailscale gives out tailnet addresses.
 var cgnat = netip.MustParsePrefix("100.64.0.0/10")
 
-// blockedAddr reports whether alerts may not be sent to a: loopback, unspecified, 0.0.0.0/8,
-// link-local (which includes the 169.254.169.254 cloud metadata service) and Tailscale's
-// on-host service, so a key-holder can't turn the hub into an SSRF bounce point. Private LAN
-// and tailnet addresses (RFC 1918, fc00::/7, 100.64.0.0/10) are refused only when
-// blockPrivate is set.
 func blockedAddr(a netip.Addr, blockPrivate bool) bool {
-	a = a.Unmap().WithZone("") // ::ffff:127.0.0.1 is 127.0.0.1
+	a = a.Unmap().WithZone("")
 	if b := a.As16(); a.Is6() && [12]byte(b[:12]) == [12]byte{} {
-		a = netip.AddrFrom4([4]byte(b[12:])) // ::127.0.0.1 (IPv4-compatible) too
+		a = netip.AddrFrom4([4]byte(b[12:]))
 	}
 	if a.Is4() && a.As4()[0] == 0 {
 		return true
@@ -66,8 +50,6 @@ func blockedAddr(a netip.Addr, blockPrivate bool) bool {
 		slices.Contains(tailscaleService, a) || (blockPrivate && (a.IsPrivate() || cgnat.Contains(a)))
 }
 
-// ownAddrs lists this machine's interface addresses (LAN, Tailscale, ...). A webhook to one
-// would reach the hub's own API from the hub's own address.
 func ownAddrs() []netip.Addr {
 	var out []netip.Addr
 	addrs, _ := net.InterfaceAddrs()
@@ -81,7 +63,6 @@ func ownAddrs() []netip.Addr {
 	return out
 }
 
-// blocked is blockedAddr plus the hub machine's own interface addresses.
 func (e *Engine) blocked(a netip.Addr) bool {
 	if blockedAddr(a, e.opt.BlockPrivate) {
 		return true
@@ -93,8 +74,6 @@ func (e *Engine) blocked(a netip.Addr) bool {
 	return slices.Contains(local(), a.Unmap())
 }
 
-// checkHost refuses a URL whose host is, or resolves to, a blocked address. One blocked
-// address is enough to refuse, since the dialer may pick any of them.
 func (e *Engine) checkHost(ctx context.Context, host string) error {
 	if a, err := netip.ParseAddr(host); err == nil {
 		if e.blocked(a) {
@@ -120,10 +99,6 @@ func (e *Engine) checkHost(ctx context.Context, host string) error {
 	return nil
 }
 
-// redactErr words a delivery error without the URL's userinfo, path, query or fragment: webhook
-// URLs carry their secret there, and the error reaches the log and POST /api/alerts/test. It is
-// rebuilt from the *url.Error's op and inner error, and any URL the inner error quotes (a bad
-// redirect Location, say) is cut down to scheme://host as well.
 func redactErr(err error, u *url.URL) string {
 	short := url.URL{Scheme: u.Scheme, Host: u.Host}
 	op, inner := "Post", err
@@ -136,7 +111,6 @@ func redactErr(err error, u *url.URL) string {
 
 var urlInText = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s"'<>]+`)
 
-// scrubURLs cuts every URL in msg down to scheme://host; one that won't parse becomes [url].
 func scrubURLs(msg string) string {
 	return urlInText.ReplaceAllStringFunc(msg, func(raw string) string {
 		if u, err := url.Parse(raw); err == nil && u.Host != "" {
@@ -146,8 +120,6 @@ func scrubURLs(msg string) string {
 	})
 }
 
-// post sends body as JSON to rawURL after the SSRF check. It never returns an error, only a
-// Result, since delivery is best effort.
 func (e *Engine) post(ctx context.Context, rawURL string, body any) Result {
 	u, err := url.Parse(rawURL)
 	if err != nil || httpURL(rawURL) == "" {
@@ -173,16 +145,10 @@ func (e *Engine) post(ctx context.Context, rawURL string, body any) Result {
 		io.Copy(io.Discard, io.LimitReader(res.Body, 64<<10))
 		return Result{OK: true}
 	}
-	// A redirect is reported as a failure, never followed: it could point anywhere. The
-	// reply's body isn't passed on: POST /api/alerts/test would echo it to the caller,
-	// a read-back channel into whatever the URL reaches.
 	io.Copy(io.Discard, io.LimitReader(res.Body, 4<<10))
 	return Result{Error: strings.TrimSpace(fmt.Sprintf("HTTP %d %s", res.StatusCode, http.StatusText(res.StatusCode)))}
 }
 
-// newGuardedClient is the default Doer: no redirects, no proxy (a proxy would hide where the
-// request really goes), and a dialer that re-checks the address it actually connects to, so a
-// DNS answer that changes between the check and the dial (rebinding) is refused too.
 func newGuardedClient(blocked func(netip.Addr) bool) *http.Client {
 	dialer := &net.Dialer{
 		Timeout: deliveryTimeout,

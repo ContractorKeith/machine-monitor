@@ -11,10 +11,6 @@ import (
 	"time"
 )
 
-// The fixtures in testdata/upstream were written by upstream's history.js running
-// testdata/gen-upstream.js (see the header there for how to regenerate them).
-
-// op is one line of testdata/upstream/ops.ndjson.
 type op struct {
 	Op     string          `json:"op"`
 	Now    int64           `json:"now"`
@@ -50,8 +46,6 @@ func readOps(t *testing.T) []op {
 	return ops
 }
 
-// sameJSON compares two JSON documents, treating a null and a missing key as equal (upstream
-// raw samples have no *Max keys; ours encode them as null).
 func sameJSON(t *testing.T, got any, want json.RawMessage) bool {
 	t.Helper()
 	b, err := json.Marshal(got)
@@ -86,8 +80,6 @@ func dropNulls(v any) any {
 	return v
 }
 
-// TestMatchesUpstream replays every call upstream's history.js saw, checks each query
-// answer against upstream's, then checks the files left on disk are byte-identical.
 func TestMatchesUpstream(t *testing.T) {
 	dir := t.TempDir()
 	var now int64
@@ -160,7 +152,6 @@ func TestMatchesUpstream(t *testing.T) {
 	}
 }
 
-// TestReadsUpstreamFiles opens the directory upstream wrote and serves the same history.
 func TestReadsUpstreamFiles(t *testing.T) {
 	dir := t.TempDir()
 	want, _ := filepath.Glob("testdata/upstream/history/*.ndjson")
@@ -171,12 +162,11 @@ func TestReadsUpstreamFiles(t *testing.T) {
 		}
 	}
 	ops := readOps(t)
-	end := ops[len(ops)-1].Now // upstream's final close
+	end := ops[len(ops)-1].Now
 	s, err := Open(dir, func() time.Time { return time.UnixMilli(end) })
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Upstream's last query covered the last 30 days of machine-a just before that close.
 	var last op
 	for _, o := range ops {
 		if o.Op == "query" && o.ID == "machine-a" {
@@ -188,8 +178,6 @@ func TestReadsUpstreamFiles(t *testing.T) {
 	if err := json.Unmarshal(last.Want, &w); err != nil {
 		t.Fatal(err)
 	}
-	// The live, unfinished minute was flushed at close, so it now comes from the file with a
-	// count; everything else must match exactly.
 	if len(got.Points) != len(w.Points) || len(got.Points) < 20 {
 		t.Fatalf("got %d points, want %d", len(got.Points), len(w.Points))
 	}
@@ -200,11 +188,9 @@ func TestReadsUpstreamFiles(t *testing.T) {
 			t.Fatalf("point %d: got %+v, want %+v", i, got.Points[i], w.Points[i])
 		}
 	}
-	// The odd id survives the trip through its safe file name.
 	if r := s.Query("host b/weird:id", last.From, last.To, 1200); len(r.Points) == 0 {
 		t.Fatal("no points for host b/weird:id")
 	}
-	// Collision-prone legacy filenames migrate; their NDJSON contents stay unchanged.
 	for _, w := range want {
 		wb, _ := os.ReadFile(w)
 		var first line

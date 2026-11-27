@@ -5,18 +5,13 @@ import (
 	"strings"
 )
 
-// Region is a typical household electricity price for one place.
 type Region struct {
-	Code     string  // "US", "US-CA", "GB", ...; "custom" is reserved for a typed-in rate
-	Name     string  // "California"
-	Currency string  // ISO 4217
-	Rate     float64 // per kWh in Currency
+	Code     string
+	Name     string
+	Currency string
+	Rate     float64
 }
 
-// Regions are typical household rates per kWh in local currency (approximate recent
-// averages), in upstream's display order: US average, US states, Canadian provinces, then
-// countries. Time-of-use and tiered plans vary a lot, so people can type the rate from
-// their bill instead.
 var Regions = []Region{
 	{"US", "United States (average)", "USD", 0.165},
 	{"US-AL", "Alabama", "USD", 0.152},
@@ -114,8 +109,6 @@ var Regions = []Region{
 	{"GB", "United Kingdom", "GBP", 0.25},
 }
 
-// tzRegions maps a time zone to its most likely region. Zones shared by many US states fall
-// back to the US average.
 var tzRegions = map[string]string{
 	"America/Los_Angeles": "US-CA",
 	"America/Denver":      "US-CO",
@@ -170,13 +163,11 @@ var tzRegions = map[string]string{
 	"Asia/Manila":         "PH",
 }
 
-// tzPrefixes catch whole families of zones.
 var tzPrefixes = [][2]string{
 	{"America/Indiana/", "US-IN"}, {"America/Kentucky/", "US-KY"},
 	{"America/North_Dakota/", "US-ND"}, {"Australia/", "AU"},
 }
 
-// LookupRegion returns the region with code, or false.
 func LookupRegion(code string) (Region, bool) {
 	for _, r := range Regions {
 		if r.Code == code {
@@ -186,8 +177,6 @@ func LookupRegion(code string) (Region, bool) {
 	return Region{}, false
 }
 
-// GuessRegion picks the most likely region code from an IANA time zone ("Europe/Berlin")
-// and a locale ("en_GB.UTF-8" or "en-GB"), falling back to "US" as upstream does.
 func GuessRegion(tz, locale string) string {
 	if code, ok := tzRegions[tz]; ok {
 		return code
@@ -205,20 +194,16 @@ func GuessRegion(tz, locale string) string {
 	return "US"
 }
 
-// DefaultRegion guesses this machine's region from its time zone and locale.
 func DefaultRegion() Region {
 	r, _ := LookupRegion(GuessRegion(localTimeZone(), localLocale()))
 	return r
 }
 
-// DefaultSettings is the price used until the user picks one: the guessed region's rate.
 func DefaultSettings() Settings {
 	r := DefaultRegion()
 	return Settings{Region: r.Code, Rate: r.Rate, Currency: r.Currency}
 }
 
-// localeCountry is the upper-cased second part of a locale: "en_GB.UTF-8" → "GB".
-// Upstream reads navigator.language ("en-GB").
 func localeCountry(locale string) string {
 	locale, _, _ = strings.Cut(locale, ".")
 	locale, _, _ = strings.Cut(locale, "@")
@@ -229,8 +214,6 @@ func localeCountry(locale string) string {
 	return strings.ToUpper(parts[1])
 }
 
-// localTimeZone is this machine's IANA zone name, or "" when it can't be told (Windows,
-// whose zone names aren't IANA). TZ wins, then the /etc/localtime symlink on Linux and macOS.
 func localTimeZone() string {
 	if tz := strings.TrimPrefix(os.Getenv("TZ"), ":"); tz != "" {
 		if i := strings.Index(tz, "zoneinfo/"); i >= 0 {
@@ -246,7 +229,6 @@ func localTimeZone() string {
 	return ""
 }
 
-// localLocale is the user's locale from the usual POSIX variables.
 func localLocale() string {
 	for _, k := range []string{"LC_ALL", "LC_MESSAGES", "LANG"} {
 		if v := os.Getenv(k); v != "" && v != "C" && v != "POSIX" {

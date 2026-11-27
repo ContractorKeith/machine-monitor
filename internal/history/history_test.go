@@ -12,7 +12,6 @@ import (
 	"time"
 )
 
-// fakeClock is a settable clock in Unix ms.
 type fakeClock struct {
 	mu sync.Mutex
 	ms float64
@@ -26,7 +25,7 @@ func (c *fakeClock) now() time.Time {
 
 func (c *fakeClock) set(ms float64) { c.mu.Lock(); c.ms = ms; c.mu.Unlock() }
 
-const t0 float64 = 1_793_000_000_000 - 1_793_000_000_000%minuteMS // a whole minute
+const t0 float64 = 1_793_000_000_000 - 1_793_000_000_000%minuteMS
 
 func open(t *testing.T, dir string, c *fakeClock) *Store {
 	t.Helper()
@@ -61,21 +60,19 @@ func val(p *float64) any {
 	return *p
 }
 
-// A hub that stops and restarts within one minute must merge the two halves of that minute,
-// weighted by sample count, instead of storing it twice (upstream v1.2.29).
 func TestMinuteMergeAcrossRestart(t *testing.T) {
 	dir, c := t.TempDir(), &fakeClock{}
 	s := open(t, dir, c)
 	add(t, s, c, "a", t0+1000, 10)
 	add(t, s, c, "a", t0+3000, 20)
-	add(t, s, c, "a", t0+5000, 30) // 3 samples, avg 20, peak 30
+	add(t, s, c, "a", t0+5000, 30)
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
 
 	s = open(t, dir, c)
-	add(t, s, c, "a", t0+40000, 60)   // same minute, 1 sample
-	add(t, s, c, "a", t0+minuteMS, 1) // next minute: commits the merged one
+	add(t, s, c, "a", t0+40000, 60)
+	add(t, s, c, "a", t0+minuteMS, 1)
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +85,6 @@ func TestMinuteMergeAcrossRestart(t *testing.T) {
 		t.Errorf("merged minute = %s, want cpu 30 (=(20*3+60)/4), cpuMax 60, n 4", got[0])
 	}
 
-	// A file that already has the duplicate (written by a pre-1.2.29 hub) is merged on load.
 	dup := `{"id":"b","t":` + ftoa(t0) + `,"cpu":10,"cpuMax":10}` + "\n" + `{"id":"b","t":` + ftoa(t0) + `,"cpu":20,"cpuMax":25}` + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "b.ndjson"), []byte(dup), 0o600); err != nil {
 		t.Fatal(err)
@@ -108,7 +104,7 @@ func ftoa(ms float64) string { return strconv.FormatFloat(ms, 'f', -1, 64) }
 func TestPrune(t *testing.T) {
 	dir, c := t.TempDir(), &fakeClock{}
 	s := open(t, dir, c)
-	for d := 0; d < 3; d++ { // one minute on each of days 0, 1, 2
+	for d := 0; d < 3; d++ {
 		add(t, s, c, "a", t0+float64(d)*dayMS, 1)
 		add(t, s, c, "a", t0+float64(d)*dayMS+minuteMS, 1)
 	}
@@ -120,8 +116,7 @@ func TestPrune(t *testing.T) {
 		t.Fatalf("got %d lines, want 6", n)
 	}
 
-	// On load, rows older than 30 days are dropped and the file rewritten.
-	c.set(t0 + keepMS + dayMS) // cutoff lands on day 1's first minute, which stays
+	c.set(t0 + keepMS + dayMS)
 	s = open(t, dir, c)
 	if n := len(lines(t, path)); n != 4 {
 		t.Fatalf("after load: %d lines, want 4 (day 0 expired)", n)
@@ -130,7 +125,6 @@ func TestPrune(t *testing.T) {
 		t.Fatalf("after load: %d points from %v", len(mp), mp[0].T)
 	}
 
-	// On commit, prune runs once the oldest row is more than a day past the cutoff.
 	late := t0 + 2*dayMS + keepMS + 2*dayMS
 	add(t, s, c, "a", late, 1)
 	add(t, s, c, "a", late+minuteMS, 1)
@@ -139,7 +133,6 @@ func TestPrune(t *testing.T) {
 		t.Fatalf("after prune: %v", got)
 	}
 
-	// Remove forgets the device and deletes the file.
 	if err := s.Remove("a"); err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +143,6 @@ func TestPrune(t *testing.T) {
 		t.Fatalf("still %d points after Remove", len(r.Points))
 	}
 
-	// A file with only expired rows is deleted on load.
 	old := `{"id":"z","t":1,"cpu":1}` + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "z.ndjson"), []byte(old), 0o600); err != nil {
 		t.Fatal(err)
@@ -164,7 +156,6 @@ func TestPrune(t *testing.T) {
 func TestDownsampling(t *testing.T) {
 	dir, c := t.TempDir(), &fakeClock{}
 	s := open(t, dir, c)
-	// Two hours of 2 s samples; cpu ramps so averages are predictable, with one spike.
 	end := t0 + 2*rawMS
 	for ms := float64(t0); ms < end; ms += 2000 {
 		cpu := float64(int(ms-t0)/minuteMS%10) * 10
@@ -174,13 +165,11 @@ func TestDownsampling(t *testing.T) {
 		add(t, s, c, "a", ms, cpu)
 	}
 
-	// Last 10 min at 1200 points: width 500 ms ≤ 2 s, so raw samples come back as is.
 	r := s.Query("a", end-10*minuteMS, end, 1200)
 	if r.Resolution != 2000 || len(r.Points) != 300 || r.Points[0].CPUMax != nil {
 		t.Fatalf("10m: resolution %v, %d points", r.Resolution, len(r.Points))
 	}
 
-	// Last hour at 120 points: 30 s buckets from raw, peaks kept.
 	r = s.Query("a", end-rawMS, end, 120)
 	if r.Resolution != 30000 || len(r.Points) != 120 {
 		t.Fatalf("1h/120: resolution %v, %d points", r.Resolution, len(r.Points))
@@ -198,13 +187,11 @@ func TestDownsampling(t *testing.T) {
 		t.Errorf("peak = %v, want the 99 spike", peak)
 	}
 
-	// Two hours at 1200 points (6 s) reaches past the raw hour: minutes fill in before it.
 	r = s.Query("a", t0, end, 1200)
 	if r.Resolution != minuteMS || r.Points[0].T != t0 || r.Points[0].N != 30 {
 		t.Fatalf("2h: resolution %v, first %+v", r.Resolution, r.Points[0])
 	}
 
-	// Two hours at 12 points: 10-minute buckets of minute points; the live minute is included.
 	r = s.Query("a", t0, end, 12)
 	if r.Resolution != 10*minuteMS || len(r.Points) != 12 {
 		t.Fatalf("2h/12: resolution %v, %d points", r.Resolution, len(r.Points))
@@ -218,12 +205,10 @@ func TestDownsampling(t *testing.T) {
 		t.Errorf("bucket 9 peak = %v, want 99", val(r.Points[9].CPUMax))
 	}
 
-	// A device with no data gets an empty (non-nil) list.
 	if r := s.Query("nobody", t0, end, 100); r.Points == nil || len(r.Points) != 0 {
 		t.Fatalf("nobody: %#v", r.Points)
 	}
 
-	// Recent is raw samples within the window, by the injected clock.
 	c.set(end)
 	if got := s.Recent("a", 10*time.Minute); len(got) != 300 {
 		t.Fatalf("Recent: %d samples, want 300", len(got))
@@ -245,7 +230,7 @@ func TestNilStaysNil(t *testing.T) {
 
 func TestRound2(t *testing.T) {
 	for _, c := range []struct{ in, want float64 }{
-		{0.125, 0.13}, {2.375, 2.38}, {-0.125, -0.13}, {0.25, 0.25}, {1.005, 1}, // 1.005 is 1.00499...
+		{0.125, 0.13}, {2.375, 2.38}, {-0.125, -0.13}, {0.25, 0.25}, {1.005, 1},
 		{12.344999, 12.34}, {-0.001, 0}, {1e15 + 0.125, 1e15 + 0.13}, {3, 3},
 	} {
 		if got := round2(c.in); got != c.want {
@@ -278,7 +263,6 @@ func TestParams(t *testing.T) {
 	}
 }
 
-// The hub adds while TUIs query; run with -race to check.
 func TestConcurrent(t *testing.T) {
 	c := &fakeClock{}
 	s := open(t, t.TempDir(), c)

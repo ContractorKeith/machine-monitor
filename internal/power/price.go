@@ -10,17 +10,15 @@ import (
 	"time"
 )
 
-// Settings is the electricity price the hub charges energy at (config.json "energy").
 type Settings struct {
-	Region   string   `json:"region"`   // a Region code or "custom"
-	Rate     float64  `json:"rate"`     // per kWh; with TOU, the rate for every other hour
-	Currency string   `json:"currency"` // ISO 4217
+	Region   string   `json:"region"`
+	Rate     float64  `json:"rate"`
+	Currency string   `json:"currency"`
 	TOU      []Period `json:"tou,omitempty"`
 }
 
-// Period is one time-of-use window in local hours, From inclusive, To exclusive.
 type Period struct {
-	From float64 `json:"from"` // 0–24, quarter hours
+	From float64 `json:"from"`
 	To   float64 `json:"to"`
 	Rate float64 `json:"rate"`
 }
@@ -30,17 +28,10 @@ var (
 	currencyRE = regexp.MustCompile(`^[A-Z]{3}$`)
 )
 
-// ErrInvalidSettings is returned by ParseSettings for anything upstream would reject.
 var ErrInvalidSettings = errors.New("invalid energy settings")
 
-// ErrOverlappingPeriods is returned by ParseSettings when two time-of-use periods share an
-// hour. Upstream accepts them but prices the overlap by the first period only, so a daily
-// total that adds every period's hours counts those hours twice.
 var ErrOverlappingPeriods = fmt.Errorf("%w: time-of-use periods must not overlap; give each hour of the day to one period", ErrInvalidSettings)
 
-// ParseSettings validates untrusted settings JSON (PUT /api/energy/settings), rounding rates
-// to 4 decimals and hours to quarter hours and sorting periods by start, as upstream's
-// validEnergySettings does. At most 12 periods; each needs From < To.
 func ParseSettings(data []byte) (Settings, error) {
 	s, err := LoadSettings(data)
 	if err != nil {
@@ -49,10 +40,6 @@ func ParseSettings(data []byte) (Settings, error) {
 	return s, nil
 }
 
-// LoadSettings is ParseSettings for a config file already on disk, where an older version may
-// have saved overlapping periods. For that one problem it returns the flat rate and currency
-// with the periods dropped, together with ErrOverlappingPeriods; any other error returns no
-// settings.
 func LoadSettings(data []byte) (Settings, error) {
 	type rawPeriod struct{ From, To, Rate *float64 }
 	var raw struct {
@@ -84,7 +71,7 @@ func LoadSettings(data []byte) (Settings, error) {
 	}
 	sort.SliceStable(s.TOU, func(i, j int) bool { return s.TOU[i].From < s.TOU[j].From })
 	for i := 1; i < len(s.TOU); i++ {
-		if s.TOU[i].From < s.TOU[i-1].To { // sorted by start, so neighbours are enough
+		if s.TOU[i].From < s.TOU[i-1].To {
 			s.TOU = nil
 			return s, ErrOverlappingPeriods
 		}
@@ -92,8 +79,6 @@ func LoadSettings(data []byte) (Settings, error) {
 	return s, nil
 }
 
-// validRate accepts a price in (0, 1000], rounded to 4 decimals. Like upstream, a price
-// that rounds to 0 is refused.
 func validRate(v *float64) (float64, bool) {
 	if v == nil || !(*v > 0 && *v <= 1000) {
 		return 0, false
@@ -102,7 +87,6 @@ func validRate(v *float64) (float64, bool) {
 	return r, r != 0
 }
 
-// validHour accepts an hour in [0, 24], rounded to the quarter hour.
 func validHour(v *float64) (float64, bool) {
 	if v == nil || !(*v >= 0 && *v <= 24) {
 		return 0, false
@@ -110,8 +94,6 @@ func validHour(v *float64) (float64, bool) {
 	return jsRound(*v*4) / 4, true
 }
 
-// RateAt is the price per kWh in force at t, read in t's location (upstream uses the hub's
-// local time). The first matching period wins; hours outside every period pay Rate.
 func (s Settings) RateAt(t time.Time) float64 {
 	if len(s.TOU) == 0 {
 		return s.Rate
@@ -125,7 +107,6 @@ func (s Settings) RateAt(t time.Time) float64 {
 	return s.Rate
 }
 
-// DayRate is the average price over a day, weighting each period by its hours.
 func (s Settings) DayRate() float64 {
 	var extra float64
 	for _, p := range s.TOU {
@@ -134,7 +115,6 @@ func (s Settings) DayRate() float64 {
 	return s.Rate + extra/24
 }
 
-// RateRange is the cheapest and dearest rate, for "$0.120–$0.450/kWh by time of day".
 func (s Settings) RateRange() (lo, hi float64) {
 	lo, hi = s.Rate, s.Rate
 	for _, p := range s.TOU {
