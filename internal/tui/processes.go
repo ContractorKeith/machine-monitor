@@ -13,7 +13,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// sortCol is a Processes table column the list can be sorted by.
 type sortCol int
 
 const (
@@ -30,10 +29,8 @@ const (
 
 var sortNames = [sortCount]string{"CPU", "MEM", "GPU", "GPU MEM", "PID", "USER", "NAME", "CMD"}
 
-// numeric columns sort largest first by default; text columns A–Z.
 func (c sortCol) numeric() bool { return c <= sortPID }
 
-// procKey handles keys in the Processes view.
 func (m model) procKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	k := m.keys
 	rows := m.procRows()
@@ -66,16 +63,12 @@ func (m model) procKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// procRows is how many table rows fit under the column headings.
 func (m model) procRows() int { return max(1, m.bodyHeight()-1) }
 
-// visibleProcs is the process list filtered and sorted for display.
 func (m model) visibleProcs() []report.Process { return m.visible }
 
-// refreshProcs recomputes the visible list; call it after the list, filter or sort changes.
 func (m *model) refreshProcs() { m.visible = m.filterSort() }
 
-// filterSort filters and sorts the process list.
 func (m model) filterSort() []report.Process {
 	q := strings.ToLower(m.filterValue)
 	out := make([]report.Process, 0, len(m.procs))
@@ -88,14 +81,14 @@ func (m model) filterSort() []report.Process {
 	slices.SortStableFunc(out, func(a, b report.Process) int {
 		var c int
 		if col.numeric() {
-			c = cmpNum(procNum(b, col), procNum(a, col)) // largest first
+			c = cmpNum(procNum(b, col), procNum(a, col))
 		} else {
 			c = strings.Compare(strings.ToLower(procText(a, col)), strings.ToLower(procText(b, col)))
 		}
 		if rev {
 			c = -c
 		}
-		if c == 0 { // stable, readable tie-break
+		if c == 0 {
 			c = cmpNum(procNum(a, sortPID), procNum(b, sortPID))
 		}
 		return c
@@ -103,7 +96,6 @@ func (m model) filterSort() []report.Process {
 	return out
 }
 
-// cmpNum orders optional numbers with unknown values below every known one.
 func cmpNum(a, b *float64) int {
 	switch {
 	case a == nil && b == nil:
@@ -149,7 +141,6 @@ func deref(s *string) string {
 	return *s
 }
 
-// procMatches reports whether a lower-cased query matches the name, command, user or pid.
 func procMatches(p report.Process, q string) bool {
 	if p.PID != nil && strconv.FormatFloat(*p.PID, 'f', 0, 64) == q {
 		return true
@@ -162,7 +153,6 @@ func procMatches(p report.Process, q string) bool {
 	return false
 }
 
-// procColumn is one table column: heading, width and how a cell renders.
 type procColumn struct {
 	col   sortCol
 	width int
@@ -170,7 +160,6 @@ type procColumn struct {
 	cell  func(p report.Process) string
 }
 
-// procColumns returns the columns for a terminal width; CMD takes whatever is left.
 func procColumns(w int) []procColumn {
 	num := func(v *float64, f string) string {
 		if v == nil {
@@ -192,10 +181,10 @@ func procColumns(w int) []procColumn {
 		used += c.width + 1
 	}
 	switch {
-	case w >= 120: // room for longer names
+	case w >= 120:
 		cols[6].width = 24
 		used += 8
-	case w < 100: // leave CMD a useful width
+	case w < 100:
 		cols[1].width, cols[6].width = 8, 12
 		used -= 6
 	}
@@ -203,7 +192,6 @@ func procColumns(w int) []procColumn {
 	return append(cols, procColumn{sortCmd, cmdW, false, func(p report.Process) string { return deref(p.Cmd) }})
 }
 
-// processes is view 3: a sortable, filterable table.
 func (m model) processes() string {
 	t := m.theme
 	switch {
@@ -258,7 +246,6 @@ func (m model) processes() string {
 	return strings.Join(lines, "\n")
 }
 
-// procFooter shows the filter input, or counts, sort and filter state.
 func (m model) procFooter() string {
 	if m.filter.Focused() {
 		return m.filter.View() + "   enter apply · esc clear"
@@ -277,7 +264,6 @@ func (m model) procFooter() string {
 	return s + " · / filter · s sort · r reverse"
 }
 
-// deviceFooter shows the scroll position.
 func (m model) deviceFooter(total int) string {
 	end := min(total, m.deviceScroll+m.bodyHeight())
 	return fmt.Sprintf("lines %d–%d of %d · ↑/↓ pgup/pgdn scroll · ? help", m.deviceScroll+1, end, total)

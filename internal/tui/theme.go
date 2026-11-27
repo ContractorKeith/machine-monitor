@@ -6,17 +6,13 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// lipglossNone is the unstyled style.
 var lipglossNone = lipgloss.NewStyle()
 
-// Temperature bands, as upstream's dashboard: normal below 70 °C, warm below 85, hot above.
 const (
 	tempWarm = 70.0
 	tempHot  = 85.0
 )
 
-// theme holds every style the views use. The default uses the 16 ANSI colours so it follows
-// the terminal's palette; the monochrome theme (NO_COLOR) uses only text attributes.
 type theme struct {
 	title, dim, label, tabOn, tabOff, selected, err lipgloss.Style
 	normal, warm, hot                               lipgloss.Style
@@ -25,14 +21,12 @@ type theme struct {
 	border                                          lipgloss.Border
 	borderStyle                                     lipgloss.Style
 
-	// Glyphs, swapped for ASCII by the fallback.
 	fill, empty rune
 	ascii       bool
 
-	fahrenheit bool // temperatures read in °F (Settings); bands stay in °C
+	fahrenheit bool
 }
 
-// temp converts a °C value to the unit in use.
 func (t theme) temp(c float64) float64 {
 	if t.fahrenheit {
 		return c*9/5 + 32
@@ -40,7 +34,6 @@ func (t theme) temp(c float64) float64 {
 	return c
 }
 
-// tempV formats a °C value in the unit in use: "72°C" or "162°F".
 func (t theme) tempV(c float64) string {
 	if t.fahrenheit {
 		return fmt.Sprintf("%.0f°F", t.temp(c))
@@ -48,7 +41,6 @@ func (t theme) tempV(c float64) string {
 	return fmt.Sprintf("%.0f°C", c)
 }
 
-// tempDeg is tempV without the letter, for axes and tight tables: "72°".
 func (t theme) tempDeg(c float64) string { return fmt.Sprintf("%.0f°", t.temp(c)) }
 
 func newTheme(noColor, ascii bool) theme {
@@ -89,7 +81,6 @@ func newTheme(noColor, ascii bool) theme {
 	return t
 }
 
-// tempStyle is the style for a temperature in °C.
 func (t theme) tempStyle(c float64) lipgloss.Style {
 	switch {
 	case c >= tempHot:
@@ -101,7 +92,6 @@ func (t theme) tempStyle(c float64) lipgloss.Style {
 	}
 }
 
-// loadStyle colours a bar by load: warm from 75 %, hot from 90 %.
 func (t theme) loadStyle(pct float64) lipgloss.Style {
 	switch {
 	case pct >= 90:

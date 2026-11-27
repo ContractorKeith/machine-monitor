@@ -1,10 +1,5 @@
 package tui
 
-// Settings (PLAN §7 "Settings", §3 rows 18, 29 and 31): the temperature unit (saved on this
-// machine), the electricity price (the hub's in hub mode, through GET/PUT
-// /api/energy/settings; this machine's in local mode), Tailscale status, role, hub link and
-// version. Opened with `,`; esc goes back.
-
 import (
 	"context"
 	"encoding/json"
@@ -28,23 +23,19 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/tailscale"
 )
 
-// SettingsHub is a hub's price and Tailscale API. *client.Client implements it.
 type SettingsHub interface {
 	EnergySettings(ctx context.Context) (*power.Settings, error)
 	SetEnergySettings(ctx context.Context, s power.Settings) (power.Settings, error)
 	Remote(ctx context.Context) (*client.Remote, error)
 }
 
-// prefsFile is the TUI's own settings file in the data directory.
 const prefsFile = "tui.json"
 
-// prefs is what Settings saves on this machine.
 type prefs struct {
 	Fahrenheit bool            `json:"fahrenheit,omitempty"`
-	Price      *power.Settings `json:"price,omitempty"` // local mode's price
+	Price      *power.Settings `json:"price,omitempty"`
 }
 
-// defaultPrefsPath is tui.json in the data directory, or "" when there is none.
 func defaultPrefsPath() string {
 	p, err := config.Default()
 	if err != nil {
@@ -53,8 +44,6 @@ func defaultPrefsPath() string {
 	return filepath.Join(p.Dir, prefsFile)
 }
 
-// loadPrefs reads path; a missing or damaged file is the defaults. The price is checked as
-// the hub would check it.
 func loadPrefs(path string) prefs {
 	var p prefs
 	if path == "" {
@@ -73,7 +62,7 @@ func loadPrefs(path string) prefs {
 	}
 	p.Fahrenheit = raw.Fahrenheit
 	if len(raw.Price) > 0 && string(raw.Price) != "null" {
-		// An overlapping time-of-use price keeps its flat rate rather than being dropped.
+
 		if s, err := power.LoadSettings(raw.Price); err == nil || errors.Is(err, power.ErrOverlappingPeriods) {
 			p.Price = &s
 		}
@@ -81,7 +70,6 @@ func loadPrefs(path string) prefs {
 	return p
 }
 
-// savePrefs writes the TUI's settings (mode 0600); an empty path saves nothing.
 func savePrefs(path string, p prefs) error {
 	if path == "" {
 		return nil
@@ -96,8 +84,6 @@ func savePrefs(path string, p prefs) error {
 	return config.WriteFile0600(path, b)
 }
 
-// version is the build's version: Options.Version, or the module version Go stamps from
-// the git tag, or "dev".
 func (m model) version() string {
 	if m.opts.Version != "" {
 		return m.opts.Version
@@ -108,19 +94,17 @@ func (m model) version() string {
 	return "dev"
 }
 
-// Settings rows the cursor moves over.
 const (
 	setTemp = iota
 	setPrice
-	setAdd // hub mode only
+	setAdd
 )
 
-// settingsState is the Settings view's state.
 type settingsState struct {
-	prev     view // the view esc returns to
+	prev     view
 	cursor   int
-	price    *power.Settings // hub mode: the hub's saved price, nil when none is saved
-	priceSet bool            // price is what the hub said (a read or an event arrived)
+	price    *power.Settings
+	priceSet bool
 	priceErr error
 	ts       *tailscale.Status
 	tsErr    error
@@ -129,7 +113,6 @@ type settingsState struct {
 	notice   string
 }
 
-// Settings messages.
 type (
 	priceLoadedMsg struct {
 		s   *power.Settings
@@ -145,13 +128,11 @@ type (
 	}
 )
 
-// settingsHub is the hub's settings API, or nil in local mode or for a Hub without one.
 func (m model) settingsHub() SettingsHub {
 	s, _ := m.opts.Hub.(SettingsHub)
 	return s
 }
 
-// openSettings reads what the view shows: the hub's price and the Tailscale status.
 func (m *model) openSettings() tea.Cmd {
 	var cmds []tea.Cmd
 	if sh := m.settingsHub(); sh != nil {
@@ -175,8 +156,6 @@ func (m *model) openSettings() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// tailscaleReader reads the Tailscale status Settings shows: the hub machine's in hub mode,
-// this machine's in local mode.
 func (m model) tailscaleReader() func(ctx context.Context) (*tailscale.Status, error) {
 	if m.multi() {
 		sh := m.settingsHub()
@@ -194,7 +173,6 @@ func (m model) tailscaleReader() func(ctx context.Context) (*tailscale.Status, e
 	return m.opts.Tailscale
 }
 
-// updateSettings handles the Settings and Add device messages; ok is false for anything else.
 func (m model) updateSettings(msg tea.Msg) (model, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case priceLoadedMsg:
@@ -215,26 +193,24 @@ func (m model) updateSettings(msg tea.Msg) (model, tea.Cmd, bool) {
 		return m, m.fetchToday(), true
 	case remoteMsg:
 		m.set.tsBusy = false
-		cleanAll(msg.st) // /api/remote is drawn in the Tailscale row
+		cleanAll(msg.st)
 		m.set.ts, m.set.tsErr = msg.st, msg.err
 		return m, nil, true
 	}
 	return m.updateAdd(msg)
 }
 
-// applyEnergySettings takes a price change the hub broadcast.
 func (m *model) applyEnergySettings(ev client.Event) {
 	if s := client.EnergySettingsOf(ev); s != nil {
 		m.applyPrice(s)
 	}
 }
 
-// applyPrice makes s the price in force: the hub's in hub mode, this machine's otherwise.
 func (m *model) applyPrice(s *power.Settings) {
-	cleanAll(s) // the currency is drawn in Energy and Settings
+	cleanAll(s)
 	if m.multi() {
 		m.set.price, m.set.priceSet = s, true
-		if m.ev.data != nil { // the Energy view prices with it at once
+		if m.ev.data != nil {
 			d := *m.ev.data
 			d.Settings = s
 			m.ev.data = &d
@@ -244,7 +220,6 @@ func (m *model) applyPrice(s *power.Settings) {
 	m.opts.Price = s
 }
 
-// effectivePrice is the price Settings shows and edits, and whether it is a guess.
 func (m model) effectivePrice() (power.Settings, bool) {
 	if m.multi() && m.set.priceSet {
 		if m.set.price != nil {
@@ -255,7 +230,6 @@ func (m model) effectivePrice() (power.Settings, bool) {
 	return m.priceSettings()
 }
 
-// settingsKey handles the Settings view's keys.
 func (m model) settingsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	k := m.keys
 	rows := setPrice + 1
@@ -289,8 +263,6 @@ func (m model) settingsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// toggleUnit switches °C and °F and saves the choice on this machine. In hub mode the hub's
-// alert settings take the unit too (tempUnit), so the alert texts it writes match.
 func (m model) toggleUnit() (tea.Model, tea.Cmd) {
 	m.theme.fahrenheit = !m.theme.fahrenheit
 	m.saveLocal()
@@ -301,7 +273,6 @@ func (m model) toggleUnit() (tea.Model, tea.Cmd) {
 	return m.syncAlertsUnit()
 }
 
-// hubTempUnit is the alerts tempUnit for the unit in use.
 func (m model) hubTempUnit() string {
 	if m.theme.fahrenheit {
 		return "F"
@@ -309,8 +280,6 @@ func (m model) hubTempUnit() string {
 	return "C"
 }
 
-// syncAlertsUnit saves the unit in the hub's alert settings once they are loaded and still
-// differ; until then it waits (unitPending) for the load the header's count starts.
 func (m model) syncAlertsUnit() (model, tea.Cmd) {
 	if !m.al.unitPending || !m.al.loaded {
 		return m, nil
@@ -324,22 +293,18 @@ func (m model) syncAlertsUnit() (model, tea.Cmd) {
 	return m.saveAlerts(s)
 }
 
-// saveLocal writes this machine's settings, reporting a failure in the view.
 func (m *model) saveLocal() {
 	p := prefs{Fahrenheit: m.theme.fahrenheit}
 	if !m.multi() {
 		p.Price = m.opts.Price
 	} else {
-		p.Price = loadPrefs(m.opts.PrefsPath).Price // keep local mode's price
+		p.Price = loadPrefs(m.opts.PrefsPath).Price
 	}
 	if err := savePrefs(m.opts.PrefsPath, p); err != nil {
 		m.set.notice = sentence("Couldn't save the settings on this machine: " + hubErr(err))
 	}
 }
 
-// ---- price editor ------------------------------------------------------------------------
-
-// priceForm is the price editor: region, rate, currency and time-of-use periods.
 type priceForm struct {
 	open   bool
 	fields []formField
@@ -347,7 +312,6 @@ type priceForm struct {
 	err    string
 }
 
-// Price form rows.
 const (
 	pfRegion = iota
 	pfRate
@@ -355,7 +319,6 @@ const (
 	pfTOU
 )
 
-// openPriceForm opens the editor on the price in force.
 func (m model) openPriceForm() (tea.Model, tea.Cmd) {
 	if m.multi() && m.settingsHub() == nil {
 		m.set.notice = "This hub has no price settings."
@@ -378,7 +341,6 @@ func (m model) openPriceForm() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// focusPriceField focuses the current row's text input and blurs the rest.
 func (m *model) focusPriceField() {
 	f := &m.set.form
 	f.fields = slices.Clone(f.fields)
@@ -392,7 +354,6 @@ func (m *model) focusPriceField() {
 	}
 }
 
-// priceFormKey handles a key while the price editor is open.
 func (m model) priceFormKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	f := &m.set.form
 	f.fields = slices.Clone(f.fields)
@@ -422,7 +383,7 @@ func (m model) priceFormKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		default:
 			return m, nil
 		}
-		// A region fills in its typical rate and currency; custom keeps what is typed.
+
 		if r, ok := power.LookupRegion(fld.values[fld.idx]); ok && fld.values[fld.idx] != "custom" {
 			f.fields[pfRate].input.SetValue(strconv.FormatFloat(r.Rate, 'f', -1, 64))
 			f.fields[pfCurrency].input.SetValue(r.Currency)
@@ -435,8 +396,6 @@ func (m model) priceFormKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// savePrice checks the form as the hub would and saves it: on the hub in hub mode, on this
-// machine otherwise.
 func (m model) savePrice() (tea.Model, tea.Cmd) {
 	f := m.set.form
 	rate, err := strconv.ParseFloat(strings.TrimSpace(f.fields[pfRate].input.Value()), 64)
@@ -451,7 +410,7 @@ func (m model) savePrice() (tea.Model, tea.Cmd) {
 	}
 	region := f.fields[pfRegion].values[f.fields[pfRegion].idx]
 	if r, ok := power.LookupRegion(region); ok && region != "custom" && r.Rate != rate {
-		region = "custom" // a typed rate is the user's own, as upstream
+		region = "custom"
 	}
 	in := power.Settings{Region: region, Rate: rate,
 		Currency: strings.ToUpper(strings.TrimSpace(f.fields[pfCurrency].input.Value())), TOU: tou}
@@ -461,7 +420,7 @@ func (m model) savePrice() (tea.Model, tea.Cmd) {
 	}
 	b, _ := json.Marshal(in)
 	s, err := power.ParseSettings(b)
-	if err != nil { // priceProblem covers every rule; this is a backstop
+	if err != nil {
 		m.set.form.err = "The hub would refuse this price. Check the rate, the currency and the periods."
 		return m, nil
 	}
@@ -481,13 +440,11 @@ func (m model) savePrice() (tea.Model, tea.Cmd) {
 	return m, m.fetchToday()
 }
 
-// Price limits, as power.ParseSettings (upstream's validEnergySettings) enforces them.
 const (
-	maxRate    = 1000 // per kWh; a rate must be more than 0 and at most this
+	maxRate    = 1000
 	maxPeriods = 12
 )
 
-// priceProblem says, as a sentence, what power.ParseSettings would refuse in s, or "".
 func priceProblem(s power.Settings) string {
 	okRate := func(r float64) bool { return r > 0 && r <= maxRate && math.Round(r*1e4) != 0 }
 	okHour := func(h float64) bool { return h >= 0 && h <= 24 }
@@ -507,7 +464,7 @@ func priceProblem(s power.Settings) string {
 			return fmt.Sprintf("The rate for %s-%s must be more than 0 and at most %d per kWh.", trimFloat(p.From), trimFloat(p.To), maxRate)
 		}
 	}
-	// Sorted by start, a period that starts before the one before it ends overlaps it.
+
 	sorted := append([]power.Period(nil), s.TOU...)
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].From < sorted[j].From })
 	for i := 1; i < len(sorted); i++ {
@@ -519,7 +476,6 @@ func priceProblem(s power.Settings) string {
 	return ""
 }
 
-// sentence capitalises s and ends it with a full stop.
 func sentence(s string) string {
 	s = capitalize(strings.TrimSpace(s))
 	if s != "" && !strings.ContainsAny(s[len(s)-1:], ".!?") {
@@ -528,7 +484,6 @@ func sentence(s string) string {
 	return s
 }
 
-// fmtTOU writes periods as the editor takes them: "16-21 0.35, 0-6 0.08".
 func fmtTOU(ps []power.Period) string {
 	parts := make([]string, len(ps))
 	for i, p := range ps {
@@ -539,9 +494,6 @@ func fmtTOU(ps []power.Period) string {
 
 func trimFloat(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
 
-// parseTOU reads "16-21 0.35, 0-6 0.08": comma-separated periods of local hours FROM-TO
-// (quarter hours allowed, TO up to 24) and the rate for them. Empty is no periods. problem
-// is a sentence for the form when a period can't be read.
 func parseTOU(s string) (periods []power.Period, problem string) {
 	for part := range strings.SplitSeq(s, ",") {
 		part = strings.TrimSpace(part)
@@ -570,9 +522,6 @@ func parseTOU(s string) (periods []power.Period, problem string) {
 	return periods, ""
 }
 
-// ---- drawing -----------------------------------------------------------------------------
-
-// settingsView is the Settings view, or the price editor while it is open.
 func (m model) settingsView() string {
 	t := m.theme
 	if m.set.form.open {
@@ -636,7 +585,6 @@ func (m model) settingsView() string {
 	return strings.Join(lines, "\n")
 }
 
-// tailscaleText is the Tailscale line: state, address and name, or why it isn't known.
 func (m model) tailscaleText() string {
 	t := m.theme
 	st := m.set.ts
@@ -673,7 +621,6 @@ func (m model) tailscaleText() string {
 	return strings.Join(parts, " · ")
 }
 
-// hubURL is the hub's base URL for display.
 func (m model) hubURL() string {
 	if u, ok := m.opts.Hub.(interface{ URL() string }); ok {
 		return u.URL()
@@ -681,7 +628,6 @@ func (m model) hubURL() string {
 	return "http://" + m.hubHost()
 }
 
-// priceFormView is the open price editor.
 func (m model) priceFormView() string {
 	t := m.theme
 	f := m.set.form
@@ -733,7 +679,6 @@ func (m model) priceFormView() string {
 	return strings.Join(lines, "\n")
 }
 
-// settingsFooter is the Settings view's footer.
 func (m model) settingsFooter() string {
 	if m.set.form.open {
 		return "↑↓ field · ←→ region · enter save · esc cancel"

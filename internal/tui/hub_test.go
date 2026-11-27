@@ -23,16 +23,14 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// hubNow is the fake clock of every hub-mode test.
 var hubNow = time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
 
-// fakeHub serves a fixed stream and records requests.
 type fakeHub struct {
 	mu     sync.Mutex
 	devs   map[string]client.Device
 	events []client.Event
 	calls  []string
-	fail   error // every request fails with it when set
+	fail   error
 }
 
 func (f *fakeHub) Stream(ctx context.Context) <-chan client.Event {
@@ -40,7 +38,7 @@ func (f *fakeHub) Stream(ctx context.Context) <-chan client.Event {
 	for _, e := range f.events {
 		ch <- e
 	}
-	go func() { // like the client: the stream ends with ctx
+	go func() {
 		<-ctx.Done()
 		close(ch)
 	}()
@@ -79,7 +77,6 @@ func (f *fakeHub) Calls() []string {
 	return slices.Clone(f.calls)
 }
 
-// hubDevice is a hub view of r with 40 history samples.
 func hubDevice(r *report.Report, order int, online bool, lastSeen time.Time) client.Device {
 	var pts []history.Point
 	for i := range 40 {
@@ -99,7 +96,6 @@ func hubDevice(r *report.Report, order int, online bool, lastSeen time.Time) cli
 	}
 }
 
-// threeDevices is a workstation and a Mac online and a NAS offline for three hours.
 func threeDevices() []client.Device {
 	ws := workstation(16)
 
@@ -139,14 +135,11 @@ func newFakeHub(devs []client.Device) *fakeHub {
 }
 
 func hubOptions(f *fakeHub) Options {
-	return Options{Hub: f, Interval: time.Hour, Now: func() time.Time { return hubNow }, Location: time.UTC} // "today" is a local day
+	return Options{Hub: f, Interval: time.Hour, Now: func() time.Time { return hubNow }, Location: time.UTC}
 }
 
-// synced is true once the hub's snapshot is in, and the header's cost today when the hub
-// has energy totals.
 func synced(m model) bool { return m.conn.snapshot && (m.source() == nil || m.today.cost != nil) }
 
-// driveHub runs hub mode at w×h, types keys, waits for done and returns the final model.
 func driveHub(t *testing.T, o Options, w, h int, keys string, done func(model) bool) model {
 	t.Helper()
 	ch := make(chan model)
@@ -167,7 +160,7 @@ func TestHubGolden(t *testing.T) {
 	}{
 		{"grid_80x24", "", 80, 24},
 		{"grid_160x48", "", 160, 48},
-		{"grid_second_80x24", "j", 80, 24}, // scrolled to the second card
+		{"grid_second_80x24", "j", 80, 24},
 		{"offline_selected_160x48", "jj", 160, 48},
 		{"device_second_80x24", "l2", 80, 24},
 		{"processes_80x24", "3", 80, 24},
@@ -183,7 +176,6 @@ func TestHubGolden(t *testing.T) {
 	}
 }
 
-// TestGridColumns: columns follow the width, and one column under 80.
 func TestGridColumns(t *testing.T) {
 	for _, c := range []struct{ w, want int }{{40, 1}, {79, 1}, {80, 1}, {112, 2}, {160, 2}, {200, 3}, {240, 4}} {
 		if got := gridColumns(c.w); got != c.want {
@@ -198,7 +190,6 @@ func TestGridColumns(t *testing.T) {
 	}
 }
 
-// hubModel is a hub-mode model at w×h with the fake's events applied, without a program.
 func hubModel(t *testing.T, f *fakeHub, w, h int) model {
 	t.Helper()
 	m := New(hubOptions(f)).(model)
@@ -211,8 +202,6 @@ func hubModel(t *testing.T, f *fakeHub, w, h int) model {
 	return m
 }
 
-// run sends msgs and feeds back what their commands answer at once: the hub requests. The
-// commands that wait (the stream, the cursor blink) are left alone.
 func run(t *testing.T, m model, msgs ...tea.Msg) model {
 	t.Helper()
 	for _, msg := range msgs {
@@ -275,14 +264,13 @@ func TestHubReorder(t *testing.T) {
 	if m.sel != ws {
 		t.Errorf("selection moved off the card: %s", m.sel)
 	}
-	m = run(t, m, keyMsg("J")) // already last online card: no change, no request
+	m = run(t, m, keyMsg("J"))
 	m = run(t, m, keyMsg("K"))
 	want := []string{"order mac-0001," + ws + ",nas-0002", "order " + ws + ",mac-0001,nas-0002"}
 	if got := f.Calls(); !slices.Equal(got, want) {
 		t.Errorf("calls = %q, want %q", got, want)
 	}
 
-	// The hub refuses: the old order comes back.
 	f.fail = errors.New("boom")
 	m = run(t, m, keyMsg("J"))
 	if got := ids(m); got != ws+",mac-0001,nas-0002" {
@@ -292,7 +280,6 @@ func TestHubReorder(t *testing.T) {
 		t.Errorf("footer = %q", m.hubStatus())
 	}
 
-	// The hub's order event wins over the local order.
 	m = run(t, m, hubMsg{client.Event{Type: client.EventOrder, Order: map[string]int{ws: 2, "mac-0001": 0, "nas-0002": 1}}})
 	if got := ids(m); got != "mac-0001,"+ws+",nas-0002" {
 		t.Errorf("after an order event: %s", got)
@@ -303,7 +290,7 @@ func TestHubRename(t *testing.T) {
 	f := newFakeHub(threeDevices())
 	m := hubModel(t, f, 80, 24)
 	msgs := append(keys("l", "R"), keyMsg("backspace"))
-	msgs = append(msgs, keys("q", "!")...) // q is text in the box, not quit
+	msgs = append(msgs, keys("q", "!")...)
 	m = run(t, m, msgs...)
 	if !m.rename.Focused() || m.rename.Value() != "studiq!" {
 		t.Fatalf("rename box: focused %v, %q", m.rename.Focused(), m.rename.Value())
@@ -324,7 +311,7 @@ func TestHubRename(t *testing.T) {
 func TestHubRemove(t *testing.T) {
 	f := newFakeHub(threeDevices())
 	m := hubModel(t, f, 80, 24)
-	m = run(t, m, keys("j", "j", "D", "n")...) // down to the NAS in the offline row; n cancels
+	m = run(t, m, keys("j", "j", "D", "n")...)
 	if len(f.Calls()) != 0 || len(m.devs) != 3 {
 		t.Fatalf("cancelled remove went through: %q", f.Calls())
 	}
@@ -335,14 +322,13 @@ func TestHubRemove(t *testing.T) {
 	if len(m.devs) != 2 || m.sel != "mac-0001" {
 		t.Errorf("after remove: %s, selected %s", ids(m), m.sel)
 	}
-	// The hub's own removed event for a device already gone changes nothing.
+
 	m = run(t, m, hubMsg{client.Event{Type: client.EventRemoved, ID: "nas-0002"}})
 	if len(m.devs) != 2 {
 		t.Error("double remove")
 	}
 }
 
-// TestHubEvents: live events update the cards; a device going quiet moves to the offline row.
 func TestHubEvents(t *testing.T) {
 	devs := threeDevices()
 	m := hubModel(t, newFakeHub(devs), 160, 48)
@@ -367,7 +353,6 @@ func TestHubEvents(t *testing.T) {
 		t.Errorf("frame:\n%s", frame)
 	}
 
-	// A brand-new device appears with its first report.
 	nd := hubDevice(workstation(2), 3, true, hubNow)
 	nd.ID, nd.Name = "new-0003", "pi"
 	m = run(t, m, hubMsg{client.Event{Type: client.EventReport, ID: nd.ID, Device: &nd}})
@@ -375,7 +360,6 @@ func TestHubEvents(t *testing.T) {
 		t.Errorf("new device not added: %s", ids(m))
 	}
 
-	// Disconnected: the footer says so, and the cards stay until a fresh snapshot.
 	m = run(t, m, hubMsg{client.Event{Type: client.EventDisconnected, Err: fmt.Errorf("dial: %w", syscall.ECONNREFUSED), Retry: 4 * time.Second}})
 	if s := m.hubStatus(); !strings.Contains(s, "unreachable: the hub isn't accepting connections (is it running?) · retrying in 4s") {
 		t.Errorf("footer = %q", s)
@@ -390,7 +374,6 @@ func TestHubEvents(t *testing.T) {
 	}
 }
 
-// TestHubResize checks every hub-mode frame fills the window exactly, at any size.
 func TestHubResize(t *testing.T) {
 	m := hubModel(t, newFakeHub(threeDevices()), 80, 24)
 	for _, s := range [][2]int{{40, 12}, {80, 24}, {100, 30}, {160, 48}, {200, 60}, {20, 5}, {80, 2}} {
@@ -416,7 +399,6 @@ func TestHubResize(t *testing.T) {
 	}
 }
 
-// TestHubNoColor: the grid, selection and offline row set no colours under NO_COLOR.
 func TestHubNoColor(t *testing.T) {
 	o := hubOptions(newFakeHub(threeDevices()))
 	o.NoColor = true
@@ -449,14 +431,13 @@ func TestAgo(t *testing.T) {
 	}
 }
 
-// TestHubStreamEnds: when the stream closes, the footer says updates have stopped.
 func TestHubStreamEnds(t *testing.T) {
 	m := New(hubOptions(newFakeHub(threeDevices()))).(model)
 	ctx, cancel := context.WithCancel(context.Background())
 	m.ctx = ctx
-	next, cmd := m.Update(m.startStream()()) // streamMsg: start reading
+	next, cmd := m.Update(m.startStream()())
 	m = next.(model)
-	next, cmd = m.Update(cmd()) // connected and snapshot, in one batch
+	next, cmd = m.Update(cmd())
 	m = next.(model)
 	if !m.conn.connected || !m.conn.snapshot {
 		t.Fatalf("not synced: %+v", m.conn)
@@ -476,13 +457,11 @@ func TestHubStreamEnds(t *testing.T) {
 	}
 }
 
-// TestHubLateFailures: a reorder refused after the hub sent its own order keeps the hub's
-// order, and a rename answered after the device was removed doesn't bring it back.
 func TestHubLateFailures(t *testing.T) {
 	f := newFakeHub(threeDevices())
 	m := hubModel(t, f, 160, 48)
 	ws := threeDevices()[0].ID
-	next, cmd := m.Update(keyMsg("J")) // the PUT is now "in flight"
+	next, cmd := m.Update(keyMsg("J"))
 	m = next.(model)
 	m = run(t, m, hubMsg{client.Event{Type: client.EventOrder, Order: map[string]int{"nas-0002": 0, "mac-0001": 1, ws: 2}}})
 	f.fail = errors.New("boom")
@@ -495,7 +474,6 @@ func TestHubLateFailures(t *testing.T) {
 		t.Errorf("footer = %q", m.hubStatus())
 	}
 
-	// Rename answered after removal.
 	f.fail = nil
 	next, cmd = m.Update(keyMsg("R"))
 	m = next.(model)
@@ -510,7 +488,6 @@ func TestHubLateFailures(t *testing.T) {
 		t.Errorf("rename brought back removed %s", gone)
 	}
 
-	// A fresh connection clears a stale error so the connection state shows.
 	m.notice = "rename failed: boom"
 	m = run(t, m, hubMsg{client.Event{Type: client.EventDisconnected, Err: errors.New("refused"), Retry: 0}})
 	m.conn.ended = false
@@ -524,7 +501,6 @@ func TestHubLateFailures(t *testing.T) {
 	}
 }
 
-// TestOfflineRowWindow: many offline devices show a window around the selection with a tail.
 func TestOfflineRowWindow(t *testing.T) {
 	var devs []client.Device
 	for i := range 12 {

@@ -1,13 +1,5 @@
 package tui
 
-// Local mode's history and energy (PLAN §5 "Local mode"): the collector's samples go into a
-// session history.Store, and the History and Energy views read it the way a hub serves
-// GET /api/history/:id and GET /api/energy.
-//
-// usageOf and localSample mirror the hub's usage totals and history samples (internal/hub
-// energy.go, registry.go), which port Forward-Future/device-monitor server.js (usageSummary)
-// @ c3a4c41 (MIT, © 2026 Matt): https://github.com/Forward-Future/device-monitor
-
 import (
 	"context"
 	"math"
@@ -20,8 +12,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// localSource reads the session store. price is nil when the user set none, so the view
-// prices energy at the guessed rate, as it does for a hub without a saved price.
 type localSource struct {
 	store *history.Store
 	hw    power.HW
@@ -41,16 +31,13 @@ func (s localSource) Energy(_ context.Context, bounds []float64) (*client.Energy
 	return &client.Energy{Bounds: bounds, Settings: s.price, Devices: []hub.Usage{u}}, nil
 }
 
-// recordLocal adds a local sample to the session store.
 func (m model) recordLocal(r *report.Report) {
 	if m.multi() || m.opts.History == nil {
 		return
 	}
-	_ = m.opts.History.Add(localID, localSample(m.now().UnixMilli(), r)) // a write error loses only disk copies
+	_ = m.opts.History.Add(localID, localSample(m.now().UnixMilli(), r))
 }
 
-// localSample is the history sample for one report, as the hub records it: main (first)
-// GPU, memory as a percentage, estimated wall power.
 func localSample(now int64, r *report.Report) history.Point {
 	var g report.GPU
 	if len(r.GPUs) > 0 {
@@ -70,8 +57,6 @@ func localSample(now int64, r *report.Report) history.Point {
 	return p
 }
 
-// usageOf totals one device's minutes over bounds: energy and cost per bucket, average and
-// peak per metric, and bytes moved. price may be nil.
 func usageOf(points []history.Point, bounds []float64, hw power.HW, price *power.Settings, loc *time.Location) hub.Usage {
 	from, to := bounds[0], bounds[len(bounds)-1]
 	edges := make([]time.Time, len(bounds))
@@ -140,10 +125,8 @@ func usageOf(points []history.Point, bounds []float64, hw power.HW, price *power
 	return u
 }
 
-// round1 is upstream's +v.toFixed(1).
 func round1(v float64) float64 { return math.Round(v*10) / 10 }
 
-// num is v, or 0 when unknown.
 func num(v *float64) float64 {
 	if v == nil || math.IsNaN(*v) {
 		return 0
