@@ -9,7 +9,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/config"
 )
 
-// TestHistoryAndEnergy reads a real hub's history and energy for a device that reported.
 func TestHistoryAndEnergy(t *testing.T) {
 	th := newTestHub(t, config.At(t.TempDir()), "")
 	th.report("dev-a", nil)

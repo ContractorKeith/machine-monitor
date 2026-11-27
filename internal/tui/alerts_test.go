@@ -21,7 +21,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/hub"
 )
 
-// fakeAlertsHub is a fakeHub with the alerts API.
 type fakeAlertsHub struct {
 	*fakeHub
 	amu   sync.Mutex
@@ -61,8 +60,6 @@ func (f *fakeAlertsHub) ClearAlertLog(context.Context) error { return f.record("
 
 func ptrF(v float64) *float64 { return &v }
 
-// alertsFixture is a hub with the default rules plus a power and a cost rule, ntfy on, one
-// alert firing and three log entries.
 func alertsFixture() *fakeAlertsHub {
 	f := &fakeAlertsHub{fakeHub: newFakeHub(threeDevices())}
 	s := alerts.DefaultSettings()
@@ -87,10 +84,6 @@ func alertsFixture() *fakeAlertsHub {
 	return f
 }
 
-// settle runs cmd and feeds every message it answers back into the model, through
-// batches. Commands run concurrently under one deadline (settleTimeout, long enough for a
-// slow -race run); ones still waiting then (the stream) are left alone. It returns the
-// model and how many bells were printed.
 func settle(t *testing.T, m model, cmd tea.Cmd) (model, int) {
 	t.Helper()
 	bells, pending := 0, 0
@@ -129,10 +122,8 @@ func settle(t *testing.T, m model, cmd tea.Cmd) (model, int) {
 	return m, bells
 }
 
-// settleTimeout bounds one settle.
 const settleTimeout = 2 * time.Second
 
-// send sends msgs one at a time, settling each; it returns the bells rung.
 func send(t *testing.T, m model, msgs ...tea.Msg) (model, int) {
 	t.Helper()
 	total := 0
@@ -145,12 +136,11 @@ func send(t *testing.T, m model, msgs ...tea.Msg) (model, int) {
 	return m, total
 }
 
-// alertsModel is hub mode at w×h on the fixture, with the Alerts view open and loaded.
 func alertsModel(t *testing.T, f *fakeAlertsHub, w, h int) model {
 	t.Helper()
 	m := New(Options{Hub: f, Interval: time.Hour, Now: func() time.Time { return hubNow }}).(model)
 	m, _ = send(t, m, tea.WindowSizeMsg{Width: w, Height: h})
-	for _, e := range f.events { // their commands only wait on the (absent) stream
+	for _, e := range f.events {
 		next, _ := m.Update(hubMsg{e})
 		m = next.(model)
 	}
@@ -161,7 +151,6 @@ func alertsModel(t *testing.T, f *fakeAlertsHub, w, h int) model {
 	return m
 }
 
-// alertEvent is the stream event the hub sends when an alert fires.
 func alertEvent(t *testing.T, id string, notify bool) hubMsg {
 	t.Helper()
 	ev := alerts.Event{ID: id, T: hubNow.UnixMilli(), State: alerts.Firing, Device: "mac-0001",
@@ -184,7 +173,7 @@ func TestAlertsGolden(t *testing.T) {
 	}{
 		{"alerts_80x24", 80, 24, nil},
 		{"alerts_160x48", 160, 48, nil},
-		{"alerts_selected_80x24", 80, 24, keys("j", "j", "j", "j")}, // the power rule, scrolled into view
+		{"alerts_selected_80x24", 80, 24, keys("j", "j", "j", "j")},
 		{"edit_rule_80x24", 80, 24, keys("j", "enter")},
 		{"new_rule_offline_80x24", 80, 24, []tea.Msg{keyMsg("a"), tea.KeyPressMsg{Code: tea.KeyLeft}}},
 		{"channels_80x24", 80, 24, []tea.Msg{keyMsg("c"), down, down, right}},
@@ -200,13 +189,11 @@ func TestAlertsGolden(t *testing.T) {
 	}
 }
 
-// Local mode has no alerts engine: the view points at a hub.
 func TestAlertsLocalGolden(t *testing.T) {
 	m := drive(t, testOptions(), 80, 24, "6")
 	golden.RequireEqual(t, plain(m))
 }
 
-// TestBannerGolden: an alert raises the banner over whatever view is open.
 func TestBannerGolden(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -230,7 +217,6 @@ func TestBannerGolden(t *testing.T) {
 	}
 }
 
-// Acceptance: the bell rings exactly once per new alert, and only when the hub asks.
 func TestBellOncePerAlert(t *testing.T) {
 	f := alertsFixture()
 	m := hubModel(t, f.fakeHub, 80, 24)
@@ -239,12 +225,10 @@ func TestBellOncePerAlert(t *testing.T) {
 	if n != 1 || m.al.bells != 1 || m.al.banner == nil {
 		t.Fatalf("first alert: %d bells, banner %v", n, m.al.banner)
 	}
-	// The same alert again (a replay) and one the hub says not to show: no bell.
 	m, n = send(t, m, alertEvent(t, "a1", true), alertEvent(t, "quiet", false))
 	if n != 0 || m.al.bells != 1 {
 		t.Fatalf("repeat: %d bells", n)
 	}
-	// Dismissed, a new alert rings and shows again.
 	m, _ = send(t, m, keyMsg("esc"))
 	if m.al.banner != nil {
 		t.Fatal("esc did not dismiss the banner")
@@ -253,7 +237,6 @@ func TestBellOncePerAlert(t *testing.T) {
 	if n != 1 || m.al.bells != 2 || m.al.banner == nil || m.al.banner.ID != "a2" {
 		t.Fatalf("second alert: %d bells, banner %+v", n, m.al.banner)
 	}
-	// Every alert went into the log once, newest first.
 	var got []string
 	for _, e := range m.al.events {
 		got = append(got, e.ID)
@@ -263,7 +246,6 @@ func TestBellOncePerAlert(t *testing.T) {
 	}
 }
 
-// The banner shows in every view and the frame keeps its size.
 func TestBannerEveryView(t *testing.T) {
 	f := alertsFixture()
 	m := hubModel(t, f.fakeHub, 80, 24)
@@ -277,7 +259,7 @@ func TestBannerEveryView(t *testing.T) {
 		}
 		checkFrame(t, m, 80, 24)
 	}
-	m.height = 3 // no room: the banner yields
+	m.height = 3
 	checkFrame(t, m, 80, 3)
 }
 
@@ -285,12 +267,10 @@ func TestAlertsKeys(t *testing.T) {
 	f := alertsFixture()
 	m := alertsModel(t, f, 80, 24)
 
-	// space toggles the selected rule and saves every rule.
 	m, _ = send(t, m, keyMsg(" "))
 	if len(f.saved) != 1 || f.saved[0].Rules[0].Enabled || m.al.cfg.Rules[0].Enabled {
 		t.Fatalf("toggle: saved %+v", f.saved)
 	}
-	// D then n keeps the rule; D then y deletes it.
 	m, _ = send(t, m, keyMsg("D"), keyMsg("n"))
 	if len(f.saved) != 1 {
 		t.Fatal("cancelled delete saved")
@@ -299,17 +279,14 @@ func TestAlertsKeys(t *testing.T) {
 	if len(f.saved) != 2 || len(f.saved[1].Rules) != 5 || f.saved[1].Rules[0].Type != alerts.TypeCPUTemp {
 		t.Fatalf("delete: %+v", f.saved[1].Rules)
 	}
-	// C then y clears the log.
 	m, _ = send(t, m, keyMsg("C"), keyMsg("y"))
 	if len(m.al.events) != 0 || !slices.Contains(f.Calls(), "clear log") {
 		t.Fatalf("clear: %d events, calls %q", len(m.al.events), f.Calls())
 	}
-	// t reports each channel.
 	m, _ = send(t, m, keyMsg("t"))
 	if s := m.alertsFooter(); s != "test alert sent · ntfy ok · webhook failed: HTTP 404 not found" {
 		t.Errorf("test footer = %q", s)
 	}
-	// An invalid threshold stays in the editor with the hub's reason, and nothing is sent.
 	m, _ = send(t, m, keyMsg("enter"), tea.KeyPressMsg{Code: tea.KeyDown}, tea.KeyPressMsg{Code: tea.KeyDown})
 	m, _ = send(t, m, keys("backspace", "backspace", "9", "9", "9", "enter")...)
 	if !m.al.form.open || !strings.Contains(m.al.form.err, "threshold must be 20–150") || len(f.saved) != 2 {
@@ -319,12 +296,10 @@ func TestAlertsKeys(t *testing.T) {
 	if m.al.form.open || len(f.saved) != 2 {
 		t.Fatal("esc did not cancel")
 	}
-	// Keys typed in the editor are text, not view switches.
 	m, _ = send(t, m, keyMsg("enter"), tea.KeyPressMsg{Code: tea.KeyDown}, tea.KeyPressMsg{Code: tea.KeyDown}, keyMsg("1"), keyMsg("q"))
 	if m.view != viewAlerts || !m.al.form.open {
 		t.Fatal("1 or q left the editor")
 	}
-	// An alerts event from another client replaces the settings.
 	s := cloneSettings(m.al.cfg)
 	s.Rules = s.Rules[:1]
 	b, _ := json.Marshal(alerts.Message{Type: "alerts", Settings: &s, Active: []alerts.Active{}})
@@ -334,7 +309,6 @@ func TestAlertsKeys(t *testing.T) {
 	}
 }
 
-// A channel switched on without its address is caught before the hub would quietly drop it.
 func TestChannelsNeedAddress(t *testing.T) {
 	f := alertsFixture()
 	m := alertsModel(t, f, 80, 24)
@@ -345,9 +319,6 @@ func TestChannelsNeedAddress(t *testing.T) {
 	}
 }
 
-// ---- against a real hub ----------------------------------------------------------------
-
-// realHub serves a real hub over httptest and returns a client for it.
 func realHub(t *testing.T) (*hub.Hub, *client.Client) {
 	t.Helper()
 	h, err := hub.New(hub.Options{Paths: config.At(t.TempDir()), Hostname: "testbox", Location: time.UTC, Logf: t.Logf})
@@ -378,9 +349,6 @@ func realHub(t *testing.T) (*hub.Hub, *client.Client) {
 	return h, c
 }
 
-// Acceptance: the rule editor round-trips through a real hub. A rule added, edited, toggled
-// and deleted in the TUI is what GET /api/alerts returns, and the hub's own events keep the
-// TUI in step.
 func TestAlertsEditorAgainstHub(t *testing.T) {
 	if testing.Short() {
 		t.Skip("starts a hub")
@@ -392,7 +360,6 @@ func TestAlertsEditorAgainstHub(t *testing.T) {
 	tm := teatest.NewTestModel(t, probe{New(o), ch}, teatest.WithInitialTermSize(100, 30))
 	waitUntil(t, tm, ch, synced)
 	tm.Type("6")
-	// Startup may already have loaded alerts; wait for the fetch on entering this view too.
 	m := waitUntil(t, tm, ch, func(m model) bool {
 		return m.view == viewAlerts && m.al.loaded && !m.al.loading
 	})
@@ -412,7 +379,6 @@ func TestAlertsEditorAgainstHub(t *testing.T) {
 		return func(m model) bool { return m.al.notice == "saved" && len(m.al.cfg.Rules) == n }
 	}
 
-	// Add: a = new rule (CPU temperature); → to CPU load; ↓↓ threshold 77; ↓ minutes 3.
 	tm.Type("a")
 	key(tea.KeyRight)
 	key(tea.KeyRight)
@@ -438,7 +404,6 @@ func TestAlertsEditorAgainstHub(t *testing.T) {
 		t.Fatalf("TUI: cursor %d, rule %+v", m.al.cursor, m.al.cfg.Rules[4])
 	}
 
-	// Edit it: threshold 80; the id stays.
 	key(tea.KeyEnter)
 	key(tea.KeyDown)
 	key(tea.KeyDown)
@@ -453,7 +418,6 @@ func TestAlertsEditorAgainstHub(t *testing.T) {
 		t.Fatalf("edited rule = %+v", r2)
 	}
 
-	// Toggle it off, then delete it.
 	tm.Type(" ")
 	waitUntil(t, tm, ch, func(m model) bool { return m.al.notice == "saved" && !m.al.cfg.Rules[4].Enabled })
 	if hubRules()[4].Enabled {
@@ -465,14 +429,12 @@ func TestAlertsEditorAgainstHub(t *testing.T) {
 		t.Fatalf("after delete the hub has %d rules", n)
 	}
 
-	// A change made by another client arrives as the hub's alerts event.
 	s, _, err := c.SetAlerts(ctx, alerts.Settings{Rules: hubRules()[:2], Channels: alerts.Channels{Desktop: true}})
 	if err != nil || len(s.Rules) != 2 {
 		t.Fatalf("SetAlerts: %v", err)
 	}
 	waitUntil(t, tm, ch, func(m model) bool { return len(m.al.cfg.Rules) == 2 })
 
-	// The test button: the hub's test alert comes back as a banner and one bell.
 	tm.Type("t")
 	m = waitUntil(t, tm, ch, func(m model) bool { return m.al.banner != nil && strings.HasPrefix(m.al.notice, "test alert sent") })
 	if !m.al.banner.Test || m.al.bells != 1 {
@@ -481,8 +443,6 @@ func TestAlertsEditorAgainstHub(t *testing.T) {
 	finish(t, tm)
 }
 
-// An older fetch can finish while a new rule's save is in flight. Selection must
-// follow the accepted rule, rather than being clamped against the old rule list.
 func TestNewAlertSelectionAfterPendingLoad(t *testing.T) {
 	f := alertsFixture()
 	m := alertsModel(t, f, 100, 30)
@@ -501,7 +461,6 @@ func TestNewAlertSelectionAfterPendingLoad(t *testing.T) {
 	}
 }
 
-// settingsEvent is the hub's alerts event with the first n of s's rules.
 func settingsEvent(t *testing.T, s alerts.Settings, n int) hubMsg {
 	t.Helper()
 	s = cloneSettings(s)
@@ -513,13 +472,11 @@ func settingsEvent(t *testing.T, s alerts.Settings, n int) hubMsg {
 	return hubMsg{client.Event{Type: client.EventAlertSettings, Raw: b}}
 }
 
-// Another client removes the rule being edited: the editor closes instead of saving past
-// the end of the list. One that only moves keeps editing the same rule.
 func TestEditorRuleRemovedOnHub(t *testing.T) {
 	f := alertsFixture()
 	m := alertsModel(t, f, 80, 24)
 	full := m.al.cfg
-	m, _ = send(t, m, keys("G", "j", "j", "j", "j", "j", "enter")...) // the last rule (dailyCost)
+	m, _ = send(t, m, keys("G", "j", "j", "j", "j", "j", "enter")...)
 	if !m.al.form.open || m.al.form.rule != 5 {
 		t.Fatalf("editor on rule %d (open %v)", m.al.form.rule, m.al.form.open)
 	}
@@ -527,15 +484,13 @@ func TestEditorRuleRemovedOnHub(t *testing.T) {
 	if m.al.form.open || m.al.notice != "the rules changed on the hub" || m.al.cursor != 1 {
 		t.Fatalf("open %v, notice %q, cursor %d", m.al.form.open, m.al.notice, m.al.cursor)
 	}
-	// enter now edits a rule that exists, and saving it doesn't panic or grow the list.
 	m, _ = send(t, m, keyMsg("enter"), keyMsg("enter"))
 	if len(f.saved) != 1 || len(f.saved[0].Rules) != 2 {
 		t.Fatalf("saves %+v", f.saved)
 	}
 
-	// The edited rule moves to index 0: saving writes it there, by id.
 	m = alertsModel(t, alertsFixture(), 80, 24)
-	m, _ = send(t, m, keys("j", "enter")...) // cpuTemp, id bbbb…
+	m, _ = send(t, m, keys("j", "enter")...)
 	moved := cloneSettings(full)
 	moved.Rules = moved.Rules[1:]
 	b, _ := json.Marshal(alerts.Message{Type: "alerts", Settings: &moved})
@@ -545,7 +500,6 @@ func TestEditorRuleRemovedOnHub(t *testing.T) {
 	}
 }
 
-// Rules shrink while a delete waits for y: the question is withdrawn and nothing is deleted.
 func TestDeleteConfirmRulesChanged(t *testing.T) {
 	f := alertsFixture()
 	m := alertsModel(t, f, 80, 24)
@@ -553,7 +507,6 @@ func TestDeleteConfirmRulesChanged(t *testing.T) {
 	if m.al.confirm != "" || len(f.saved) != 0 || m.al.notice != "the rules changed on the hub" {
 		t.Fatalf("confirm %q, saves %d, notice %q", m.al.confirm, len(f.saved), m.al.notice)
 	}
-	// The guard alone: a confirm over an empty list does nothing.
 	m.al.confirm = "rule"
 	m, _ = send(t, m, keyMsg("y"))
 	if len(f.saved) != 0 {
@@ -561,26 +514,23 @@ func TestDeleteConfirmRulesChanged(t *testing.T) {
 	}
 }
 
-// A settings event that removes a rule above the cursor moves the rule under it: y must
-// cancel, not delete the neighbour that slid into place.
 func TestDeleteConfirmRuleShiftedAboveCursor(t *testing.T) {
 	f := alertsFixture()
 	m := alertsModel(t, f, 80, 24)
 	if len(m.al.cfg.Rules) < 2 {
 		t.Skip("fixture needs two rules")
 	}
-	m, _ = send(t, m, keyMsg("j"), keyMsg("D")) // asks about rule 1
+	m, _ = send(t, m, keyMsg("j"), keyMsg("D"))
 	shifted := cloneSettings(m.al.cfg)
-	shifted.Rules = shifted.Rules[1:] // rule 0 removed: rule 2 (or nothing) now sits under the cursor
+	shifted.Rules = shifted.Rules[1:]
 	shifted.Rules = append(shifted.Rules, shifted.Rules[len(shifted.Rules)-1])
-	shifted.Rules[len(shifted.Rules)-1].ID += "-extra" // keep the list long enough for the cursor
+	shifted.Rules[len(shifted.Rules)-1].ID += "-extra"
 	m, _ = send(t, m, settingsEvent(t, shifted, len(shifted.Rules)), keyMsg("y"))
 	if m.al.confirm != "" || len(f.saved) != 0 || m.al.notice != "the rules changed on the hub" {
 		t.Fatalf("confirm %q, saves %d, notice %q", m.al.confirm, len(f.saved), m.al.notice)
 	}
 }
 
-// A refused save shows the hub's own sentence.
 func TestHubErrText(t *testing.T) {
 	err := &client.StatusError{Code: 400, Message: "invalid alert settings"}
 	if got := hubErr(err); got != "invalid alert settings" {
@@ -595,13 +545,11 @@ func TestHubErrText(t *testing.T) {
 	}
 }
 
-// The echo of our own change (a settings event identical to the rules on screen) must not
-// cancel a delete the user is in the middle of confirming; that raced the flaky test.
 func TestDeleteConfirmSurvivesUnchangedSettingsEvent(t *testing.T) {
 	f := alertsFixture()
 	m := alertsModel(t, f, 80, 24)
 	n := len(m.al.cfg.Rules)
-	late := cloneSettings(m.al.cfg) // an older save's echo: same rules, other field values
+	late := cloneSettings(m.al.cfg)
 	late.Rules[0].Enabled = !late.Rules[0].Enabled
 	m, _ = send(t, m, keyMsg("D"), settingsEvent(t, m.al.cfg, n), settingsEvent(t, late, n), keyMsg("y"))
 	if len(f.saved) != 1 || len(f.saved[0].Rules) != n-1 {
@@ -609,11 +557,10 @@ func TestDeleteConfirmSurvivesUnchangedSettingsEvent(t *testing.T) {
 	}
 }
 
-// A fetch that began before a save and lands after it must not put the old rules back.
 func TestStaleLoadAfterSaveIgnored(t *testing.T) {
 	f := alertsFixture()
 	m := alertsModel(t, f, 100, 30)
-	cmd := m.loadAlerts() // begins now, answers with the rules as they are now
+	cmd := m.loadAlerts()
 	if cmd == nil {
 		t.Fatal("no fetch started")
 	}

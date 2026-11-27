@@ -36,7 +36,6 @@ func TestConnected(t *testing.T) {
 		t.Errorf("host = %s", h)
 	}
 
-	// client.json's key is used only for the hub it belongs to.
 	if err := client.SaveConfig(filepath.Join(dir, "client.json"), client.Config{Hub: "http://hub.lan:7777", Key: "saved"}); err != nil {
 		t.Fatal(err)
 	}

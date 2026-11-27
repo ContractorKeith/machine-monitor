@@ -33,7 +33,7 @@ func TestRunLinux(t *testing.T) {
 	for _, g := range r.GPUs {
 		names = append(names, *g.Name)
 	}
-	// Biggest VRAM first: 4090 (24 GiB), AMD 16 GiB, 3060 (12 GiB), AMD 4 GiB.
+
 	want := []string{"NVIDIA GeForce RTX 4090", "AMD GPU", "NVIDIA GeForce RTX 3060", "AMD GPU"}
 	if len(names) != len(want) {
 		t.Fatalf("GPUs = %v, want %v", names, want)
@@ -50,7 +50,7 @@ func TestRunLinuxNothingFound(t *testing.T) {
 	if apply != nil || err != nil {
 		t.Errorf("no GPUs = %v, %v; want nil, nil", apply != nil, err)
 	}
-	// A broken nvidia-smi with no AMD cards reports its error.
+
 	if _, err := runLinux(context.Background(), filepath.Join(t.TempDir(), "nvidia-smi"), t.TempDir()); err == nil || errors.Is(err, context.Canceled) {
 		t.Errorf("broken nvidia-smi err = %v", err)
 	}

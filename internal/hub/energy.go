@@ -1,10 +1,5 @@
 package hub
 
-// Energy and usage totals (GET /api/energy) and the power/cost source for alerts.
-//
-// Ported from Forward-Future/device-monitor server.js (usageSummary, costToday) @ c3a4c41
-// (MIT, © 2026 Matt): https://github.com/Forward-Future/device-monitor
-
 import (
 	"errors"
 	"math"
@@ -17,28 +12,24 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// Bounds limits for GET /api/energy?bounds=, as upstream.
 const (
 	maxBounds = 800
 	maxSpanMS = 32 * 86400e3
-	maxAbsMS  = 9e12 // keeps ms → ns (×1e6) inside int64, which ends at about 9.22e18
+	maxAbsMS  = 9e12
 )
 
-// Usage is one device's energy and usage totals between bounds.
 type Usage struct {
 	ID string `json:"id"`
 	power.Usage
-	Stats map[string]Stat  `json:"stats"` // avg and peak per metric, only metrics with data
-	Bytes map[string]int64 `json:"bytes"` // rx, tx, dr, dw totals
+	Stats map[string]Stat  `json:"stats"`
+	Bytes map[string]int64 `json:"bytes"`
 }
 
-// Stat is an average and peak, both to 1 decimal.
 type Stat struct {
 	Avg  float64  `json:"avg"`
 	Peak *float64 `json:"peak"`
 }
 
-// parseBounds reads ?bounds=: 2–800 ascending finite ms timestamps spanning at most 32 days.
 func parseBounds(s string) ([]float64, bool) {
 	parts := strings.Split(s, ",")
 	if len(parts) < 2 || len(parts) > maxBounds {
@@ -47,7 +38,7 @@ func parseBounds(s string) ([]float64, bool) {
 	out := make([]float64, len(parts))
 	for i, p := range parts {
 		p = strings.TrimSpace(p)
-		v := 0.0 // JavaScript: Number("") === 0
+		v := 0.0
 		if p != "" {
 			var err error
 			if v, err = strconv.ParseFloat(p, 64); err != nil {
@@ -62,14 +53,11 @@ func parseBounds(s string) ([]float64, bool) {
 	return out, out[len(out)-1]-out[0] <= maxSpanMS
 }
 
-// msTime converts Unix ms (maybe fractional) to a time. Whole ms and the fraction convert
-// separately: ms*1e6 in float64 would lose the last millisecond near maxAbsMS.
 func msTime(ms float64) time.Time {
 	whole := math.Floor(ms)
 	return time.UnixMilli(int64(whole)).Add(time.Duration((ms - whole) * 1e6))
 }
 
-// usage totals one device over bounds. hw is its last reported hardware; price may be nil.
 func (h *Hub) usage(id string, bounds []float64, hw power.HW, price *power.Settings) Usage {
 	from, to := bounds[0], bounds[len(bounds)-1]
 	edges := make([]time.Time, len(bounds))
@@ -86,7 +74,7 @@ func (h *Hub) usage(id string, bounds []float64, hw power.HW, price *power.Setti
 		if v == nil {
 			return
 		}
-		if peak == nil { // rows from before upstream stored peaks
+		if peak == nil {
 			peak = v
 		}
 		a := accs[k]
@@ -139,20 +127,18 @@ func (h *Hub) usage(id string, bounds []float64, hw power.HW, price *power.Setti
 	return u
 }
 
-// round1 is upstream's +v.toFixed(1): v's exact binary value rounded half up (0.15 is
-// 0.1499999… so it gives 0.1, and 0.25 gives 0.3), with the sign applied afterwards.
 func round1(v float64) float64 {
 	s := strconv.FormatFloat(math.Abs(v), 'f', 30, 64)
 	dot := strings.IndexByte(s, '.')
 	tenths, err := strconv.ParseInt(s[:dot]+s[dot+1:dot+2], 10, 64)
-	if err != nil { // beyond int64 tenths: no fraction left to round
+	if err != nil {
 		return v
 	}
 	if s[dot+2] >= '5' {
 		tenths++
 	}
 	if tenths == 0 {
-		return 0 // JSON would print -0
+		return 0
 	}
 	r := float64(tenths) / 10
 	if v < 0 {
@@ -161,7 +147,6 @@ func round1(v float64) float64 {
 	return r
 }
 
-// usageAll totals the devices only selects (a device id, or alerts.AllDevices) over bounds.
 func (h *Hub) usageAll(bounds []float64, only string) (*power.Settings, []Usage) {
 	type dev struct {
 		id string
@@ -183,7 +168,6 @@ func (h *Hub) usageAll(bounds []float64, only string) (*power.Settings, []Usage)
 	return price, out
 }
 
-// energySource gives the alerts engine power estimates and today's cost.
 type energySource struct{ h *Hub }
 
 func (e energySource) Watts(_ string, r *report.Report) *float64 {
@@ -210,7 +194,6 @@ func (e energySource) CostToday(device string) (alerts.Cost, bool) {
 	return alerts.Cost{Amount: cost, Currency: price.Currency}, true
 }
 
-// settingsRefusal is the sentence PUT /api/energy/settings answers a refused price with.
 func settingsRefusal(err error) string {
 	if errors.Is(err, power.ErrOverlappingPeriods) {
 		return "The time-of-use periods overlap. Give each hour of the day to one period."
@@ -218,9 +201,6 @@ func settingsRefusal(err error) string {
 	return "invalid settings"
 }
 
-// alertsRefusal is the reason PUT /api/alerts answers a refused setting with. The alerts
-// package words its errors without the values given (never a webhook URL), so they are safe
-// to pass on.
 func alertsRefusal(err error) string {
 	if msg := strings.TrimSpace(err.Error()); msg != "" {
 		return "invalid alert settings: " + msg

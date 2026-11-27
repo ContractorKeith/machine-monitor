@@ -24,38 +24,25 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/tui"
 )
 
-// stdin is where connect reads the pairing code; tests replace it.
 var stdin io.Reader = os.Stdin
 
-// stdinIsTerminal reports whether a person can answer the pairing prompt; tests replace it.
 var stdinIsTerminal = func() bool { return term.IsTerminal(os.Stdin.Fd()) }
 
-// stdoutIsTerminal reports whether w is a terminal the TUI can draw on; tests replace it.
 var stdoutIsTerminal = func(w io.Writer) bool {
 	f, ok := w.(*os.File)
-	return ok && term.IsTerminal(f.Fd()) // a character device isn't enough: /dev/null is one
+	return ok && term.IsTerminal(f.Fd())
 }
 
-// connectTUI opens the TUI against the hub after a successful connect; tests replace it.
 var connectTUI = func(hubURL, key string, stderr io.Writer) int {
 	return runConnected(hubURL, key, tuiOptions(tui.Options{}), stderr)
 }
 
-// discoverHubs finds hubs on the LAN (1.5 s, as upstream); tests replace it.
 var discoverHubs = func() ([]discovery.Hub, error) { return discovery.Discover(1500 * time.Millisecond) }
 
-// nextHint says how to make this machine report; pairing alone only lets it view.
 const nextHint = "Next: this machine can watch the hub but doesn't report to it yet. Run `machine-monitor agent` to report, or `machine-monitor service install --role agent` to start reporting at login."
 
 const connectUsage = "usage: machine-monitor connect [--code CODE] [--key-stdin] [--no-tui] [URL]"
 
-// runConnect is `machine-monitor connect [--code CODE] [--key-stdin] [--no-tui] [URL]`: pair
-// this machine with a hub, save client.json, then open the TUI on the hub (when stdout is a
-// terminal; otherwise it prints what to run next). Without a URL it looks for hubs on the
-// LAN and offers them. URL may be a dashboard link with ?key=, or --key-stdin reads the key
-// from stdin (keeping it out of argv, as the hub's installers do); either skips the pairing
-// code. Either way the hub must prove it holds the key before the key is saved or sent.
-// --no-agent is the old name of --no-tui, which the hub's installers still pass.
 func runConnect(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("connect", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -81,7 +68,7 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "machine-monitor connect: "+format+"\n", a...)
 		return code
 	}
-	in := bufio.NewReader(stdin) // one reader, so the hub choice and the code don't lose each other's input
+	in := bufio.NewReader(stdin)
 	target := fs.Arg(0)
 	if target == "" {
 		if *keyStdin {
@@ -105,7 +92,7 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 			return fail(2, "--key-stdin: no key on stdin (%v)", err)
 		}
 	}
-	if key == "" && *codeFlag == "" && !stdinIsTerminal() { // nobody to answer the prompt
+	if key == "" && *codeFlag == "" && !stdinIsTerminal() {
 		return fail(2, "no terminal to ask for the pairing code: pass --code CODE (%s)", connectUsage)
 	}
 	paths, err := config.Default()
@@ -117,7 +104,7 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 	defer stop()
 	c := agent.NewHTTPClient()
 	enrolled := &agent.DeviceCredentials{}
-	if key != "" { // dashboard link
+	if key != "" {
 		if !agent.ValidKey(key) {
 			return fail(1, "that link carries an unusable key")
 		}
@@ -143,23 +130,18 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 		return fail(1, "save %s: %v", paths.Client, err)
 	}
 	fmt.Fprintf(stdout, "Paired with %s (saved in %s).\n", hubURL, paths.Client)
-	// The TUI needs a keyboard: not when stdin was the piped key (--key-stdin) and isn't a TTY.
+
 	if *noTUI || !stdoutIsTerminal(stdout) || (*keyStdin && !stdinIsTerminal()) {
 		fmt.Fprintln(stdout, nextHint)
 		return 0
 	}
-	// Printed before the TUI (the alternate screen leaves it in the scrollback) and again
-	// after it: pairing makes this machine a viewer, and a device only shows up on the hub
-	// once it reports.
+
 	fmt.Fprintln(stdout, nextHint)
 	code := connectTUI(hubURL, key, stderr)
 	fmt.Fprintln(stdout, nextHint)
 	return code
 }
 
-// chooseHub looks for hubs on the LAN and returns the address of the one to connect to. With
-// no terminal to ask on it lists what it found and fails, so a script never connects to a
-// guess.
 func chooseHub(in *bufio.Reader, stdout, stderr io.Writer) (string, int) {
 	fmt.Fprintln(stdout, "Looking for hubs on this network...")
 	hubs, err := discoverHubs()
@@ -197,8 +179,6 @@ func chooseHub(in *bufio.Reader, stdout, stderr io.Writer) (string, int) {
 	}
 }
 
-// pairLoop pairs with code, or prompts for one until it works, the hub kills the code, or
-// stdin ends. A code given with --code is tried once.
 func pairLoop(ctx context.Context, in *bufio.Reader, c *http.Client, hubURL, code string, stdout io.Writer, enrollment *agent.DeviceCredentials) (string, error) {
 	if enrollment != nil {
 		id, err := collect.DeviceID(ctx)
@@ -226,7 +206,6 @@ func pairLoop(ctx context.Context, in *bufio.Reader, c *http.Client, hubURL, cod
 	}
 }
 
-// readCode prompts for a pairing code on stdout and reads one line from in.
 func readCode(in *bufio.Reader, stdout io.Writer) (string, error) {
 	fmt.Fprint(stdout, `Pairing code (run "machine-monitor pair" on the hub, or Add device in its TUI): `)
 	line, err := in.ReadString('\n')

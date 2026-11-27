@@ -57,7 +57,6 @@ func TestLinuxStaticFallbacks(t *testing.T) {
 		t.Errorf("cpuName = %q", got)
 	}
 
-	// No machine-id at all: the hostname is the id, as upstream.
 	s.fsys = fstest.MapFS{}
 	if id := s.static(context.Background()).id; id != "grace" {
 		t.Errorf("id = %q, want hostname", id)
@@ -135,8 +134,6 @@ func TestLinuxDisks(t *testing.T) {
 	}
 }
 
-// TestLinuxDisksSharedSource keeps filesystems whose source isn't a /dev/ block device,
-// even when several share it.
 func TestLinuxDisksSharedSource(t *testing.T) {
 	gb := uint64(1 << 30)
 	p := &fakePS{
@@ -170,7 +167,7 @@ func TestLinuxDisksSharedSource(t *testing.T) {
 func TestLinuxDiskIO(t *testing.T) {
 	p := &fakePS{diskIO: []map[string]disk.IOCountersStat{{
 		"nvme0n1":   {ReadBytes: 1000, WriteBytes: 2000},
-		"nvme0n1p1": {ReadBytes: 900, WriteBytes: 1900}, // partition: counted in its disk
+		"nvme0n1p1": {ReadBytes: 900, WriteBytes: 1900},
 		"dm-0":      {ReadBytes: 1000, WriteBytes: 2000},
 		"sda":       {ReadBytes: 10, WriteBytes: 20},
 		"mmcblk0":   {ReadBytes: 1, WriteBytes: 2},

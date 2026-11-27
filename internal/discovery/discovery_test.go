@@ -11,7 +11,6 @@ import (
 	"time"
 )
 
-// startResponder runs a responder on an ephemeral loopback port.
 func startResponder(t *testing.T, name string, hubPort int) netip.AddrPort {
 	t.Helper()
 	r, err := Respond("127.0.0.1:0", name, hubPort)
@@ -34,8 +33,6 @@ func TestLoopbackProbeReply(t *testing.T) {
 	}
 }
 
-// An upstream client sends the raw probe string and parses the reply with JSON.parse,
-// requiring app "device-monitor", an integer port and a string name.
 func TestRawUpstreamProbe(t *testing.T) {
 	addr := startResponder(t, "hub", 7777)
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
@@ -108,7 +105,7 @@ func TestParseReply(t *testing.T) {
 }
 
 func TestVirtualAdapterLoses(t *testing.T) {
-	// Same hub name from a WSL address and a real LAN address: keep the LAN one.
+
 	wsl, _ := parseReply([]byte(`{"app":"device-monitor","name":"pc","port":7777}`), netip.MustParseAddr("172.20.0.1"))
 	if !wsl.Virtual {
 		t.Fatal("172.20.x should be virtual")
@@ -210,7 +207,6 @@ func TestReplyShape(t *testing.T) {
 	}
 }
 
-// Two responders (ours twice here; ours and upstream's in the field) share one UDP port.
 func TestRespondersShareAPort(t *testing.T) {
 	first := startResponder(t, "one", 7777)
 	second, err := Respond(first.String(), "two", 7777)
@@ -221,15 +217,13 @@ func TestRespondersShareAPort(t *testing.T) {
 	if got := second.Addr().(*net.UDPAddr).AddrPort(); got != first {
 		t.Fatalf("second bound %s, want %s", got, first)
 	}
-	// The OS picks which socket gets a unicast probe; either way someone answers.
+
 	hubs, err := probe(500*time.Millisecond, []netip.AddrPort{first})
 	if err != nil || len(hubs) == 0 {
 		t.Fatalf("no reply on the shared port: %v %v", hubs, err)
 	}
 }
 
-// A long or junk-filled hostname is cleaned before it goes out, so the reply stays under
-// upstream's 512-byte limit and carries the name clients would show anyway.
 func TestReplyNameCleaned(t *testing.T) {
 	addr := startResponder(t, strings.Repeat("<é\"\\", 200)+strings.Repeat("x", 600), 7777)
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
@@ -253,8 +247,6 @@ func TestReplyNameCleaned(t *testing.T) {
 	}
 }
 
-// One source gets at most replyPerSource replies a window, so a spoofed source can't turn
-// the responder into a reflector.
 func TestResponderRateLimited(t *testing.T) {
 	addr := startResponder(t, "hub", 7777)
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
@@ -291,7 +283,7 @@ func TestReplyLimiter(t *testing.T) {
 	if l.allow(src(0)) {
 		t.Fatal("one source over its limit")
 	}
-	// New sources in one /24 can use their fallback after the shared budget runs out.
+
 	n := 0
 	for i := 1; i < 256; i++ {
 		if l.allow(src(i)) {
@@ -301,24 +293,20 @@ func TestReplyLimiter(t *testing.T) {
 	if n+replyPerSource != 2*replyPerNetwork {
 		t.Fatalf("%d replies to 255 new sources in one /24; want %d", n, 2*replyPerNetwork-replyPerSource)
 	}
-	if !l.allow(src(256)) { // 10.0.1.0: another /24
+	if !l.allow(src(256)) {
 		t.Fatal("another network refused")
 	}
 	now = now.Add(time.Second)
 	if !l.allow(src(0)) {
 		t.Fatal("not refilled after a second")
 	}
-	// IPv6 sources are grouped by /64.
+
 	a, b, c := netip.MustParseAddr("fd00::1"), netip.MustParseAddr("fd00::ffff:2"), netip.MustParseAddr("fd00:0:0:1::1")
 	if network(a) != network(b) || network(a) == network(c) || network(netip.MustParseAddr("192.168.1.9")).String() != "192.168.1.0/24" {
 		t.Fatalf("networks: %v %v %v", network(a), network(b), network(c))
 	}
 }
 
-// floodRun probes l every step for 20 s from flood(k), the k-th flood probe, plus a
-// legitimate prober (127.0.0.1) sending three probes at 8, 11 and 14 s, as `connect` run
-// three times in a row. It fails if any second has more than replyTotal replies, and
-// returns the flood's replies and how many legitimate probes were answered of how many.
 func floodRun(t *testing.T, step time.Duration, flood func(k int) netip.Addr) (replies, answered, probes int) {
 	t.Helper()
 	now := time.Unix(1000, 0)
@@ -349,10 +337,6 @@ func floodRun(t *testing.T, step time.Duration, flood func(k int) netip.Addr) (r
 	return replies, answered, probes
 }
 
-// TestReplyFloodLeavesRoom is skeptic report N2: ten sources probing 50 times a second each
-// (500 pps, unprivileged on one machine) used up the global limit, so every legitimate
-// probe went unanswered. The flood must stay within its sources' and network's limits, and
-// a prober on the same network must still be answered.
 func TestReplyFloodLeavesRoom(t *testing.T) {
 	replies, answered, probes := floodRun(t, 2*time.Millisecond, func(k int) netip.Addr {
 		return netip.AddrFrom4([4]byte{127, 0, 0, byte(2 + k%10)})
@@ -368,20 +352,16 @@ func TestReplyFloodLeavesRoom(t *testing.T) {
 	}
 }
 
-// TestReplyRotatingFlood (review of #70): a flood from a new address each probe (400 pps)
-// drained the budget kept for new sources, so a legitimate prober got 0 of 8 replies. Each
-// /24 now has its own budget: the flood gets at most that per network it uses, and the
-// prober, on a network the flood isn't using at the time, is answered.
 func TestReplyRotatingFlood(t *testing.T) {
 	for name, flood := range map[string]func(k int) netip.Addr{
-		// 127.0.0.2, 127.0.0.3, …: a new address each probe, a new /24 every 256.
+
 		"sequential": func(k int) netip.Addr {
 			i := k + 2
 			return netip.AddrFrom4([4]byte{127, byte(i >> 16), byte(i >> 8), byte(i)})
 		},
-		// A new /24 each probe, spread over 127.0.0.0/8.
+
 		"scattered": func(k int) netip.Addr {
-			i := uint32(k)*2654435761 | 1<<8 // never 127.0.0.x, the prober's network
+			i := uint32(k)*2654435761 | 1<<8
 			return netip.AddrFrom4([4]byte{127, byte(i >> 16), byte(i >> 8), byte(i)})
 		},
 	} {
@@ -395,9 +375,6 @@ func TestReplyRotatingFlood(t *testing.T) {
 	}
 }
 
-// One hub answering from its LAN and Tailscale addresses is one entry with the LAN URL,
-// whichever reply came first. Two hubs on one machine (sharing UDP 7778, different HTTP
-// ports) are two entries, and so are two of our hubs that share a hostname.
 func TestHubSetMerge(t *testing.T) {
 	var s hubSet
 	ours := `{"app":"device-monitor","name":"pc","port":7777,"impl":"machine-monitor","id":"aaaa"}`
@@ -419,8 +396,6 @@ func TestHubSetMerge(t *testing.T) {
 	}
 }
 
-// Two of our responders on one port at different HTTP ports are both found by a probe that
-// reaches both (a broadcast in the field; here one probe to each).
 func TestTwoHubsOnOneMachine(t *testing.T) {
 	a := startResponder(t, "pc", 17800)
 	b := startResponder(t, "pc", 17801)
@@ -442,7 +417,7 @@ func TestReplySameNetworkFlood(t *testing.T) {
 			}
 		}
 	}
-	// Successful replies alone allocate entries, bounded by the total rate and idle window.
+
 	for i := 0; i < 100000; i++ {
 		l.allow(netip.AddrFrom4([4]byte{10, byte(i >> 16), byte(i >> 8), byte(i)}))
 	}
@@ -496,10 +471,6 @@ func TestReplyRotatingNetworkBound(t *testing.T) {
 	}
 }
 
-// TestReplyRotatingSlash24Fallback (PR #84 review): a flood rotating over most of one /24 at
-// 1 kHz drained the shared network reserve, so a prober probing every 5 s got no reply. While
-// the flood ramps up (its first ~5 s) every address not yet answered competes for the same
-// tokens, so the prober probes from 10 s on.
 func TestReplyRotatingSlash24Fallback(t *testing.T) {
 	for _, n := range []int{13, 60, 200, 254} {
 		now := time.Unix(1000, 0)
@@ -525,16 +496,14 @@ func TestReplyRotatingSlash24Fallback(t *testing.T) {
 	}
 }
 
-// TestReplyFallbackReserve pins the per-source fallback with the network's own budget gone:
-// one reply per five seconds, only to a source that has been quiet, and each one is spent.
 func TestReplyFallbackReserve(t *testing.T) {
 	now := time.Unix(1000, 0)
 	l := newReplyLimiter(func() time.Time { return now })
 	a := netip.MustParseAddr("10.0.0.1")
 	l.allow(a)
 	nb, src := l.nets[network(a)], l.per[a]
-	src.reserve = bucketReserve{at: now} // fallback spent just now
-	// exhaust empties the network's normal budget and fills its reserve before a probe.
+	src.reserve = bucketReserve{at: now}
+
 	exhaust := func() {
 		nb.tokens, nb.at = 0, now
 		nb.reserve = bucketReserve{tokens: replyPerNetwork, at: now}
@@ -551,7 +520,7 @@ func TestReplyFallbackReserve(t *testing.T) {
 	probe(3*time.Second, true, "6 s after the last fallback")
 	probe(2500*time.Millisecond, false, "2.5 s after a fallback was spent")
 	probe(2500*time.Millisecond, true, "5 s after a fallback was spent")
-	// A source probing faster than every replyQuiet has no claim on the shared reserve.
+
 	src.reserve.tokens = 1
 	probe(replyQuiet/2, false, "probing again within the quiet time")
 }

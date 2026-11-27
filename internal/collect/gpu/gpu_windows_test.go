@@ -33,8 +33,6 @@ func TestRunWindowsGenericFallback(t *testing.T) {
 	}
 }
 
-// TestQueryVideoControllersLive checks the WMI class and property names against a real
-// machine: every Windows install, CI's included, has at least one video controller.
 func TestQueryVideoControllersLive(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -55,8 +53,6 @@ func TestQueryVideoControllersLive(t *testing.T) {
 	}
 }
 
-// TestQueryGenericLive runs the real GPU perf counter queries. CI VMs may lack the
-// counters, so an error skips, but it must come back within the deadline.
 func TestQueryGenericLive(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

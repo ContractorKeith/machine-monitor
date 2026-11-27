@@ -19,10 +19,9 @@ import (
 
 var update = flag.Bool("update", false, "rewrite golden files")
 
-// fake is a service manager that records each call and answers from a table.
 type fake struct {
 	calls   []string
-	replies map[string]reply // keyed by "name arg arg..."
+	replies map[string]reply
 }
 
 type reply struct {
@@ -40,7 +39,6 @@ func (f *fake) run(_ context.Context, name string, args ...string) ([]byte, erro
 	return []byte(r.out), nil
 }
 
-// testManager is a Manager for goos whose files all live in a temp dir.
 func testManager(t *testing.T, goos string) (*Manager, *fake) {
 	t.Helper()
 	root := t.TempDir()
@@ -49,7 +47,6 @@ func testManager(t *testing.T, goos string) (*Manager, *fake) {
 		DataDir: filepath.Join(root, "data"), UID: 501, User: "alice", Run: f.run}, f
 }
 
-// goldenManager has fixed paths so rendered files are byte-for-byte stable.
 func goldenManager(goos string) *Manager {
 	m := &Manager{OS: goos, Home: "/home/alice", ConfigHome: "/home/alice/.config", DataDir: "/home/alice/.config/machine-monitor", UID: 501, User: "alice"}
 	if goos == "darwin" {
@@ -221,13 +218,11 @@ func TestSystemdFlow(t *testing.T) {
 		t.Errorf("install output:\n%s", out.String())
 	}
 
-	// Same spec again: nothing to restart.
 	if err := m.Install(ctx, s, &out); err != nil {
 		t.Fatal(err)
 	}
 	wantCalls(t, f, "systemctl --user is-enabled machine-monitor-hub.service", "systemctl --user daemon-reload", "systemctl --user enable --now machine-monitor-hub.service")
 
-	// New port: rewrite and restart.
 	s.Port = 8080
 	if err := m.Install(ctx, s, &out); err != nil {
 		t.Fatal(err)
@@ -243,7 +238,6 @@ func TestSystemdFlow(t *testing.T) {
 	}
 	f.calls = nil
 
-	// disable failing (already stopped) still removes the unit.
 	f.replies["systemctl --user disable --now machine-monitor-hub.service"] = reply{out: "boom", err: true}
 	out.Reset()
 	if err := m.Uninstall(ctx, RoleHub, &out); err != nil {
@@ -254,7 +248,6 @@ func TestSystemdFlow(t *testing.T) {
 		t.Errorf("unit still there or no warning:\n%s", out.String())
 	}
 
-	// Uninstall again: a no-op.
 	out.Reset()
 	if err := m.Uninstall(ctx, RoleHub, &out); err != nil || !strings.Contains(out.String(), "not installed") {
 		t.Errorf("second uninstall: %v\n%s", err, out.String())
@@ -282,7 +275,6 @@ func TestLaunchdFlow(t *testing.T) {
 	s := hubSpec(t)
 	var out bytes.Buffer
 
-	// First install: nothing to boot out.
 	f.replies["launchctl bootout "+target] = reply{out: "No such process", err: true}
 	if err := m.Install(ctx, s, &out); err != nil {
 		t.Fatal(err)
@@ -295,7 +287,6 @@ func TestLaunchdFlow(t *testing.T) {
 		t.Errorf("log dir not created: %v", err)
 	}
 
-	// Reinstall: boot out the old job; bootstrap fails once while it's going away.
 	delete(f.replies, "launchctl bootout "+target)
 	n := 0
 	m.Run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -342,7 +333,7 @@ func TestLaunchdBootstrapFailsWithoutBootout(t *testing.T) {
 	if err := m.Install(context.Background(), hubSpec(t), &bytes.Buffer{}); err == nil {
 		t.Fatal("Install = nil error")
 	}
-	if len(f.calls) != 2 { // no retries when nothing was booted out
+	if len(f.calls) != 2 {
 		t.Errorf("calls = %q", f.calls)
 	}
 }
@@ -423,8 +414,6 @@ func TestExecRunnerUnknownTool(t *testing.T) {
 	}
 }
 
-// A relative MACHINE_MONITOR_DIR is made absolute at install time, since the service runs
-// from another directory (skeptic L5).
 func TestDefaultMakesDataDirEnvAbsolute(t *testing.T) {
 	t.Setenv(config.DirEnv, "rel")
 	m, err := Default()
@@ -436,7 +425,6 @@ func TestDefaultMakesDataDirEnvAbsolute(t *testing.T) {
 	}
 }
 
-// A failed update leaves the existing unit byte-identical (skeptic pass 2, B7).
 func TestSystemdFailedUpdateKeepsOldUnit(t *testing.T) {
 	ctx := context.Background()
 	m, f := testManager(t, "linux")
@@ -456,8 +444,6 @@ func TestSystemdFailedUpdateKeepsOldUnit(t *testing.T) {
 	}
 }
 
-// A failed update puts the unit back with its mode and mtime, then reloads systemd, so
-// the loaded unit never reads as changed (skeptic pass 3, N13).
 func TestSystemdRestoreKeepsModeAndReloads(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("needs Unix modes and inodes")
@@ -492,7 +478,6 @@ func TestSystemdRestoreKeepsModeAndReloads(t *testing.T) {
 	}
 }
 
-// A symlinked unit comes back as the link, not as a regular file.
 func TestSystemdRestoreKeepsSymlink(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("needs symlinks")
@@ -521,7 +506,6 @@ func TestSystemdRestoreKeepsSymlink(t *testing.T) {
 	}
 }
 
-// A unit that was disabled before a failed install is disabled again (pass-3 review, N13).
 func TestSystemdFailedInstallKeepsUnitDisabled(t *testing.T) {
 	ctx := context.Background()
 	m, f := testManager(t, "linux")

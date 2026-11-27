@@ -16,20 +16,15 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/update"
 )
 
-// Seams for tests.
 var (
 	updateSource     = update.GitHub
 	updateExecutable = service.Executable
 )
 
-// The hub's installers download the release this binary is.
 func init() { hub.InstallVersion = version }
 
-// maxNotes caps how many lines of release notes update prints.
 const maxNotes = 40
 
-// runUpdate is `machine-monitor update [--check]`: install the latest GitHub release over
-// this binary after checking checksums.txt's signature and the archive's SHA-256.
 func runUpdate(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -57,8 +52,8 @@ func runUpdate(args []string, stdout, stderr io.Writer) int {
 	defer cancel()
 	src := updateSource()
 	rel, err := src.Latest(ctx)
-	if err != nil && strings.HasSuffix(err.Error(), "HTTP 404") { // update.Source.Fetch's wording
-		// GitHub answers 404 for "releases/latest" until the first release is published.
+	if err != nil && strings.HasSuffix(err.Error(), "HTTP 404") {
+
 		fmt.Fprintf(stdout, "This is machine-monitor %s. No release has been published yet, so there is nothing to update to.\n", version)
 		return 0
 	}
@@ -103,7 +98,6 @@ func runUpdate(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// printNotes prints what changed: the release notes, trimmed to maxNotes lines.
 func printNotes(w io.Writer, rel update.Release) {
 	notes := strings.TrimSpace(strings.ReplaceAll(rel.Notes, "\r\n", "\n"))
 	if notes == "" {
@@ -124,5 +118,4 @@ func printNotes(w io.Writer, rel update.Release) {
 	fmt.Fprintln(w)
 }
 
-// printable makes text fetched over the network safe to print (see internal/textclean).
 func printable(s string) string { return textclean.Clean(s) }

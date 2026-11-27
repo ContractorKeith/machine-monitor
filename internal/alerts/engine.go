@@ -1,8 +1,5 @@
 package alerts
 
-// Ported from Forward-Future/device-monitor alerts.js (MIT, © 2026 Matt):
-// https://github.com/Forward-Future/device-monitor
-
 import (
 	"context"
 	"encoding/json"
@@ -20,49 +17,38 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// How often Run checks offline devices and today's cost, as upstream.
 const (
 	TickInterval = 15 * time.Second
 	CostInterval = 5 * time.Minute
 )
 
-// logDelay coalesces event-log writes, as upstream's 1 s debounce.
 const logDelay = time.Second
 
-// Device is what the engine needs to know about a registered device.
 type Device struct {
 	ID       string
 	Name     string
 	Online   bool
-	LastSeen time.Time // zero if never seen
+	LastSeen time.Time
 }
 
-// Cost is electricity cost so far today.
 type Cost struct {
 	Amount   float64
-	Currency string // ISO 4217, e.g. "USD"
+	Currency string
 }
 
-// Energy supplies power and cost figures. The hub implements it over internal/power.
 type Energy interface {
-	// Watts is the device's estimated draw at the wall for this report, nil when unknown.
 	Watts(deviceID string, r *report.Report) *float64
-	// CostToday is today's cost for one device, or every device for AllDevices. ok is false
-	// when no electricity price is set.
 	CostToday(device string) (c Cost, ok bool)
 }
 
-// Message is what the engine broadcasts; the hub sends it as-is on its live stream.
-// Type "alert" carries an Event, type "alerts" carries new Settings.
 type Message struct {
 	Type     string    `json:"type"`
 	Event    *Event    `json:"event,omitempty"`
-	Notify   bool      `json:"notify,omitempty"` // show a banner and ring the bell
+	Notify   bool      `json:"notify,omitempty"`
 	Settings *Settings `json:"settings,omitempty"`
 	Active   []Active  `json:"active"`
 }
 
-// Event is one entry in the alert log. Times are Unix milliseconds, as upstream.
 type Event struct {
 	ID         string   `json:"id"`
 	T          int64    `json:"t"`
@@ -70,89 +56,61 @@ type Event struct {
 	Type       string   `json:"type,omitempty"`
 	Device     string   `json:"device,omitempty"`
 	DeviceName string   `json:"deviceName,omitempty"`
-	State      string   `json:"state"` // "firing" or "resolved"
+	State      string   `json:"state"`
 	Value      *float64 `json:"value"`
 	Title      string   `json:"title"`
 	Message    string   `json:"message"`
 	Test       bool     `json:"test,omitempty"`
 }
 
-// Active is a rule that is currently firing for a device.
 type Active struct {
 	RuleID     string   `json:"ruleId"`
 	Type       string   `json:"type"`
 	Device     string   `json:"device"`
 	DeviceName string   `json:"deviceName"`
-	Since      int64    `json:"since"` // Unix ms when it fired
+	Since      int64    `json:"since"`
 	Value      *float64 `json:"value"`
 	Threshold  *float64 `json:"threshold"`
 	Title      string   `json:"title"`
 	Message    string   `json:"message"`
 }
 
-// Event states.
 const (
 	Firing   = "firing"
 	Resolved = "resolved"
 )
 
-// Detail is extra context for an alert's wording.
 type Detail struct {
-	Since    int64    `json:"since,omitempty"` // offline: last report, Unix ms
+	Since    int64    `json:"since,omitempty"`
 	Disk     string   `json:"disk,omitempty"`
-	Free     *float64 `json:"free,omitempty"` // disk: bytes free
+	Free     *float64 `json:"free,omitempty"`
 	Currency string   `json:"currency,omitempty"`
 }
 
-// Options wires an Engine to the hub. Devices is required; everything else is optional.
 type Options struct {
-	// Paths locates alerts.json and alerts-log.json. Empty paths keep everything in memory.
-	Paths config.Paths
-	// Devices lists every registered device. It may be called with the engine's lock held,
-	// so it must not call back into the Engine.
-	Devices func() []Device
-	// Energy supplies power estimates and cost; nil disables the power and dailyCost rules.
-	Energy Energy
-	// Broadcast receives every alert and settings change. It is called without the engine's
-	// lock held, so it may call back into the engine.
-	Broadcast func(Message)
-	// HubURL prefixes the "/#/alerts" link put in notifications; nil or "" sends the bare path,
-	// as upstream does.
-	HubURL func() string
-	// Now is the clock; time.Now when nil.
-	Now func() time.Time
-	// HTTP sends ntfy and webhook requests; a client that refuses redirects and dials only
-	// allowed addresses when nil.
-	// Leave it nil in production: a replacement skips the dial-time SSRF check, so only the
-	// pre-resolve check would remain. Tests inject a fake.
-	HTTP Doer
-	// LookupIP resolves a host name; net.DefaultResolver when nil.
-	LookupIP func(ctx context.Context, host string) ([]netip.Addr, error)
-	// BlockPrivate also refuses delivery to private (RFC 1918, fc00::/7) addresses. Upstream
-	// allows them so a self-hosted ntfy or chat bridge on the LAN works; so does the default.
+	Paths        config.Paths
+	Devices      func() []Device
+	Energy       Energy
+	Broadcast    func(Message)
+	HubURL       func() string
+	Now          func() time.Time
+	HTTP         Doer
+	LookupIP     func(ctx context.Context, host string) ([]netip.Addr, error)
 	BlockPrivate bool
-	// LocalAddrs lists this machine's own interface addresses, which delivery refuses;
-	// the real interfaces when nil.
-	LocalAddrs func() []netip.Addr
-	// Logf logs delivery failures and save errors; dropped when nil.
-	Logf func(format string, args ...any)
+	LocalAddrs   func() []netip.Addr
+	Logf         func(format string, args ...any)
 }
 
-// state is one rule × device.
 type state struct {
-	since   time.Time // when the value first went over; zero when it isn't
+	since   time.Time
 	firing  bool
 	firedAt time.Time
 	value   *float64
 	detail  Detail
-	day     string // dailyCost: the local date it fired on
-	// carried marks an offline alert found already offline when the hub started. The hub never
-	// saw the device go offline (a hub restart looks like every device dropping), so it must not
-	// announce it coming back.
+	day     string
 	carried bool
 }
 
-// Engine evaluates rules and keeps the active set and event log. It is safe for concurrent use.
 type Engine struct {
 	opt    Options
 	client Doer
@@ -160,14 +118,13 @@ type Engine struct {
 	mu     sync.Mutex
 	cfg    Settings
 	events []Event
-	state  map[string]*state // "<ruleId>|<deviceId>"
-	wg     sync.WaitGroup    // deliveries in flight
+	state  map[string]*state
+	wg     sync.WaitGroup
 
-	logDirty bool        // events changed since alerts-log.json was written
-	logTimer *time.Timer // pending debounced log write
+	logDirty bool
+	logTimer *time.Timer
 }
 
-// savedFile is alerts.json.
 type savedFile struct {
 	Settings json.RawMessage        `json:"settings"`
 	Firing   map[string]savedFiring `json:"firing"`
@@ -179,8 +136,6 @@ type savedFiring struct {
 	Detail  Detail   `json:"detail"`
 }
 
-// New loads saved settings, active alerts and the event log (or starts from DefaultSettings)
-// and marks devices that are already offline as firing, without notifying.
 func New(opt Options) *Engine {
 	if opt.Now == nil {
 		opt.Now = time.Now
@@ -198,7 +153,7 @@ func New(opt Options) *Engine {
 	if haveSaved {
 		raw := saved.Settings
 		if raw == nil {
-			raw, _ = os.ReadFile(opt.Paths.Alerts) // upstream also accepts bare settings
+			raw, _ = os.ReadFile(opt.Paths.Alerts)
 		}
 		if s, err := ParseSettings(raw); err == nil {
 			e.cfg = s
@@ -221,13 +176,11 @@ func New(opt Options) *Engine {
 		}
 	}
 
-	// Devices that were already offline when the hub started count as firing.
 	for _, r := range e.cfg.Rules {
 		if !r.Enabled || r.Type != TypeOffline {
 			continue
 		}
 		for _, d := range e.targets(r) {
-			// One already in saved.Firing was announced before the restart, so its return is too.
 			if _, saved := e.state[key(r.ID, d.ID)]; !saved && !d.Online && !d.LastSeen.IsZero() {
 				e.state[key(r.ID, d.ID)] = &state{since: d.LastSeen, firing: true, firedAt: d.LastSeen, carried: true}
 			}
@@ -265,7 +218,6 @@ func (e *Engine) logf(format string, args ...any) {
 	}
 }
 
-// Settings returns the current settings.
 func (e *Engine) Settings() Settings {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -277,8 +229,6 @@ func cloneSettings(s Settings) Settings {
 	return s
 }
 
-// Update validates and applies new settings (PUT /api/alerts). State for rules that were
-// removed, changed or switched off is forgotten.
 func (e *Engine) Update(data []byte) (Settings, error) {
 	s, err := ParseSettings(data)
 	if err != nil {
@@ -312,7 +262,6 @@ func (e *Engine) Update(data []byte) (Settings, error) {
 
 func ptr[T any](v T) *T { return &v }
 
-// save writes settings and active alerts to alerts.json. Called with mu held.
 func (e *Engine) save() {
 	if e.opt.Paths.Alerts == "" {
 		return
@@ -330,7 +279,6 @@ func (e *Engine) save() {
 	}
 }
 
-// saveLog writes the event log now. Called with mu held.
 func (e *Engine) saveLog() {
 	e.logDirty = false
 	if e.logTimer != nil {
@@ -346,8 +294,6 @@ func (e *Engine) saveLog() {
 	}
 }
 
-// queueLog marks the log dirty and writes it logDelay later, so a burst of events costs
-// one write. Called with mu held.
 func (e *Engine) queueLog() {
 	e.logDirty = true
 	if e.logTimer == nil {
@@ -355,7 +301,6 @@ func (e *Engine) queueLog() {
 	}
 }
 
-// flushLog writes the log if it changed since the last write.
 func (e *Engine) flushLog() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -377,14 +322,10 @@ func (e *Engine) targets(r Rule) []Device {
 	return nil
 }
 
-// ---- evaluation --------------------------------------------------------------------------
-
-// OnReport evaluates a device's new report against every rule that covers it. A report also
-// resolves the device's offline alerts.
 func (e *Engine) OnReport(deviceID string, r *report.Report) {
 	var watts *float64
 	if e.opt.Energy != nil && r != nil && e.wantsPower(deviceID) {
-		watts = e.opt.Energy.Watts(deviceID, r) // outside the lock: it's the hub's code
+		watts = e.opt.Energy.Watts(deviceID, r)
 	}
 	e.mu.Lock()
 	var out []Message
@@ -407,8 +348,6 @@ func (e *Engine) OnReport(deviceID string, r *report.Report) {
 	e.send(out)
 }
 
-// wantsPower reports whether an enabled power rule covers the device, so the power
-// estimate is only computed when something will read it.
 func (e *Engine) wantsPower(deviceID string) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -420,7 +359,6 @@ func (e *Engine) wantsPower(deviceID string) bool {
 	return false
 }
 
-// evaluate runs one rule's duration and hysteresis state machine. Called with mu held.
 func (e *Engine) evaluate(out []Message, r Rule, id string, value float64, detail Detail) []Message {
 	k, now := key(r.ID, id), e.opt.Now()
 	st := e.state[k]
@@ -467,8 +405,6 @@ func (e *Engine) resolveOffline(out []Message, r Rule, id string) []Message {
 	return out
 }
 
-// Tick fires offline rules for devices silent longer than the rule's minutes. Run calls it
-// every TickInterval.
 func (e *Engine) Tick() {
 	devices := e.opt.Devices()
 	e.mu.Lock()
@@ -496,8 +432,6 @@ func (e *Engine) Tick() {
 	e.send(out)
 }
 
-// CheckCost fires dailyCost rules whose cost so far today is over the limit, once per day.
-// Run calls it every CostInterval.
 func (e *Engine) CheckCost() {
 	if e.opt.Energy == nil {
 		return
@@ -509,13 +443,13 @@ func (e *Engine) CheckCost() {
 		if !r.Enabled || r.Type != TypeDailyCost {
 			continue
 		}
-		c, ok := e.opt.Energy.CostToday(r.Device) // outside the lock: it's the hub's code
+		c, ok := e.opt.Energy.CostToday(r.Device)
 		e.mu.Lock()
 		now := e.opt.Now()
 		today, k := dayOf(now), key(r.ID, r.Device)
 		var out []Message
 		if st := e.state[k]; st != nil && st.firing && st.day != today {
-			delete(e.state, k) // new day: quietly start over
+			delete(e.state, k)
 		}
 		if st := e.state[k]; (st == nil || !st.firing) && ok && c.Amount > *r.Threshold && e.hasRule(r) {
 			v, d := c.Amount, Detail{Currency: c.Currency}
@@ -527,8 +461,6 @@ func (e *Engine) CheckCost() {
 	}
 }
 
-// hasRule reports whether r is still configured unchanged (settings may change while
-// CheckCost waits on Energy). Called with mu held.
 func (e *Engine) hasRule(r Rule) bool {
 	for _, x := range e.cfg.Rules {
 		if x.ID == r.ID {
@@ -538,8 +470,6 @@ func (e *Engine) hasRule(r Rule) bool {
 	return false
 }
 
-// Run calls Tick and CheckCost on their intervals until ctx is done, then waits for
-// deliveries in flight.
 func (e *Engine) Run(ctx context.Context) {
 	tick, cost := time.NewTicker(TickInterval), time.NewTicker(CostInterval)
 	defer tick.Stop()
@@ -557,7 +487,6 @@ func (e *Engine) Run(ctx context.Context) {
 	}
 }
 
-// Active lists alerts that are firing, newest first.
 func (e *Engine) Active() []Active {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -592,7 +521,6 @@ func (e *Engine) active() []Active {
 	return out
 }
 
-// Events returns up to n log entries, newest first (n <= 0 means all).
 func (e *Engine) Events(n int) []Event {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -606,7 +534,6 @@ func (e *Engine) Events(n int) []Event {
 	return out
 }
 
-// ClearLog empties the event log (DELETE /api/alerts/log).
 func (e *Engine) ClearLog() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -614,7 +541,6 @@ func (e *Engine) ClearLog() {
 	e.saveLog()
 }
 
-// RemoveDevice forgets a removed device's alerts.
 func (e *Engine) RemoveDevice(id string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -638,10 +564,6 @@ func (e *Engine) nameOf(id string) string {
 	return id
 }
 
-// ---- delivery ----------------------------------------------------------------------------
-
-// emit logs an event and queues its broadcast; delivery to ntfy and the webhook starts in the
-// background. Called with mu held.
 func (e *Engine) emit(out []Message, r Rule, id, st string, value *float64, detail Detail) []Message {
 	title, msg := e.text(r, id, st, value, detail)
 	ev := Event{ID: newID(), T: e.opt.Now().UnixMilli(), RuleID: r.ID, Type: r.Type, Device: id,
@@ -675,8 +597,6 @@ func (e *Engine) send(msgs []Message) {
 	}
 }
 
-// link is the alerts page put in notifications. Upstream always sends it, even when it has
-// no hub URL to prefix.
 func (e *Engine) link() string {
 	u := ""
 	if e.opt.HubURL != nil {
@@ -685,14 +605,11 @@ func (e *Engine) link() string {
 	return u + "/#/alerts"
 }
 
-// Wait blocks until deliveries in flight have finished, then writes a pending event log.
 func (e *Engine) Wait() {
 	e.wg.Wait()
 	e.flushLog()
 }
 
-// Test broadcasts a test alert and delivers it to every enabled channel now
-// (POST /api/alerts/test).
 func (e *Engine) Test(ctx context.Context) Delivery {
 	e.mu.Lock()
 	ch, link := e.cfg.Channels, e.link()
@@ -724,7 +641,6 @@ func (e *Engine) deliver(ctx context.Context, ch Channels, link string, ev Event
 			icon = "⚠️"
 		}
 		line := fmt.Sprintf("%s %s\n%s", icon, ev.Title, ev.Message)
-		// content is what Discord reads, text is what Slack (and most others) read.
 		body := map[string]any{"content": line, "text": line, "title": ev.Title, "message": ev.Message,
 			"device": ev.DeviceName, "state": ev.State,
 			"time": time.UnixMilli(ev.T).UTC().Format("2006-01-02T15:04:05.000Z"), "link": link}

@@ -1,21 +1,3 @@
-// Package alerts evaluates alert rules against device reports on the hub and delivers what
-// fires to the TUI (through the hub's live stream), to phones through ntfy and to chat
-// webhooks (Discord, Slack, or anything that accepts JSON).
-//
-// A rule watches one metric (offline, CPU/GPU temperature, CPU/GPU load, memory, disk,
-// power, daily cost) on one device or all of them. It fires once the value has stayed above
-// its threshold for the rule's minutes, and resolves only when the value falls back below the
-// threshold by the type's hysteresis, so a value hovering at the limit doesn't flap.
-//
-// The Engine has no timers of its own and no dependency on the hub or internal/power: the
-// hub feeds it reports (OnReport), calls Tick and CheckCost (or Run), and supplies device
-// status, power and cost through Options. The clock, HTTP client and DNS resolver are
-// injectable for tests.
-//
-// Ported from Forward-Future/device-monitor alerts.js (MIT, © 2026 Matt):
-// https://github.com/Forward-Future/device-monitor
-// Rule types, limits, defaults, hysteresis, the state machine, message wording and delivery
-// payloads follow upstream.
 package alerts
 
 import (
@@ -32,7 +14,6 @@ import (
 	"strings"
 )
 
-// Rule types.
 const (
 	TypeOffline   = "offline"
 	TypeCPUTemp   = "cpuTemp"
@@ -45,18 +26,13 @@ const (
 	TypeDailyCost = "dailyCost"
 )
 
-// TypeInfo describes one rule type.
 type TypeInfo struct {
-	Label string
-	// HasThreshold is false for offline. Min and Max bound the threshold.
+	Label        string
 	HasThreshold bool
 	Min, Max     float64
-	// Hyst is how far a value must fall below the threshold to resolve; 0 means 5 % of the
-	// threshold.
-	Hyst float64
+	Hyst         float64
 }
 
-// Types lists every rule type and its limits.
 var Types = map[string]TypeInfo{
 	TypeOffline:   {Label: "Offline"},
 	TypeCPUTemp:   {Label: "CPU temperature", HasThreshold: true, Min: 20, Max: 150, Hyst: 3},
@@ -69,10 +45,8 @@ var Types = map[string]TypeInfo{
 	TypeDailyCost: {Label: "Electricity cost today", HasThreshold: true, Min: 0.01, Max: 1e7},
 }
 
-// AllDevices is the Rule.Device value that matches every device.
 const AllDevices = "*"
 
-// DefaultNtfyServer is used when a channel names no server.
 const DefaultNtfyServer = "https://ntfy.sh"
 
 const (
@@ -80,32 +54,28 @@ const (
 	maxLog   = 300
 )
 
-// Rule is one alert rule.
 type Rule struct {
-	ID        string   `json:"id"` // 12 hex chars
+	ID        string   `json:"id"`
 	Type      string   `json:"type"`
-	Device    string   `json:"device"`    // device id or AllDevices
-	Threshold *float64 `json:"threshold"` // nil for offline
-	Minutes   int      `json:"minutes"`   // how long the value must stay over; 1–1440 for offline
+	Device    string   `json:"device"`
+	Threshold *float64 `json:"threshold"`
+	Minutes   int      `json:"minutes"`
 	Enabled   bool     `json:"enabled"`
 }
 
-// Settings is everything the user configures: rules and delivery channels.
 type Settings struct {
 	Rules          []Rule   `json:"rules"`
 	Channels       Channels `json:"channels"`
 	NotifyResolved bool     `json:"notifyResolved"`
-	TempUnit       string   `json:"tempUnit"` // "C" or "F"
+	TempUnit       string   `json:"tempUnit"`
 }
 
-// Channels says where alerts go.
 type Channels struct {
-	Desktop bool    `json:"desktop"` // in-TUI banner and bell
+	Desktop bool    `json:"desktop"`
 	Ntfy    Ntfy    `json:"ntfy"`
 	Webhook Webhook `json:"webhook"`
 }
 
-// Ntfy publishes to an ntfy server (https://ntfy.sh by default).
 type Ntfy struct {
 	Enabled bool   `json:"enabled"`
 	Server  string `json:"server"`
@@ -113,13 +83,11 @@ type Ntfy struct {
 	Email   string `json:"email"`
 }
 
-// Webhook POSTs JSON that Discord (content) and Slack (text) both understand.
 type Webhook struct {
 	Enabled bool   `json:"enabled"`
 	URL     string `json:"url"`
 }
 
-// DefaultSettings is what a new hub starts with.
 func DefaultSettings() Settings {
 	s, err := ParseSettings([]byte(`{"rules":[
 		{"type":"offline","device":"*","minutes":10},
@@ -128,7 +96,7 @@ func DefaultSettings() Settings {
 		{"type":"disk","device":"*","threshold":90,"minutes":0}
 	],"channels":{"desktop":true}}`))
 	if err != nil {
-		panic(err) // the literal above is valid
+		panic(err)
 	}
 	return s
 }
@@ -141,8 +109,6 @@ var (
 	ctrlRE   = regexp.MustCompile(`[\x00-\x1f\x7f]`)
 )
 
-// Input shapes: as lenient as upstream's validSettings, which takes whatever the dashboard
-// (or a hand-edited alerts.json) sends.
 type ruleIn struct {
 	ID        any   `json:"id"`
 	Type      any   `json:"type"`
@@ -171,8 +137,6 @@ type settingsIn struct {
 	TempUnit       any   `json:"tempUnit"`
 }
 
-// ParseSettings validates settings JSON from the API or alerts.json (port of validSettings).
-// Rules without a valid id get a new one. Any invalid rule or channel rejects the whole input.
 func ParseSettings(data []byte) (Settings, error) {
 	var in settingsIn
 	if err := json.Unmarshal(data, &in); err != nil {
@@ -257,7 +221,7 @@ func parseRule(data json.RawMessage) (Rule, error) {
 	}
 	m, ok := number(in.Minutes)
 	if !ok {
-		m = 0 // upstream: Number(x) || 0
+		m = 0
 	}
 	m = jsRound(m)
 	minMinutes := 0.0
@@ -276,7 +240,6 @@ func parseRule(data json.RawMessage) (Rule, error) {
 	return r, nil
 }
 
-// number converts like JS Number(): numbers, numeric strings, null → 0, bools → 0/1.
 func number(v any) (float64, bool) {
 	var f float64
 	switch x := v.(type) {
@@ -306,7 +269,6 @@ func number(v any) (float64, bool) {
 	return f, true
 }
 
-// truthy is JS truthiness for decoded JSON values.
 func truthy(v any) bool {
 	switch x := v.(type) {
 	case nil:
@@ -318,13 +280,11 @@ func truthy(v any) bool {
 	case string:
 		return x != ""
 	}
-	return true // objects and arrays
+	return true
 }
 
-// jsRound is Math.round: halves round toward +∞.
 func jsRound(x float64) float64 { return math.Floor(x + 0.5) }
 
-// clean drops control characters, trims and caps a string; non-strings become "".
 func clean(v any, max int) string {
 	s, _ := v.(string)
 	s = strings.TrimSpace(ctrlRE.ReplaceAllString(s, ""))
@@ -334,8 +294,6 @@ func clean(v any, max int) string {
 	return s
 }
 
-// httpURL returns an http(s) URL without a trailing slash, or "" if it isn't one or points
-// at a local name or address. Where a DNS name resolves is checked again at delivery.
 func httpURL(v any) string {
 	s, _ := v.(string)
 	u, err := url.Parse(strings.TrimSpace(s))
@@ -353,9 +311,6 @@ func httpURL(v any) string {
 	return strings.TrimSuffix(u.String(), "/")
 }
 
-// oddIPv4 catches IPv4 spellings Go's parser doesn't treat as addresses but some resolvers
-// do ("2130706433", "0x7f.1", "127.1"), which a browser-style parser would turn into
-// 127.0.0.1. They are refused outright rather than guessed at.
 func oddIPv4(h string) bool {
 	if _, err := netip.ParseAddr(h); err == nil {
 		return false
@@ -371,6 +326,6 @@ func oddIPv4(h string) bool {
 
 func newID() string {
 	b := make([]byte, 6)
-	rand.Read(b) // never fails (crypto/rand panics instead)
+	rand.Read(b)
 	return hex.EncodeToString(b)
 }

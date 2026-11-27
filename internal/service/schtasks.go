@@ -13,24 +13,16 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/config"
 )
 
-// taskName is the Task Scheduler task for a role, in the root folder.
 func taskName(r Role) string { return "machine-monitor-" + string(r) }
 
-// TaskArgs is the task's command line after the binary: `service run -- <role args>`.
-// `service run` detaches from the console it's given and logs to a file, so no window
-// stays open. The binary is the task's own process, so /End stops it; a launcher such as
-// `conhost.exe --headless` would be ended while the binary kept running.
 func TaskArgs(s Spec) []string {
 	return append([]string{"service", "run", "--"}, s.Args()...)
 }
 
-// TaskXML renders the logon task for s. It runs as the current user with an interactive
-// token and least privilege, so creating it needs no elevation.
 func (m *Manager) TaskXML(s Spec) string {
 	return m.taskXML("machine-monitor "+string(s.Role), append([]string{s.Exe}, TaskArgs(s)...))
 }
 
-// taskXML renders a logon task that runs argv; argv[0] is the binary.
 func (m *Manager) taskXML(what string, argv []string) string {
 	quoted := make([]string, len(argv)-1)
 	for i, a := range argv[1:] {
@@ -83,8 +75,6 @@ func (m *Manager) taskXML(what string, argv []string) string {
 	return b.String()
 }
 
-// winQuote quotes one argument for a Windows command line, by the rules
-// CommandLineToArgvW reverses (the same as syscall.EscapeArg, which is Windows-only).
 func winQuote(s string) string {
 	if s != "" && !strings.ContainsAny(s, " \t\"") {
 		return s
@@ -104,12 +94,11 @@ func winQuote(s string) string {
 		}
 		b.WriteByte(s[i])
 	}
-	b.WriteString(strings.Repeat(`\`, slashes)) // so the closing quote isn't escaped
+	b.WriteString(strings.Repeat(`\`, slashes))
 	b.WriteByte('"')
 	return b.String()
 }
 
-// utf16File encodes s as UTF-16LE with a byte-order mark, the encoding schtasks /XML expects.
 func utf16File(s string) []byte {
 	u := utf16.Encode([]rune(s))
 	b := make([]byte, 2, 2+2*len(u))
@@ -129,7 +118,7 @@ func (m *Manager) installTask(ctx context.Context, s Spec, out io.Writer) error 
 		return err
 	}
 	fmt.Fprintf(out, "ran schtasks /Create /TN %s /F (logon task for %s)\n", name, m.User)
-	// Stop a copy started by an earlier install so /Run starts the new command line.
+
 	if _, err := m.run(ctx, "schtasks", "/End", "/TN", name); err == nil {
 		fmt.Fprintf(out, "ran schtasks /End /TN %s\n", name)
 	}
@@ -144,8 +133,6 @@ func (m *Manager) installTask(ctx context.Context, s Spec, out io.Writer) error 
 	return nil
 }
 
-// createTask creates or replaces the task name from its XML. schtasks reads the definition
-// from a file, so it's kept in the data dir only while schtasks runs.
 func (m *Manager) createTask(ctx context.Context, name, xml string) error {
 	xmlPath := filepath.Join(m.DataDir, "service-"+name+".xml")
 	if err := config.WriteFile0600(xmlPath, utf16File(xml)); err != nil {
@@ -156,7 +143,6 @@ func (m *Manager) createTask(ctx context.Context, name, xml string) error {
 	return err
 }
 
-// LogFile is where `service run` sends a Windows service's output.
 func LogFile(dataDir string, r Role) string {
 	return filepath.Join(dataDir, "logs", string(r)+".log")
 }
@@ -183,14 +169,12 @@ func (m *Manager) statusTask(ctx context.Context, r Role) Status {
 	return st
 }
 
-// queryTask reports whether the task exists and its status ("Ready", "Running", ...;
-// the words are localized).
 func (m *Manager) queryTask(ctx context.Context, name string) (exists bool, state string) {
 	out, err := m.run(ctx, "schtasks", "/Query", "/TN", name, "/FO", "CSV", "/NH")
 	if err != nil {
-		return false, "" // the task doesn't exist
+		return false, ""
 	}
-	// One row: "\machine-monitor-hub","<next run>","<status>".
+
 	if rec, err := csv.NewReader(strings.NewReader(out)).Read(); err == nil && len(rec) >= 3 {
 		return true, strings.TrimSpace(rec[len(rec)-1])
 	}

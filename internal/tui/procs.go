@@ -11,22 +11,16 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// SystemProcesses returns the ProcessLister for this machine, backed by gopsutil. CPU is
-// percent of one core since the previous call (as top), so a process seen for the first
-// time has nil CPU. GPU columns stay nil: no OS reports them per process without vendor
-// tools.
 func SystemProcesses() ProcessLister {
 	return &sysProcs{seen: map[int32]*process.Process{}, users: map[uint32]*string{}}
 }
 
 type sysProcs struct {
 	mu    sync.Mutex
-	seen  map[int32]*process.Process // kept between calls for CPU deltas
-	users map[uint32]*string         // uid → name; os/user lookups are slow without cgo
+	seen  map[int32]*process.Process
+	users map[uint32]*string
 }
 
-// Processes lists every process this user can see. Per-process read errors (a process
-// that exited, or one owned by another user) leave that field nil rather than failing.
 func (s *sysProcs) Processes(ctx context.Context) ([]report.Process, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -65,7 +59,6 @@ func (s *sysProcs) Processes(ctx context.Context) ([]report.Process, error) {
 	return out, nil
 }
 
-// username resolves a process owner, caching by uid where the OS has uids.
 func (s *sysProcs) username(ctx context.Context, p *process.Process) *string {
 	uids, err := p.UidsWithContext(ctx)
 	if err != nil || len(uids) == 0 {

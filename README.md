@@ -187,7 +187,7 @@ Open 7777/TCP (and 7778/UDP for discovery) on the hub's firewall for your local 
 machine-monitor reimplements, as a TUI, the features of
 [Device Monitor](https://github.com/Forward-Future/device-monitor) by Matt / Forward Future
 (MIT). Logic ported from it (the power model, electricity price table, alert rules and report
-validation) keeps its MIT notice in the source files it lands in.
+validation) is listed, with upstream's MIT notice, in [NOTICE.md](NOTICE.md).
 
 ## License
 

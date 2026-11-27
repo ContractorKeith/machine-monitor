@@ -9,15 +9,10 @@ import (
 	"github.com/NimbleMarkets/ntcharts/v2/canvas/graph"
 )
 
-// historyLen is how many samples a series keeps: 4 minutes at the 2 s default, enough to
-// fill the widest card.
 const historyLen = 120
 
-// series is a fixed-length history of one percentage metric, oldest first. An unknown
-// sample is NaN, drawn as a gap.
 type series struct{ v []float64 }
 
-// push appends a sample; nil (or NaN) is recorded as unknown so the line keeps its timing.
 func (s *series) push(p *float64) {
 	v := math.NaN()
 	if p != nil {
@@ -29,13 +24,11 @@ func (s *series) push(p *float64) {
 	}
 }
 
-// then is s followed by later, cut to historyLen.
 func (s series) then(later series) series {
 	v := append(slices.Clone(s.v), later.v...)
 	return series{v[max(0, len(v)-historyLen):]}
 }
 
-// known reports whether the series has any known sample.
 func (s series) known() bool {
 	for _, v := range s.v {
 		if !math.IsNaN(v) {
@@ -45,12 +38,8 @@ func (s series) known() bool {
 	return false
 }
 
-// sparkHeight is the sparkline height in rows.
 const sparkHeight = 2
 
-// spark draws the last w samples of a 0–100 series right-aligned in a sparkHeight-row chart,
-// with a gap for each unknown sample: braille through ntcharts' braille grid by default, or
-// an ASCII ramp under the fallback.
 func (t theme) spark(s series, w int) string {
 	if w <= 0 {
 		return ""
@@ -84,9 +73,8 @@ func (t theme) spark(s series, w int) string {
 	return c.View()
 }
 
-// asciiSpark draws d right-aligned in w columns over sparkHeight rows using ASCII only.
 func asciiSpark(d []float64, w int) string {
-	const ramp = " .-=#" // a cell's fill level, 0–4
+	const ramp = " .-=#"
 	levels := len(ramp) - 1
 	rows := make([][]byte, sparkHeight)
 	for i := range rows {
@@ -95,11 +83,11 @@ func asciiSpark(d []float64, w int) string {
 	off := w - len(d)
 	for i, v := range d {
 		if math.IsNaN(v) {
-			continue // gap
+			continue
 		}
-		n := int(v/100*float64(levels*sparkHeight) + 0.5) // filled levels across all rows
+		n := int(v/100*float64(levels*sparkHeight) + 0.5)
 		n = max(0, min(n, levels*sparkHeight))
-		for r := range sparkHeight { // r = 0 is the bottom row
+		for r := range sparkHeight {
 			cell := max(0, min(n-r*levels, levels))
 			rows[sparkHeight-1-r][off+i] = ramp[cell]
 		}

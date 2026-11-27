@@ -16,10 +16,8 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// localID is the one device of local mode.
 const localID = "local"
 
-// view is one of the numbered screens.
 type view int
 
 const (
@@ -30,20 +28,18 @@ const (
 	viewEnergy
 	viewAlerts
 	viewCount
-	// Views without a number or tab.
-	viewSettings  = viewCount     // `,`
-	viewAddDevice = viewCount + 1 // `a` on the dashboard or in Settings (hub mode)
+
+	viewSettings  = viewCount
+	viewAddDevice = viewCount + 1
 )
 
 var viewNames = [viewCount]string{"Dashboard", "Device", "Processes", "History", "Energy", "Alerts"}
 
-// viewKeys are the number keys, which follow PLAN §7 even where a view isn't built yet.
 var viewKeys = [viewCount]string{"1", "2", "3", "4", "5", "6"}
 
-// Messages.
 type (
 	tickMsg   struct{}
-	startMsg  struct{} // Init's reads are due (see Init)
+	startMsg  struct{}
 	reportMsg struct {
 		r   *report.Report
 		err error
@@ -54,7 +50,6 @@ type (
 	}
 )
 
-// model is the whole TUI state. Bubble Tea copies it by value on every Update.
 type model struct {
 	opts  Options
 	theme theme
@@ -65,42 +60,38 @@ type model struct {
 	view          view
 	showHelp      bool
 
-	// devs are the devices the views show, in display order; sel is the selected one's id.
-	// Local mode has one device, hub mode one per device on the hub.
 	devs       []device
 	sel        string
 	collectErr error
 
-	// Hub mode.
-	ctx       context.Context // ends the stream and requests; Run cancels it on quit
+	ctx       context.Context
 	events    <-chan client.Event
 	conn      hubConn
 	rename    textinput.Model
-	renameID  string // device being renamed while rename is focused
-	confirmID string // device awaiting remove confirmation
-	notice    string // last action's error, until the next action or reconnect
-	orderGen  int    // counts order and snapshot events, so a late reorder failure can't undo them
-	// While a batch of stream events applies: devs is already this model's own copy (owned)
-	// and needs sorting at the end (dirty).
-	batching, owned, dirty bool
-	seeding                string // device whose sparkline history is being fetched (sparkSeed)
+	renameID  string
+	confirmID string
+	notice    string
+	orderGen  int
 
-	act actState // remote processes, wake and the power menu (actions.go)
+	batching, owned, dirty bool
+	seeding                string
+
+	act actState
 
 	deviceScroll int
 
-	al alertsUI // the Alerts view and the banner (alerts.go)
+	al alertsUI
 
-	hv    histState      // the History view (history.go)
-	ev    energyState    // the Energy view (energy.go)
-	guess power.Settings // price guessed from the time zone, until one is saved
+	hv    histState
+	ev    energyState
+	guess power.Settings
 
-	set   settingsState // the Settings view (settings.go)
-	add   addState      // the Add device view (add.go)
-	today todayState    // cost since midnight, for the dashboard header (energy.go)
+	set   settingsState
+	add   addState
+	today todayState
 
 	procs       []report.Process
-	visible     []report.Process // procs filtered and sorted; refreshProcs keeps it current
+	visible     []report.Process
 	procsErr    error
 	procsBusy   bool
 	procSort    sortCol
@@ -108,10 +99,9 @@ type model struct {
 	procCursor  int
 	procOffset  int
 	filter      textinput.Model
-	filterValue string // the one filter: device names on the dashboard, processes in Processes
+	filterValue string
 }
 
-// New builds the model. Tests drive it through teatest; Run wraps it in a program.
 func New(o Options) tea.Model {
 	if o.Interval <= 0 {
 		o.Interval = DefaultInterval
@@ -129,9 +119,9 @@ func New(o Options) tea.Model {
 	f.Placeholder = "name, user, pid or command"
 	rn := textinput.New()
 	rn.Prompt = ""
-	rn.CharLimit = 60 // the hub's limit
+	rn.CharLimit = 60
 	if o.Hub != nil {
-		o.Procs = nil // the hub supplies process lists (actions.go)
+		o.Procs = nil
 	}
 	if o.Now == nil {
 		o.Now = time.Now
@@ -151,10 +141,6 @@ func New(o Options) tea.Model {
 	}
 }
 
-// Init starts the feed: the first local sample, or the hub's stream. Bubble Tea throws
-// away the model Init runs on, so nothing here may change state: the reads that track
-// requests in the model (cost today, the alerts behind the header's count) start when
-// startMsg reaches Update.
 func (m model) Init() tea.Cmd {
 	start := func() tea.Msg { return startMsg{} }
 	if m.multi() {
@@ -163,7 +149,6 @@ func (m model) Init() tea.Cmd {
 	return tea.Batch(m.collect(), start)
 }
 
-// start begins the reads Init can't: they number their requests in the live model.
 func (m model) start() (model, tea.Cmd) {
 	today := m.fetchToday()
 	var alerts tea.Cmd
@@ -173,13 +158,10 @@ func (m model) start() (model, tea.Cmd) {
 	return m, tea.Batch(today, alerts)
 }
 
-// multi reports whether the TUI follows a hub (many devices) rather than this machine.
 func (m model) multi() bool { return m.opts.Hub != nil }
 
-// now is the clock, for "last seen" times.
 func (m model) now() time.Time { return m.opts.Now() }
 
-// collect samples the machine off the UI goroutine.
 func (m model) collect() tea.Cmd {
 	c := m.opts.Collector
 	return func() tea.Msg {
@@ -193,7 +175,6 @@ func (m model) collect() tea.Cmd {
 	}
 }
 
-// listProcs fetches the process list off the UI goroutine.
 func (m model) listProcs() tea.Cmd {
 	l := m.opts.Procs
 	return func() tea.Msg {
@@ -204,7 +185,6 @@ func (m model) listProcs() tea.Cmd {
 	}
 }
 
-// maybeProcs starts a process fetch when the Processes view is open and none is running.
 func (m *model) maybeProcs() tea.Cmd {
 	if m.multi() {
 		return m.startRemoteProcs()
@@ -216,7 +196,6 @@ func (m *model) maybeProcs() tea.Cmd {
 	return m.listProcs()
 }
 
-// Update handles one message.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if next, cmd, ok := m.updateAlerts(msg); ok {
 		return next, cmd
@@ -244,7 +223,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.collectErr = msg.err
 		if msg.r != nil {
 			r := msg.r
-			cleanAll(r) // before anything reads the hostname or the strings in the report
+			cleanAll(r)
 			m.recordLocal(r)
 			m.sel = localID
 			m.editDev(localID, func(d *device) {
@@ -278,12 +257,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleKey routes a key press: filter input first, then global keys, then the view's keys.
 func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if msg.String() == "ctrl+c" { // always quits; plain q is text while filtering
+	if msg.String() == "ctrl+c" {
 		return m, tea.Quit
 	}
-	m.notice = "" // a notice (a refused J/K, a failed action) answers one key press, not the session
+	m.notice = ""
 	if m.rename.Focused() || m.confirmID != "" {
 		return m.hubInputKey(msg)
 	}
@@ -323,7 +301,7 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, k.Alerts):
 		return m.switchTo(viewAlerts)
 	case key.Matches(msg, k.Next):
-		return m.switchTo((m.view + 1) % viewCount) // Settings and Add device go to view 1
+		return m.switchTo((m.view + 1) % viewCount)
 	case key.Matches(msg, k.Settings) && m.view != viewSettings:
 		m.set.prev = m.view
 		if m.view == viewAddDevice {
@@ -334,7 +312,7 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.openFilter()
 	}
 
-	if m.showHelp { // view keys would act on a view that isn't shown
+	if m.showHelp {
 		return m, nil
 	}
 	switch m.view {
@@ -366,8 +344,6 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// openFilter focuses the filter input for the open view: device names on the dashboard,
-// processes in Processes.
 func (m model) openFilter() (tea.Model, tea.Cmd) {
 	m.filter.Placeholder = "name, user, pid or command"
 	if m.view == viewDashboard {
@@ -378,8 +354,6 @@ func (m model) openFilter() (tea.Model, tea.Cmd) {
 	return m, m.filter.Focus()
 }
 
-// filterKey handles a key while the filter input is open: typing filters at once, enter
-// keeps the filter, esc clears it.
 func (m model) filterKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	switch msg.String() {
@@ -396,18 +370,15 @@ func (m model) filterKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// applyFilter re-applies the one filter to both the device cards and the process list.
 func (m *model) applyFilter() {
 	m.selectShown()
 	m.procCursor, m.procOffset = 0, 0
 	m.refreshProcs()
 }
 
-// switchTo changes view and closes help; opening Processes, History, Energy or Alerts
-// reads its data at once.
 func (m model) switchTo(v view) (tea.Model, tea.Cmd) {
 	m.view, m.showHelp = v, false
-	// Each starter bumps state through m, so call them before returning m.
+
 	procs := m.maybeProcs()
 	alerts := m.maybeLoadAlerts()
 	open := m.openView()
@@ -419,10 +390,8 @@ func (m model) switchTo(v view) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(procs, alerts, open, set)
 }
 
-// bodyHeight is the rows between the header (and the alert banner) and the footer.
 func (m model) bodyHeight() int { return max(1, m.height-2-m.bannerRows()) }
 
-// scrollDevice moves the Device view.
 func (m *model) scrollDevice(msg tea.KeyPressMsg) {
 	k := m.keys
 	switch {
@@ -442,7 +411,6 @@ func (m *model) scrollDevice(msg tea.KeyPressMsg) {
 	m.clampScroll()
 }
 
-// clampScroll keeps scroll offsets and the process cursor in range after any change.
 func (m *model) clampScroll() {
 	maxDev := max(0, len(m.deviceLines())-m.bodyHeight())
 	m.deviceScroll = max(0, min(m.deviceScroll, maxDev))
@@ -462,7 +430,6 @@ func (m *model) clampScroll() {
 	}
 }
 
-// View renders the frame: header, the current view, footer, clipped to the window.
 func (m model) View() tea.View {
 	v := tea.NewView(m.render())
 	v.AltScreen = true
@@ -470,7 +437,6 @@ func (m model) View() tea.View {
 	return v
 }
 
-// render builds the frame as a string; the benchmark and goldens call it directly.
 func (m model) render() string {
 	w, h := m.width, m.height
 	if w <= 0 || h <= 0 {
@@ -501,7 +467,7 @@ func (m model) render() string {
 	case m.view == viewAddDevice:
 		body, foot = m.addView(), m.addFooter()
 	}
-	if h < 3 { // no room for the header and footer: the body alone
+	if h < 3 {
 		return fit(body, w, h)
 	}
 	top := fit(m.header(), w, 1)
@@ -511,7 +477,6 @@ func (m model) render() string {
 	return top + "\n" + fit(body, w, m.bodyHeight()) + "\n" + fit(m.theme.dim.Render(foot), w, 1)
 }
 
-// header shows the app, the hub or machine, the view tabs and the help hint.
 func (m model) header() string {
 	t := m.theme
 	title := t.title.Render("machine-monitor")
@@ -520,7 +485,7 @@ func (m model) header() string {
 	switch {
 	case m.multi():
 		left += sep + "hub " + m.hubHost()
-		// Views about one device name it after the hub, so the hub never drops out.
+
 		if d := m.cur(); d != nil && (m.view == viewDevice || m.view == viewProcesses || m.view == viewHistory) {
 			arrow := " › "
 			if t.ascii {
@@ -537,7 +502,7 @@ func (m model) header() string {
 	case viewAddDevice:
 		left += sep + t.label.Render("Add device")
 	}
-	// Tabs are named; when they don't fit, only the open one keeps its name.
+
 	tabs := func(compact bool) string {
 		out := make([]string, viewCount)
 		for i := range viewCount {
@@ -553,9 +518,7 @@ func (m model) header() string {
 		}
 		return "  " + strings.Join(out, "")
 	}
-	// A long hub address or a narrow window: shorten the hint first, then the tabs, then
-	// drop the hint, then the hub or machine name, then the title, so the open view's name
-	// stays in sight.
+
 	for _, try := range []struct {
 		left    string
 		compact bool
@@ -569,7 +532,6 @@ func (m model) header() string {
 	return spread(strings.TrimPrefix(tabs(true), "  "), "", m.width)
 }
 
-// statusLine is the footer for views without their own: collection state.
 func (m model) statusLine() string {
 	switch {
 	case m.collectErr != nil:

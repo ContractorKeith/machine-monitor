@@ -19,7 +19,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// fakeExec records the power actions it was asked to run.
 type fakeExec struct {
 	mu  sync.Mutex
 	ran []string
@@ -88,8 +87,6 @@ func TestVerify(t *testing.T) {
 	}
 }
 
-// TestBadCommandsIgnored: a hub reply carrying unsigned, wrongly signed, expired and
-// replayed commands runs only the one good command, once, and reports its result.
 func TestBadCommandsIgnored(t *testing.T) {
 	f := &fakeHub{t: t, hubKey: ourKey}
 	u := startFake(t, f)
@@ -119,14 +116,14 @@ func TestBadCommandsIgnored(t *testing.T) {
 	good := signed(ourKey, "x", "0123456789ab", "sleep", cmdNow)
 	f.set(func() {
 		f.cmds = []Command{
-			{ID: "aaaaaaaaaaaa", Action: "shutdown", T: cmdNow.UnixMilli()}, // unsigned
+			{ID: "aaaaaaaaaaaa", Action: "shutdown", T: cmdNow.UnixMilli()},
 			signed("ffffffffffffffffffffffff", "x", "bbbbbbbbbbbb", "shutdown", cmdNow),
 			signed(ourKey, "x", "cccccccccccc", "shutdown", cmdNow.Add(-2*CommandTTL)),
 			good,
 		}
 	})
 	waitFor(t, "the good command to run", func() bool { return len(ex.actions()) == 1 })
-	f.set(func() { f.cmds = []Command{good} }) // replayed
+	f.set(func() { f.cmds = []Command{good} })
 	n := len(f.reports())
 	waitFor(t, "two more reports", func() bool { return len(f.reports()) >= n+2 })
 	if got := ex.actions(); !slices.Equal(got, []string{"sleep"}) {
@@ -182,7 +179,6 @@ func TestActionsOffByDefault(t *testing.T) {
 	}
 }
 
-// testClock is a settable clock for the real hub.
 type testClock struct {
 	mu sync.Mutex
 	t  time.Time
@@ -195,7 +191,6 @@ func (c *testClock) Add(d time.Duration) {
 	c.t = c.t.Add(d)
 }
 
-// clockedHub serves a real hub on clk over httptest.
 func clockedHub(t *testing.T, clk func() time.Time) (*hub.Hub, *httptest.Server) {
 	t.Helper()
 	h, err := hub.New(hub.Options{Paths: config.At(t.TempDir()), Hostname: "testhub", Now: clk, Logf: t.Logf})
@@ -234,9 +229,6 @@ func latestOf(t *testing.T, srv *httptest.Server, key, id string) *hub.Latest {
 	return nil
 }
 
-// TestPowerActionEndToEnd: the TUI asks the hub to restart a device; the agent gets the
-// signed command in its report reply, runs it through the executor and the hub sees the
-// result.
 func TestPowerActionEndToEnd(t *testing.T) {
 	h, srv := realHub(t)
 	codeStatus, issued := postKeyed(t, srv, h.Token(), "/api/pair/code", "{}")
@@ -285,8 +277,6 @@ func TestPowerActionRefusedByHubWhenOff(t *testing.T) {
 	}
 }
 
-// TestProcessesEndToEnd: the agent lists processes only while someone keeps asking the hub
-// for them, and stops once the hub's watch runs out.
 func TestProcessesEndToEnd(t *testing.T) {
 	clk := &testClock{t: time.Now()}
 	h, srv := clockedHub(t, clk.Now)
@@ -322,8 +312,8 @@ func TestProcessesEndToEnd(t *testing.T) {
 		return p.Procs != nil && len(p.Procs.List) == 1 && *p.Procs.List[0].Name == "ollama"
 	})
 
-	clk.Add(hub.ProcsWatch + time.Second) // the viewer left
-	time.Sleep(50 * time.Millisecond)     // the next reply says stop
+	clk.Add(hub.ProcsWatch + time.Second)
+	time.Sleep(50 * time.Millisecond)
 	n := count()
 	time.Sleep(100 * time.Millisecond)
 	if m := count(); m > n+1 {
@@ -356,8 +346,6 @@ func TestPowerCommand(t *testing.T) {
 	}
 }
 
-// TestSeenSurvivesRestart: an accepted id is saved, so a new agent process refuses the
-// same command; expired ids are dropped when the file is loaded.
 func TestSeenSurvivesRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agent-commands.json")
 	good := signed(ourKey, "dev-1", "a1b2c3d4e5f6", "restart", cmdNow)
@@ -374,7 +362,7 @@ func TestSeenSurvivesRestart(t *testing.T) {
 		}
 	}
 
-	again := guard{key: ourKey, allow: true, path: path} // the agent restarted
+	again := guard{key: ourKey, allow: true, path: path}
 	if err := again.load(cmdNow.Add(10 * time.Second)); err != nil {
 		t.Fatal(err)
 	}

@@ -1,9 +1,5 @@
 package ai
 
-// Detection logic ported from Forward-Future/device-monitor agent/agent.sh (AI_PY),
-// agent/agent-macos.sh and agent/agent.ps1 (Get-AiModels) at c3a4c41.
-// MIT License, Copyright (c) 2026 Matt: https://github.com/Forward-Future/device-monitor
-
 import (
 	"context"
 	"os"
@@ -20,16 +16,16 @@ import (
 )
 
 const (
-	every       = 5                       // run on every 5th sample, as upstream's agents do
-	timeout     = 4 * time.Second         // whole probe; lms is a Node CLI and can take ~1 s
-	httpTimeout = 1500 * time.Millisecond // per request, upstream's urlopen timeout
-	minGPUMem   = 256 << 20               // ignore GPU processes holding less than this
-	maxGroups   = 8                       // upstream sends at most 8 groups
+	every       = 5
+	timeout     = 4 * time.Second
+	httpTimeout = 1500 * time.Millisecond
+	minGPUMem   = 256 << 20
+	maxGroups   = 8
 )
 
 var (
 	lmsProcRe  = regexp.MustCompile(`lmstudio|llmster`)
-	skipProcRe = regexp.MustCompile(`ollama|lmstudio|llmster`) // reported by their own APIs
+	skipProcRe = regexp.MustCompile(`ollama|lmstudio|llmster`)
 )
 
 func init() {
@@ -37,25 +33,21 @@ func init() {
 	collect.Register(collect.Probe{Name: "ai/models", Every: every, Timeout: timeout, Run: d.run})
 }
 
-// detector finds loaded AI models. Its fields are the seams tests replace.
 type detector struct {
-	host       string // always loopback; never configurable from outside
+	host       string
 	ollamaPort string
-	comfyPort  string // default ComfyUI port when a process doesn't pass --port
+	comfyPort  string
 	nvidiaSMI  []string
-	lms        []string                                  // command prefix for `lms`; lms[0] must exist
-	lmsPIDs    func(ctx context.Context) []int           // LM Studio / llmster processes; none when not running
-	proc       func(pid int) (argv []string, cwd string) // nil argv when unreadable
-	comfyRoots []string                                  // extra ComfyUI models dirs to size files in
-	// Windows only (nil elsewhere), as agent.ps1: GPU memory per pid from the perf counters;
-	// whether a port has a listener (which gates the ComfyUI check) and its pid, 0 when
-	// unknown; and a process's command line.
+	lms        []string
+	lmsPIDs    func(ctx context.Context) []int
+	proc       func(pid int) (argv []string, cwd string)
+	comfyRoots []string
+
 	gpuMem   func(ctx context.Context) map[int]float64
 	listener func(ctx context.Context, port string) (listening bool, pid int)
 	cmdline  func(ctx context.Context, pid int) string
 }
 
-// newDetector returns a detector wired to this machine's tools.
 func newDetector() *detector {
 	d := &detector{
 		host:       "127.0.0.1",
@@ -76,8 +68,7 @@ func newDetector() *detector {
 		}
 		d.lms = []string{lms}
 	}
-	// GPU compute processes need a readable cmdline and cwd, which only Linux gives us
-	// without extra dependencies (upstream's macOS agent reads /proc too, so finds none).
+
 	if runtime.GOOS == "linux" {
 		if p, err := lookPath("nvidia-smi"); err == nil {
 			d.nvidiaSMI = []string{p}
@@ -86,12 +77,10 @@ func newDetector() *detector {
 	return d
 }
 
-// run is the probe's Run. It always returns an Apply on success, so a check that found
-// nothing still sets r.AI to an empty, non-nil slice.
 func (d *detector) run(ctx context.Context) (collect.Apply, error) {
 	groups := d.detect(ctx)
 	if err := ctx.Err(); err != nil {
-		return nil, err // partial results would look like "nothing loaded"
+		return nil, err
 	}
 	return func(r *report.Report) {
 		if r.AI == nil {
@@ -101,8 +90,6 @@ func (d *detector) run(ctx context.Context) (collect.Apply, error) {
 	}, nil
 }
 
-// detect runs every check and returns the groups in upstream's order: Ollama, LM Studio,
-// GPU processes by memory, then ComfyUI found only through its HTTP API.
 func (d *detector) detect(ctx context.Context) []report.AIGroup {
 	var (
 		wg     sync.WaitGroup
@@ -117,7 +104,6 @@ func (d *detector) detect(ctx context.Context) []report.AIGroup {
 	go func() { defer wg.Done(); lms, lmsPID = d.lmsModels(ctx) }()
 	wg.Wait()
 
-	// Windows has no per-process cmdline match; agent.ps1 reads GPU memory by pid instead.
 	var winMem map[int]float64
 	winMemOf := func(pids ...int) *float64 {
 		if winMem == nil {
@@ -180,9 +166,9 @@ func (d *detector) detect(ctx context.Context) []report.AIGroup {
 
 	switch {
 	case haveComfy:
-	case d.listener != nil: // Windows, as agent.ps1: the port has a listener and /history answers
+	case d.listener != nil:
 		if listening, owner := d.listener(ctx, d.comfyPort); listening {
-			// The owner, when known, gives the GPU memory and the models root next to main.py.
+
 			var mem *float64
 			home := ""
 			if owner > 0 {
@@ -208,7 +194,6 @@ func (d *detector) detect(ctx context.Context) []report.AIGroup {
 	return groups
 }
 
-// byMemDesc returns the pids sorted by GPU memory, largest first (pid breaks ties).
 func byMemDesc(gpu map[int]float64) []int {
 	pids := make([]int, 0, len(gpu))
 	for p := range gpu {
@@ -223,9 +208,6 @@ func byMemDesc(gpu map[int]float64) []int {
 	return pids
 }
 
-// classify names the app behind a GPU process from its argv, and the model it serves if
-// the command line says. A model path that exists is shortened to its base name; a hub
-// id like "Qwen/Qwen3-8B" is kept whole. Relative paths resolve against the process cwd.
 func classify(argv []string, cwd string) (app, model string) {
 	cmd := strings.ToLower(strings.Join(argv, " "))
 	switch {
@@ -238,7 +220,7 @@ func classify(argv []string, cwd string) (app, model string) {
 	default:
 		app = filepath.Base(argv[0])
 	}
-	// Upstream reads "python -m vllm..." as model "vllm...": skip the interpreter's -m.
+
 	args := argv
 	if len(args) > 2 && strings.HasPrefix(filepath.Base(args[0]), "python") && args[1] == "-m" {
 		args = args[3:]
@@ -266,7 +248,6 @@ func classify(argv []string, cwd string) (app, model string) {
 	return app, model
 }
 
-// argValue returns the value of the first of names in argv, as "--x v" or "--x=v".
 func argValue(argv []string, names ...string) string {
 	for i, a := range argv {
 		for _, n := range names {

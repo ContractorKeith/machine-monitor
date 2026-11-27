@@ -10,7 +10,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// TestStatusJSON runs status --json against this machine, so CI checks it on every OS.
 func TestStatusJSON(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if code := run([]string{"status", "--json"}, &out, &errOut); code != 0 {
@@ -24,8 +23,7 @@ func TestStatusJSON(t *testing.T) {
 	if r.Platform != want || r.ID == "" || r.Agent != "machine-monitor/dev" {
 		t.Errorf("platform, id, agent = %q, %q, %q", r.Platform, r.ID, r.Agent)
 	}
-	// Two samples a second apart: every CI runner has CPU usage, memory, a disk and a
-	// network interface, so an OS whose collector returns one of them empty fails here.
+
 	if r.CPU.Usage == nil || r.Memory.Total == nil || r.Memory.Used == nil || r.Uptime == nil ||
 		len(r.Disks) == 0 || len(r.NetIfaces) == 0 {
 		t.Errorf("missing core metrics:\n%s", out.String())

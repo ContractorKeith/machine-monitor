@@ -1,10 +1,3 @@
-// Package client is the read side of a hub's API (PLAN §5 "Connected TUI", §6): the device
-// snapshot, the live SSE stream with reconnects, rename, remove and reorder, processes on
-// demand and remote actions.
-//
-// Every request carries the hub key as a Bearer token. Before the first request on each
-// connection the client checks the hub's proof of the key (GET /api/info?nonce=), so the key
-// is never sent to a machine that doesn't already know it.
 package client
 
 import (
@@ -28,28 +21,18 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/hub"
 )
 
-// Device is one device as the hub shows it: registry entry, online flag, last report and
-// recent history. It is the hub's own wire type, so the two can't drift apart.
 type Device = hub.View
 
-// DefaultPort is used when a hub URL names no port.
 const DefaultPort = hub.DefaultPort
 
-// requestTimeout bounds every request except the stream.
 const requestTimeout = 15 * time.Second
 
-// maxResponse caps a response body read into memory (a full snapshot of MaxDevices with
-// ten minutes of history each stays well under it).
 const maxResponse = 64 << 20
 
-// ErrUnauthorized means the hub refused the key. Retrying won't help.
 var ErrUnauthorized = errors.New("the hub refused the key")
 
-// ErrBadProof means the machine at the URL could not prove it knows the key, so the key was
-// not sent. Either the key is wrong or this is not the hub it claims to be.
 var ErrBadProof = errors.New("the hub could not prove it knows the key (wrong key, or not your hub)")
 
-// StatusError is an HTTP error from the hub, with its {"error": "..."} message when it sent one.
 type StatusError struct {
 	Code    int
 	Message string
@@ -62,23 +45,19 @@ func (e *StatusError) Error() string {
 	return fmt.Sprintf("hub: %d %s", e.Code, http.StatusText(e.Code))
 }
 
-// Client talks to one hub. It is safe for concurrent use.
 type Client struct {
 	base *url.URL
 	key  string
 
 	vmu      sync.Mutex
-	verified bool         // the hub has proved it knows the key; keyed requests may go out
-	http     *http.Client // requests (with requestTimeout)
-	// stream is for the SSE stream: no overall timeout, since it stays open; a stalled
-	// stream is caught by the idle watchdog instead.
+	verified bool
+	http     *http.Client
+
 	stream *http.Client
-	// owner names this client on its stream and its pairing codes, so the hub ends a code
-	// from the Add device view once this client's stream is gone (a killed TUI).
+
 	owner string
 }
 
-// New returns a client for the hub at hubURL ("http://host:7777", "host:7777" or "host").
 func New(hubURL, key string) (*Client, error) {
 	u, err := ParseURL(hubURL)
 	if err != nil {
@@ -88,7 +67,7 @@ func New(hubURL, key string) (*Client, error) {
 		return nil, errors.New("no hub key")
 	}
 	tr := &http.Transport{
-		Proxy:                 nil, // LAN and tailnet only; a proxy would see the key
+		Proxy:                 nil,
 		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		ResponseHeaderTimeout: 10 * time.Second,
 		MaxIdleConnsPerHost:   4,
@@ -101,14 +80,10 @@ func New(hubURL, key string) (*Client, error) {
 		stream: &http.Client{Transport: tr}}, nil
 }
 
-// URL is the hub's base URL, e.g. "http://192.168.1.5:7777".
 func (c *Client) URL() string { return c.base.String() }
 
-// Host is the hub's host:port, for display.
 func (c *Client) Host() string { return c.base.Host }
 
-// ParseURL normalizes a hub address: a missing scheme is http, a missing port is 7777, and
-// any path, query or user info is refused.
 func ParseURL(s string) (*url.URL, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -117,7 +92,7 @@ func ParseURL(s string) (*url.URL, error) {
 	if !strings.Contains(s, "://") {
 		s = "http://" + s
 	}
-	// Errors never echo the URL: it may carry a password.
+
 	u, err := url.Parse(s)
 	if err != nil {
 		return nil, errors.New("hub URL: not a valid address; want http://host:port")
@@ -138,17 +113,12 @@ func ParseURL(s string) (*url.URL, error) {
 	return &url.URL{Scheme: u.Scheme, Host: host}, nil
 }
 
-// SameHub reports whether two hub addresses name the same hub after normalizing.
 func SameHub(a, b string) bool {
 	ua, err1 := ParseURL(a)
 	ub, err2 := ParseURL(b)
 	return err1 == nil && err2 == nil && strings.EqualFold(ua.String(), ub.String())
 }
 
-// ---- requests ----------------------------------------------------------------------------
-
-// verifyOnce checks the hub's proof before the client's first keyed request. A failure is
-// not remembered, so the next request tries again.
 func (c *Client) verifyOnce(ctx context.Context) error {
 	c.vmu.Lock()
 	defer c.vmu.Unlock()
@@ -162,8 +132,6 @@ func (c *Client) verifyOnce(ctx context.Context) error {
 	return nil
 }
 
-// do sends one keyed request and decodes a JSON reply into out (unless out is nil). The key
-// goes out only after the hub has proved it knows it.
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
 	if err := c.verifyOnce(ctx); err != nil {
 		return err
@@ -209,7 +177,6 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	return nil
 }
 
-// statusErr turns a non-2xx status into an error, ErrUnauthorized for 401.
 func statusErr(code int, body []byte) error {
 	if code >= 200 && code < 300 {
 		return nil
@@ -224,13 +191,11 @@ func statusErr(code int, body []byte) error {
 	if json.Unmarshal(body, &e) == nil {
 		msg = e.Error
 	} else if len(body) > 0 && len(body) < 200 {
-		msg = strings.TrimSpace(string(body)) // the guard answers in plain text
+		msg = strings.TrimSpace(string(body))
 	}
 	return &StatusError{Code: code, Message: msg}
 }
 
-// Verify checks the hub's proof of the key without sending the key: it sends a random nonce
-// to the open /api/info and compares the reply with HMAC-SHA256(key, "device-monitor-hub:"+nonce).
 func (c *Client) Verify(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
@@ -270,7 +235,6 @@ func (c *Client) Verify(ctx context.Context) error {
 	return nil
 }
 
-// Devices is GET /api/devices: every device with its last report and recent history.
 func (c *Client) Devices(ctx context.Context) ([]Device, error) {
 	var out []Device
 	if err := c.do(ctx, "GET", "/api/devices", nil, &out); err != nil {
@@ -279,7 +243,6 @@ func (c *Client) Devices(ctx context.Context) ([]Device, error) {
 	return out, nil
 }
 
-// Rename is PATCH /api/devices/:id. It returns the device as the hub now has it.
 func (c *Client) Rename(ctx context.Context, id, name string) (*Device, error) {
 	var out Device
 	if err := c.do(ctx, "PATCH", "/api/devices/"+url.PathEscape(id), map[string]string{"name": name}, &out); err != nil {
@@ -288,12 +251,10 @@ func (c *Client) Rename(ctx context.Context, id, name string) (*Device, error) {
 	return &out, nil
 }
 
-// Remove is DELETE /api/devices/:id: the hub forgets the device and its history.
 func (c *Client) Remove(ctx context.Context, id string) error {
 	return c.do(ctx, "DELETE", "/api/devices/"+url.PathEscape(id), nil, nil)
 }
 
-// SetOrder is PUT /api/order: ids in display order. Unknown ids are ignored by the hub.
 func (c *Client) SetOrder(ctx context.Context, ids []string) error {
 	if ids == nil {
 		ids = []string{}
@@ -301,12 +262,8 @@ func (c *Client) SetOrder(ctx context.Context, ids []string) error {
 	return c.do(ctx, "PUT", "/api/order", map[string][]string{"ids": ids}, nil)
 }
 
-// Processes is a device's process list as GET /api/devices/:id/processes returns it.
 type Processes = hub.ProcessesReply
 
-// Processes is GET /api/devices/:id/processes. Each call keeps the device sending its list
-// for hub.ProcsWatch, so a viewer calls it about every report interval while it shows the
-// list. Procs is nil until the device has sent one.
 func (c *Client) Processes(ctx context.Context, id string) (*Processes, error) {
 	var out Processes
 	if err := c.do(ctx, "GET", "/api/devices/"+url.PathEscape(id)+"/processes", nil, &out); err != nil {
@@ -315,9 +272,6 @@ func (c *Client) Processes(ctx context.Context, id string) (*Processes, error) {
 	return &out, nil
 }
 
-// Action is POST /api/devices/:id/action: "wake" (Wake-on-LAN from the hub), or "sleep",
-// "restart" or "shutdown" for a device that allows them. A power action is only queued;
-// its outcome arrives later as an actionResult event.
 func (c *Client) Action(ctx context.Context, id, action string) error {
 	return c.do(ctx, "POST", "/api/devices/"+url.PathEscape(id)+"/action", map[string]string{"action": action}, nil)
 }

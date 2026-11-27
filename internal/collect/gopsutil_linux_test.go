@@ -10,8 +10,6 @@ import (
 	"github.com/shirou/gopsutil/v4/common"
 )
 
-// TestGopsutilProcFixture checks the real ps against the procfs fixture tree, through
-// gopsutil's HOST_PROC override, so the Linux wiring is tested end to end.
 func TestGopsutilProcFixture(t *testing.T) {
 	proc, err := filepath.Abs("testdata/linux/proc")
 	if err != nil {

@@ -18,9 +18,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/hub"
 )
 
-// slowReadConn reads at most rate bytes a second from a real TCP connection whose kernel
-// receive buffer is small, as a slow link does: what the link can't carry yet waits in the
-// hub's send queue, not in the client's kernel.
 type slowReadConn struct {
 	net.Conn
 	rate  int
@@ -42,15 +39,6 @@ func (c *slowReadConn) Read(b []byte) (int, error) {
 	return n, err
 }
 
-// TestSlowStreamStaysFresh is skeptic report N1: over a link slower than the compact
-// stream's own output, the hub's writes returned as soon as the kernel took the bytes, so
-// megabytes queued in its send buffer, nothing coalesced, the data fell minutes behind and
-// the hub finally dropped the stream. Through a real socket whose reader is throttled, every
-// report must arrive within a bound of when the hub received it, and the stream must stay
-// up on one connection.
-//
-// It runs for 45 s; MM_SLOWSTREAM=3m runs it for longer, and MM_SLOWSTREAM_RATE=N over a
-// link of N bytes a second.
 func TestSlowStreamStaysFresh(t *testing.T) {
 	if raceDetector {
 		t.Skip("timing test; the race detector slows everything several times over")
@@ -61,11 +49,10 @@ func TestSlowStreamStaysFresh(t *testing.T) {
 	const (
 		devices  = hub.MaxDevices
 		interval = 2 * time.Second
-		warmUp   = 15 * time.Second // connect and the first snapshot
+		warmUp   = 15 * time.Second
 		maxAge   = 10 * time.Second
 	)
-	// 200 KB/s is well under the stream's own output here (about 340 KB/s uncompressed), as
-	// 20 KB/s is under its 33 KB/s with gzip in the field (the report's throttle).
+
 	duration, rate := 45*time.Second, 200<<10
 	if s := os.Getenv("MM_SLOWSTREAM_RATE"); s != "" {
 		if _, err := fmt.Sscan(s, &rate); err != nil {
@@ -117,7 +104,7 @@ func TestSlowStreamStaysFresh(t *testing.T) {
 		req.Header.Set("Content-Type", "application/json")
 		handler.ServeHTTP(httptest.NewRecorder(), req)
 	}
-	// Every device reports every interval, through the handler: only the TUI's link is slow.
+
 	loadCtx, stopLoad := context.WithCancel(ctx)
 	var wg sync.WaitGroup
 	defer wg.Wait()
@@ -144,8 +131,7 @@ func TestSlowStreamStaysFresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	tr := c.stream.Transport.(*http.Transport)
-	// Uncompressed: the test's reports are near copies of one another, so gzip would hide
-	// how much the link carries.
+
 	tr.DisableCompression = true
 	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		conn, err := (&net.Dialer{}).DialContext(ctx, network, addr)
@@ -165,7 +151,7 @@ func TestSlowStreamStaysFresh(t *testing.T) {
 		worst           time.Duration
 		worstAt         time.Duration
 		reports         int
-		seen            = map[string]int64{} // device -> newest LastSeen (Unix ms)
+		seen            = map[string]int64{}
 	)
 	end := time.After(duration)
 loop:

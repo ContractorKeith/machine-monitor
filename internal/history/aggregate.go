@@ -1,8 +1,3 @@
-// Bucket aggregation and same-minute merging.
-//
-// Ported from Forward-Future/device-monitor history.js @ c3a4c41
-// (MIT, © 2026 Matt): https://github.com/Forward-Future/device-monitor
-
 package history
 
 import (
@@ -10,9 +5,6 @@ import (
 	"strconv"
 )
 
-// aggregate averages points into buckets width ms wide, aligned to start. Each bucket keeps
-// the peak of the peaked fields, taken from a point's *Max field when it has one (so minutes
-// re-aggregate correctly) and its value otherwise. points must be sorted by T.
 func aggregate(points []Point, width, start float64) []Point {
 	var out []Point
 	var cur Point
@@ -58,9 +50,6 @@ func aggregate(points []Point, width, start float64) []Point {
 	return out
 }
 
-// merge combines two points for the same minute (e.g. one flushed at hub shutdown, one after
-// restart), weighting averages by their sample counts. Rows written before counts were stored
-// count as 1.
 func merge(a, b Point) Point {
 	na, nb := max(a.N, 1), max(b.N, 1)
 	p := Point{T: a.T, N: na + nb}
@@ -91,10 +80,6 @@ func merge(a, b Point) Point {
 	return p
 }
 
-// round2 is JavaScript's +x.toFixed(2): round to 2 decimals, exact ties away from zero.
-// strconv rounds the exact binary value correctly but breaks exact ties to even, and a tie
-// at 2 decimals is exactly an odd multiple of 1/8 (0.125, 2.375, ...), so those are handled
-// first; x*100 and x*100+0.5 are exact for them.
 func round2(x float64) float64 {
 	a := math.Abs(x)
 	var r float64
@@ -104,7 +89,7 @@ func round2(x float64) float64 {
 		r, _ = strconv.ParseFloat(strconv.FormatFloat(a, 'f', 2, 64), 64)
 	}
 	if r == 0 {
-		return 0 // toFixed never yields -0
+		return 0
 	}
 	return math.Copysign(r, x)
 }

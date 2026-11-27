@@ -18,55 +18,45 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// Defaults for Options.
 const (
 	DefaultInterval   = 2 * time.Second
 	DefaultMaxBackoff = 30 * time.Second
-	MaxProcesses      = 120 // the hub keeps no more than this many rows (normalizeProcesses)
+	MaxProcesses      = 120
 )
 
-// Options configures Run. HubURL, Key and Collector are required.
 type Options struct {
-	HubURL    string // origin, as NormalizeURL returns
+	HubURL    string
 	DeviceKey string
 	Key       string
 	Collector collect.Collector
-	// Procs lists this machine's processes, sent only while the hub asks (reply procs:true).
-	// nil never sends them.
+
 	Procs func(ctx context.Context) ([]report.Process, error)
-	// AllowPowerActions lets the hub sleep, restart or shut down this machine with signed
-	// commands (actions.go). Off by default.
+
 	AllowPowerActions bool
-	// SeenFile is where accepted command ids are kept until they expire, so a restart
-	// doesn't re-accept a captured command (beside client.json). "" keeps them in memory.
+
 	SeenFile string
-	// Exec runs a verified power action; SystemExecutor when nil.
+
 	Exec Executor
-	// Now is the clock commands are checked against; time.Now when nil.
+
 	Now func() time.Time
-	// Version goes into each report as agent: "machine-monitor/<version>".
+
 	Version string
-	// Interval between reports; DefaultInterval when zero.
+
 	Interval time.Duration
-	// MaxBackoff caps the wait between tries while the hub is down; DefaultMaxBackoff when zero.
+
 	MaxBackoff time.Duration
-	// HTTP is the client for hub calls; NewHTTPClient() when nil.
+
 	HTTP *http.Client
-	// Logf logs state changes (connected, hub down, key refused); dropped when nil.
+
 	Logf func(format string, args ...any)
 }
 
-// reply is the body of a successful POST /api/report.
 type reply struct {
 	OK       bool      `json:"ok"`
 	Procs    bool      `json:"procs"`
 	Commands []Command `json:"commands"`
 }
 
-// Run reports to the hub every Interval until ctx is done. While the hub is down or
-// refuses the key it backs off, doubling the wait up to MaxBackoff, and proves the hub
-// again before the next report. It logs only when the state changes. It returns nil when
-// ctx is done.
 func Run(ctx context.Context, opt Options) error {
 	if opt.HubURL == "" || opt.Collector == nil {
 		return errors.New("agent: no hub or collector")
@@ -120,16 +110,15 @@ func Run(ctx context.Context, opt Options) error {
 
 type runner struct {
 	opt       Options
-	proven    bool // the hub proved it holds the key since the last failure
-	wantProcs bool // the hub's last reply asked for processes
+	proven    bool
+	wantProcs bool
 	fails     int
-	state     string // last logged state, so repeats aren't logged
+	state     string
 
-	guard   guard                 // checks power commands (actions.go)
-	results []report.ActionResult // outcomes of commands run, sent one per report
+	guard   guard
+	results []report.ActionResult
 }
 
-// step sends one report: prove the hub if needed, collect, POST.
 func (a *runner) step(ctx context.Context) error {
 	if !a.proven {
 		if err := Prove(ctx, a.opt.HTTP, a.opt.HubURL, a.opt.Key); err != nil {
@@ -150,7 +139,7 @@ func (a *runner) step(ctx context.Context) error {
 		err = errors.New("no report")
 	}
 	if err != nil {
-		return fmt.Errorf("collect: %w", err) // the hub is fine: keep it proven
+		return fmt.Errorf("collect: %w", err)
 	}
 	r.Token = a.opt.Key
 	r.Agent = "machine-monitor/" + a.opt.Version
@@ -176,7 +165,7 @@ func (a *runner) step(ctx context.Context) error {
 		a.proven, a.wantProcs = false, false
 		return err
 	}
-	if r.ActionResult != nil && len(a.results) > 0 { // delivered
+	if r.ActionResult != nil && len(a.results) > 0 {
 		a.results = a.results[1:]
 	}
 	a.wantProcs = rep.Procs
@@ -184,7 +173,6 @@ func (a *runner) step(ctx context.Context) error {
 	return nil
 }
 
-// features is what this agent can do on request, for the report's "features".
 func (a *runner) features() []string {
 	f := []string{}
 	if a.opt.Procs != nil {
@@ -202,7 +190,6 @@ func (a *runner) logf(format string, args ...any) {
 	}
 }
 
-// post sends one report and decodes the reply.
 func (a *runner) post(ctx context.Context, body []byte) (reply, error) {
 	var rep reply
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.opt.HubURL+"/api/report", bytes.NewReader(body))
@@ -236,8 +223,6 @@ func (a *runner) post(ctx context.Context, body []byte) (reply, error) {
 	}
 }
 
-// bare drops the method and URL net/http wraps around a transport error, so the same
-// outage reads the same for a proof (whose URL has a fresh nonce) and a report.
 func bare(err error) error {
 	var ue *url.Error
 	if errors.As(err, &ue) {
@@ -246,7 +231,6 @@ func bare(err error) error {
 	return err
 }
 
-// logState logs msg when the state key changes.
 func (a *runner) logState(msg, key string) {
 	if key == a.state {
 		return
@@ -257,13 +241,10 @@ func (a *runner) logState(msg, key string) {
 	}
 }
 
-// jittered spreads a wait by ×(1 + rand·0.2), so agents that lose the hub together don't
-// retry in lockstep.
 func jittered(d time.Duration) time.Duration {
 	return d + time.Duration(rand.Float64()*0.2*float64(d))
 }
 
-// backoff is the wait after the nth failure in a row: interval × 2^(n-1), capped at max.
 func backoff(interval, max time.Duration, n int) time.Duration {
 	d := interval
 	for range n - 1 {
@@ -275,8 +256,6 @@ func backoff(interval, max time.Duration, n int) time.Duration {
 	return min(d, max)
 }
 
-// topProcesses lists processes, busiest first, at most MaxProcesses. A failure sends none
-// this time rather than holding up the report.
 func topProcesses(ctx context.Context, procs func(context.Context) ([]report.Process, error)) []report.Process {
 	list, err := procs(ctx)
 	if err != nil {

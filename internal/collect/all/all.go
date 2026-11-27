@@ -1,5 +1,3 @@
-// Package all imports every probe package so their init functions register with collect.
-// Binaries that collect import it for side effects: import _ ".../internal/collect/all".
 package all
 
 import (

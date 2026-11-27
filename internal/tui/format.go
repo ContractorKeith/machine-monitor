@@ -9,10 +9,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// none is shown for a metric that is unknown (nil).
 const none = "—"
 
-// fmtPct formats a percentage, or none.
 func fmtPct(p *float64) string {
 	if p == nil {
 		return none
@@ -20,7 +18,6 @@ func fmtPct(p *float64) string {
 	return fmt.Sprintf("%.0f%%", *p)
 }
 
-// fmtBytes formats a byte count with binary units: "12.3 GiB".
 func fmtBytes(b float64) string {
 	const unit = 1024.0
 	if b < unit {
@@ -38,7 +35,6 @@ func fmtBytes(b float64) string {
 	return fmt.Sprintf("%.1f %s", v, units[i])
 }
 
-// fmtBytesP formats an optional byte count.
 func fmtBytesP(b *float64) string {
 	if b == nil {
 		return none
@@ -46,7 +42,6 @@ func fmtBytesP(b *float64) string {
 	return fmtBytes(*b)
 }
 
-// fmtRate formats an optional bytes-per-second rate.
 func fmtRate(b *float64) string {
 	if b == nil {
 		return none
@@ -54,12 +49,10 @@ func fmtRate(b *float64) string {
 	return fmtBytes(*b) + "/s"
 }
 
-// fmtUsedTotal formats "used / total" bytes, either side possibly unknown.
 func fmtUsedTotal(used, total *float64) string {
 	return fmtBytesP(used) + " / " + fmtBytesP(total)
 }
 
-// fmtClock formats a clock in MHz as GHz.
 func fmtClock(mhz *float64) string {
 	if mhz == nil {
 		return none
@@ -67,7 +60,6 @@ func fmtClock(mhz *float64) string {
 	return fmt.Sprintf("%.2f GHz", *mhz/1000)
 }
 
-// fmtWatts formats watts.
 func fmtWatts(w *float64) string {
 	if w == nil {
 		return none
@@ -75,7 +67,6 @@ func fmtWatts(w *float64) string {
 	return fmt.Sprintf("%.0f W", *w)
 }
 
-// fmtUptime formats seconds as "3d 4h 12m".
 func fmtUptime(s *float64) string {
 	if s == nil {
 		return none
@@ -92,7 +83,6 @@ func fmtUptime(s *float64) string {
 	}
 }
 
-// str dereferences an optional string, or none.
 func str(s *string) string {
 	if s == nil || *s == "" {
 		return none
@@ -100,7 +90,6 @@ func str(s *string) string {
 	return *s
 }
 
-// orNone is s, or none when it is empty.
 func orNone(s string) string {
 	if s == "" {
 		return none
@@ -108,7 +97,6 @@ func orNone(s string) string {
 	return s
 }
 
-// pctOf returns used/total as a percentage, or nil when either is unknown or total is 0.
 func pctOf(used, total *float64) *float64 {
 	if used == nil || total == nil || *total <= 0 {
 		return nil
@@ -117,7 +105,6 @@ func pctOf(used, total *float64) *float64 {
 	return &p
 }
 
-// fmtTemp formats a temperature in its band colour, or none.
 func (t theme) fmtTemp(c *float64) string {
 	if c == nil {
 		return none
@@ -125,14 +112,13 @@ func (t theme) fmtTemp(c *float64) string {
 	return t.tempStyle(*c).Render(t.tempV(*c))
 }
 
-// bar draws a w-cell gauge for a percentage; an unknown value draws an empty track.
 func (t theme) bar(p *float64, w int) string {
 	if w <= 0 {
 		return ""
 	}
 	n := 0
 	style := t.barFill
-	if p != nil && !math.IsNaN(*p) { // NaN is unknown, like nil
+	if p != nil && !math.IsNaN(*p) {
 		v := math.Max(0, math.Min(100, *p))
 		n = max(0, min(w, int(math.Round(v/100*float64(w)))))
 		style = t.loadStyle(v)
@@ -141,7 +127,6 @@ func (t theme) bar(p *float64, w int) string {
 		t.barEmpty.Render(strings.Repeat(string(t.empty), w-n))
 }
 
-// pad fits s to exactly w cells: truncated with "…" or padded with spaces.
 func pad(s string, w int) string {
 	if w <= 0 {
 		return ""
@@ -153,7 +138,6 @@ func pad(s string, w int) string {
 	return s + strings.Repeat(" ", w-sw)
 }
 
-// padLeft right-aligns s in w cells.
 func padLeft(s string, w int) string {
 	sw := lipgloss.Width(s)
 	if sw >= w {
@@ -162,7 +146,6 @@ func padLeft(s string, w int) string {
 	return strings.Repeat(" ", w-sw) + s
 }
 
-// spread puts left and right on one line of width w, right-aligned.
 func spread(left, right string, w int) string {
 	gap := w - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
@@ -171,7 +154,6 @@ func spread(left, right string, w int) string {
 	return left + strings.Repeat(" ", gap) + right
 }
 
-// fit clips or pads s to exactly w columns by h lines, so a frame never wraps or scrolls.
 func fit(s string, w, h int) string {
 	lines := strings.Split(s, "\n")
 	if len(lines) > h {
@@ -186,8 +168,6 @@ func fit(s string, w, h int) string {
 	return strings.Join(lines, "\n")
 }
 
-// cols right-aligns styled values in fixed widths, separated by a space: cols(a, 5, b, 9).
-// It is fmt's %5s for strings that may carry ANSI styling.
 func cols(pairs ...any) string {
 	var parts []string
 	for i := 0; i+1 < len(pairs); i += 2 {

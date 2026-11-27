@@ -1,13 +1,5 @@
 package tui
 
-// History view (PLAN §3 row 15, §7 view 4): one device's history as full-width braille line
-// charts for utilisation, temperatures, power, network and disk, over 1 h to 30 d, with
-// zoom, pan and a cursor readout. Hub mode reads GET /api/history/:id; local mode reads the
-// session's history.Store, fed by the collector.
-//
-// Chart set, ranges and axis scaling follow upstream's history page (public/index.html,
-// Forward-Future/device-monitor @ c3a4c41, MIT, © 2026 Matt).
-
 import (
 	"context"
 	"fmt"
@@ -26,39 +18,34 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/power"
 )
 
-// viewSource is where the History and Energy views read from. *client.Client is one (hub
-// mode); localSource wraps the session store (local mode). Hub values that don't implement
-// it (older test fakes) leave the views empty.
 type viewSource interface {
 	History(ctx context.Context, id string, from, to float64, points int) (*history.Result, error)
 	Energy(ctx context.Context, bounds []float64) (*client.Energy, error)
 }
 
-// histRanges are the History view's ranges, as upstream's.
 var histRanges = []struct {
 	name string
-	span float64 // ms
+	span float64
 }{{"1h", 3600e3}, {"6h", 6 * 3600e3}, {"24h", 24 * 3600e3}, {"7d", 7 * 86400e3}, {"30d", 30 * 86400e3}}
 
 const (
-	histDefaultRange = 1                // 6 h, upstream's default
-	histMinSpan      = 5 * 60e3         // deepest zoom
-	histKeep         = 30 * 86400e3     // oldest data the hub keeps
-	histRefresh      = 30 * time.Second // re-read while following now, as upstream
-	viewTimeout      = 15 * time.Second // one history or energy read
-	histAxisW        = 7                // y-axis label column
-	histMaxPoints    = 3000             // the hub's cap on ?points=
-	histMinPoints    = 10               // and its floor
-	histGapBuckets   = 3                // points further apart than this many buckets aren't joined,
-	histGapMin       = 10e3             // nor than 10 s, as upstream
-	histUnknownRes   = 60e3             // bucket width assumed when the hub sends none
-	histPanFraction  = 4                // ← and → move the window by a quarter
-	histZoomFactor   = 2                // + and - halve and double the span
+	histDefaultRange = 1
+	histMinSpan      = 5 * 60e3
+	histKeep         = 30 * 86400e3
+	histRefresh      = 30 * time.Second
+	viewTimeout      = 15 * time.Second
+	histAxisW        = 7
+	histMaxPoints    = 3000
+	histMinPoints    = 10
+	histGapBuckets   = 3
+	histGapMin       = 10e3
+	histUnknownRes   = 60e3
+	histPanFraction  = 4
+	histZoomFactor   = 2
 	histNoDataText   = "No history for this time range yet. Data is recorded while the device is online."
 	histNoSourceText = "History is not available here."
 )
 
-// History view keys.
 var (
 	keyRangePrev = key.NewBinding(key.WithKeys("["), key.WithHelp("[", "shorter range"))
 	keyRangeNext = key.NewBinding(key.WithKeys("]"), key.WithHelp("]", "longer range"))
@@ -73,19 +60,17 @@ var (
 	keyDevNext   = key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "next device"))
 )
 
-// histState is the History view's window, cursor and last result.
 type histState struct {
-	rng      int     // index into histRanges
-	zoomed   bool    // the window is from..to; otherwise it is the range ending now
-	from, to float64 // Unix ms, while zoomed
-	cursor   float64 // 0 (left edge) to 1 (right edge)
+	rng      int
+	zoomed   bool
+	from, to float64
+	cursor   float64
 	res      *history.Result
-	resID    string // device res belongs to
+	resID    string
 	err      error
-	seq      int // counts reads; a reply for an older one is dropped
+	seq      int
 }
 
-// History-view messages.
 type (
 	histMsg struct {
 		seq int
@@ -94,14 +79,11 @@ type (
 		err error
 	}
 	histRefreshMsg struct{ seq int }
-	histFetchMsg   struct{ seq int } // a debounced fetch is due
+	histFetchMsg   struct{ seq int }
 )
 
-// fetchDebounce is how long range, zoom, pan and device keys wait before reading, so key
-// repeat doesn't send a request per keystroke. A var so tests can shorten it.
 var fetchDebounce = 150 * time.Millisecond
 
-// source is where the History and Energy views read, or nil when there is none.
 func (m model) source() viewSource {
 	if m.multi() {
 		s, _ := m.opts.Hub.(viewSource)
@@ -117,7 +99,6 @@ func (m model) source() viewSource {
 	return s
 }
 
-// loc is the time zone the views label and bucket times in.
 func (m model) loc() *time.Location {
 	if m.opts.Location != nil {
 		return m.opts.Location
@@ -125,10 +106,8 @@ func (m model) loc() *time.Location {
 	return time.Local
 }
 
-// nowMS is the clock in Unix ms.
 func (m model) nowMS() float64 { return float64(m.now().UnixMilli()) }
 
-// histWindow is the time span the charts show, in Unix ms.
 func (m model) histWindow() (from, to float64) {
 	if m.hv.zoomed {
 		return m.hv.from, m.hv.to
@@ -137,10 +116,8 @@ func (m model) histWindow() (from, to float64) {
 	return to - histRanges[m.hv.rng].span, to
 }
 
-// histPlotW is the chart width in cells.
 func (m model) histPlotW() int { return max(4, m.width-histAxisW-1) }
 
-// fetchHistory reads the selected device's history for the current window.
 func (m *model) fetchHistory() tea.Cmd {
 	m.hv.seq++
 	m.hv.err = nil
@@ -159,7 +136,6 @@ func (m *model) fetchHistory() tea.Cmd {
 	}
 }
 
-// updateViews handles the History and Energy views' messages; ok is false for anything else.
 func (m model) updateViews(msg tea.Msg) (model, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case histMsg:
@@ -180,7 +156,7 @@ func (m model) updateViews(msg tea.Msg) (model, tea.Cmd, bool) {
 		cmd := m.fetchHistory()
 		return m, cmd, true
 	case histFetchMsg:
-		if msg.seq != m.hv.seq { // a later key replaced this fetch
+		if msg.seq != m.hv.seq {
 			return m, nil, true
 		}
 		cmd := m.fetchHistory()
@@ -213,7 +189,6 @@ func (m model) updateViews(msg tea.Msg) (model, tea.Cmd, bool) {
 	return m, nil, false
 }
 
-// openView starts the read a view needs when it opens.
 func (m *model) openView() tea.Cmd {
 	switch m.view {
 	case viewHistory:
@@ -224,7 +199,6 @@ func (m *model) openView() tea.Cmd {
 	return nil
 }
 
-// historyKey handles the History view's keys.
 func (m model) historyKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	from, to := m.histWindow()
 	span := to - from
@@ -282,8 +256,6 @@ func (m model) historyKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// scheduleHistory reads the history after fetchDebounce, unless another key reschedules it
-// first, so holding a key down sends one request rather than one per repeat.
 func (m *model) scheduleHistory() tea.Cmd {
 	m.hv.seq++
 	m.hv.err = nil
@@ -291,7 +263,6 @@ func (m *model) scheduleHistory() tea.Cmd {
 	return tea.Tick(fetchDebounce, func(time.Time) tea.Msg { return histFetchMsg{seq} })
 }
 
-// stepDevice moves the selection to the next or previous device; false if it can't move.
 func (m *model) stepDevice(next bool) bool {
 	nav := m.navOrder()
 	i := -1
@@ -312,19 +283,14 @@ func (m *model) stepDevice(next bool) bool {
 	return true
 }
 
-// cursorCol is the cursor's column in a plot w cells wide.
 func (m model) cursorCol(w int) int {
 	return max(0, min(w-1, int(math.Round(m.hv.cursor*float64(w-1)))))
 }
 
-// cursorTime is the time under the cursor column of a w-cell plot over from..to. It matches
-// where ntcharts puts a point: 2w braille dots spread over the span.
 func cursorTime(col, w int, from, to float64) float64 {
 	return from + (float64(2*col)+0.5)/float64(max(1, 2*w-1))*(to-from)
 }
 
-// zoomTo changes the span, keeping the time under the cursor where it is on screen. With
-// the cursor on the last column of a window that ends now, the window keeps ending now.
 func (m *model) zoomTo(span float64) {
 	from, to := m.histWindow()
 	w := m.histPlotW()
@@ -338,9 +304,6 @@ func (m *model) zoomTo(span float64) {
 	m.setWindow(tc-frac*span, span)
 }
 
-// setWindow moves the window to start at from, kept within the 30 days the hub keeps and
-// not past now. A window as wide as the range that reaches now follows now again. It
-// reports whether the window changed.
 func (m *model) setWindow(from, span float64) bool {
 	oldFrom, oldTo := m.histWindow()
 	oldZoomed := m.hv.zoomed
@@ -356,23 +319,20 @@ func (m *model) setWindow(from, span float64) bool {
 	return oldZoomed != m.hv.zoomed || newFrom != oldFrom || newTo != oldTo
 }
 
-// histChart is one chart: its series and how its values read.
 type histChart struct {
 	title  string
-	max    float64 // fixed y maximum; 0 scales to the data
+	max    float64
 	series []histSeries
-	fmt    func(float64) string // readout
-	axis   func(float64) string // y-axis label, at most histAxisW cells
-	temp   bool                 // values are °C: fmt and axis follow the unit in Settings
+	fmt    func(float64) string
+	axis   func(float64) string
+	temp   bool
 }
 
-// histSeries is one line of a chart; peak is nil for fields without a stored peak.
 type histSeries struct {
 	label     string
 	get, peak func(*history.Point) *float64
 }
 
-// histCharts are upstream's history charts, with whole-machine power beside GPU power.
 var histCharts = []histChart{
 	{title: "Utilization", max: 100, fmt: fmtPctV, axis: func(v float64) string { return fmt.Sprintf("%.0f%%", v) },
 		series: []histSeries{
@@ -406,7 +366,6 @@ var histCharts = []histChart{
 func fmtPctV(v float64) string   { return fmt.Sprintf("%.0f%%", v) }
 func fmtWattsV(v float64) string { return fmt.Sprintf("%.0f W", v) }
 
-// shortRate is a compact bytes-per-second label for an axis: "12M/s".
 func shortRate(v float64) string {
 	units := []string{"B", "K", "M", "G", "T"}
 	i := 0
@@ -420,7 +379,6 @@ func shortRate(v float64) string {
 	return fmt.Sprintf("%.0f%s/s", v, units[i])
 }
 
-// seriesStyles colour a chart's lines, as upstream's --cpu, --gpu and --mem.
 func (m model) seriesStyles() []lipgloss.Style {
 	if m.opts.NoColor {
 		return []lipgloss.Style{lipglossNone, lipglossNone, lipglossNone}
@@ -432,7 +390,6 @@ func (m model) seriesStyles() []lipgloss.Style {
 	}
 }
 
-// historyView renders the History view's body.
 func (m model) historyView() string {
 	w, h := m.width, m.bodyHeight()
 	lines := []string{m.histPicker(w), m.histInfo()}
@@ -472,7 +429,6 @@ func (m model) historyView() string {
 	}
 	lines = append(lines, m.histTiles(res.Points, from, to, w))
 
-	// Rows: each chart is a title line and at least two plot rows; the time axis takes one.
 	avail := h - len(lines) - 1
 	n := min(len(present), max(1, avail/3))
 	present = present[:n]
@@ -499,15 +455,13 @@ func (m model) historyView() string {
 	return strings.Join(lines, "\n")
 }
 
-// histTile is one window-wide statistic, as upstream's history tiles.
 type histTile struct {
 	label     string
 	get, peak func(*history.Point) *float64
 	fmt       func(float64) string
-	temp      bool // °C: shown in the unit in use
+	temp      bool
 }
 
-// histTiles are upstream's tiles: utilisation, temperatures and GPU power.
 var histTiles = []histTile{
 	{"CPU", func(p *history.Point) *float64 { return p.CPU }, func(p *history.Point) *float64 { return p.CPUMax }, fmtPctV, false},
 	{"GPU", func(p *history.Point) *float64 { return p.GPU }, func(p *history.Point) *float64 { return p.GPUMax }, fmtPctV, false},
@@ -519,8 +473,6 @@ var histTiles = []histTile{
 
 func fmtTempV(v float64) string { return fmt.Sprintf("%.0f°C", v) }
 
-// histTiles is the line of window-wide statistics: each metric's peak and average over the
-// visible window (upstream's renderTiles), as many as fit in w.
 func (m model) histTiles(pts []history.Point, from, to float64, w int) string {
 	t := m.theme
 	peakMark := "▲"
@@ -564,7 +516,6 @@ func (m model) histTiles(pts []history.Point, from, to float64, w int) string {
 	return line
 }
 
-// histPicker is the first line: the devices (selected one highlighted) and the ranges.
 func (m model) histPicker(w int) string {
 	t := m.theme
 	var ranges []string
@@ -599,7 +550,7 @@ func (m model) histPicker(w int) string {
 		names = append(names, label)
 	}
 	left := strings.Join(names, "")
-	if lipgloss.Width(left)+1+lipgloss.Width(right) > w { // too many devices: just the selected one
+	if lipgloss.Width(left)+1+lipgloss.Width(right) > w {
 		left = ""
 		if c := m.cur(); c != nil {
 			pos := ""
@@ -614,13 +565,12 @@ func (m model) histPicker(w int) string {
 	return spread(left, right, w)
 }
 
-// histInfo is the second line: the window, the bucket width and the cursor's time.
 func (m model) histInfo() string {
 	from, to := m.histWindow()
 	span := to - from
 	label := func(ms float64) string { return timeLabel(m.msTime(ms), span) }
 	if f, t := m.msTime(from), m.msTime(to); span <= 36*3600e3 && f.YearDay() != t.YearDay() {
-		// Clock times alone would read "10:28 – 10:28" for 24 h: name the days too.
+
 		label = func(ms float64) string { return m.msTime(ms).Format("Mon 15:04") }
 	}
 	s := label(from) + " – " + label(to)
@@ -632,13 +582,10 @@ func (m model) histInfo() string {
 	return m.theme.dim.Render(s+" · cursor ") + label(tc)
 }
 
-// msTime converts Unix ms to a time in the view's zone.
 func (m model) msTime(ms float64) time.Time {
 	return time.UnixMilli(int64(math.Round(ms))).In(m.loc())
 }
 
-// timeLabel formats t for a window span ms wide, as upstream: the clock up to 36 h, the day
-// and clock up to 8 days, the day beyond.
 func timeLabel(t time.Time, span float64) string {
 	switch {
 	case span <= 36*3600e3:
@@ -650,7 +597,6 @@ func timeLabel(t time.Time, span float64) string {
 	}
 }
 
-// fmtBucket formats a bucket width in ms: "2 s", "5 min", "2.4 h".
 func fmtBucket(ms float64) string {
 	switch s := ms / 1000; {
 	case s < 60:
@@ -662,11 +608,8 @@ func fmtBucket(ms float64) string {
 	}
 }
 
-// trimZero drops a trailing ".0".
 func trimZero(s string) string { return strings.TrimSuffix(s, ".0") }
 
-// chartTitle is a chart's title and, per series, the reading under the cursor: the bucket's
-// average and, for fields with a stored peak, its peak.
 func (m model) chartTitle(c histChart, at *history.Point, styles []lipgloss.Style, w int) string {
 	t := m.theme
 	peak := "▲"
@@ -699,7 +642,6 @@ func (m model) chartTitle(c histChart, at *history.Point, styles []lipgloss.Styl
 	return pad(strings.Join(parts, "   "), w)
 }
 
-// chartRows draws a chart's plot rows with the y-axis labels to their left.
 func (m model) chartRows(c histChart, pts []history.Point, from, to, resolution float64, rows, pw, col int, styles []lipgloss.Style) []string {
 	if rows <= 0 {
 		return nil
@@ -744,7 +686,6 @@ func (m model) chartRows(c histChart, pts []history.Point, from, to, resolution 
 	return out
 }
 
-// timeAxis labels the plots' left edge, middle and right edge.
 func (m model) timeAxis(from, to float64, pw int) string {
 	span := to - from
 	l := timeLabel(m.msTime(from), span)
@@ -768,7 +709,6 @@ func (m model) timeAxis(from, to float64, pw int) string {
 	return m.theme.dim.Render(strings.Repeat(" ", histAxisW+1) + string(line))
 }
 
-// historyFooter lists the view's keys.
 func (m model) historyFooter() string {
 	s := "[ ] range · +/- zoom · ←/→ pan · h/l cursor · 0 reset"
 	if m.multi() {
@@ -780,14 +720,12 @@ func (m model) historyFooter() string {
 	return s
 }
 
-// clipPoints is the points within from..to, plus one on each side so lines reach the edges.
 func clipPoints(pts []history.Point, from, to float64) []history.Point {
 	i := sort.Search(len(pts), func(i int) bool { return pts[i].T >= from })
 	j := sort.Search(len(pts), func(i int) bool { return pts[i].T > to })
 	return pts[max(0, i-1):min(len(pts), j+1)]
 }
 
-// hasData reports whether any point has a value for get.
 func hasData(pts []history.Point, get func(*history.Point) *float64) bool {
 	for i := range pts {
 		if get(&pts[i]) != nil {
@@ -797,7 +735,6 @@ func hasData(pts []history.Point, get func(*history.Point) *float64) bool {
 	return false
 }
 
-// pointAt is the bucket holding time t, or the nearest one within a bucket width, or nil.
 func pointAt(pts []history.Point, t, resolution float64) *history.Point {
 	i := sort.Search(len(pts), func(i int) bool { return pts[i].T > t }) - 1
 	best, dist := -1, math.Inf(1)
@@ -807,7 +744,7 @@ func pointAt(pts []history.Point, t, resolution float64) *history.Point {
 		}
 		d := math.Abs(pts[j].T - t)
 		if j == i && t < pts[j].T+resolution {
-			d = 0 // inside the bucket
+			d = 0
 		}
 		if d < dist {
 			best, dist = j, d

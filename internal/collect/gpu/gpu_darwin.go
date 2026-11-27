@@ -9,7 +9,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// ioregArgs lists every IOAccelerator with its PerformanceStatistics.
 var ioregArgs = []string{"-r", "-d", "1", "-w", "0", "-c", "IOAccelerator"}
 
 func init() {
@@ -18,8 +17,6 @@ func init() {
 	}})
 }
 
-// runMacOS reads every IOAccelerator from ioreg. GPU temperature comes from the sensors
-// probe (smctemp -g), which fills it after this Apply.
 func runMacOS(ctx context.Context, ioreg string) (collect.Apply, error) {
 	if ioreg == "" {
 		return nil, nil

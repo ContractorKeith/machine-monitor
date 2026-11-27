@@ -25,21 +25,17 @@ func newSource() source {
 	}
 }
 
-// wmiTimeout bounds one WMI query; WMI calls take no context.
 const wmiTimeout = 3 * time.Second
 
-// wmiClient is the real wmiQuerier.
 type wmiClient struct{}
 
-// Query runs q on its own goroutine so ctx and wmiTimeout can bound it. A query that
-// outlives them finishes in the background into a result nobody reads.
 func (wmiClient) Query(ctx context.Context, q string, dst any) error {
 	ctx, cancel := context.WithTimeout(ctx, wmiTimeout)
 	defer cancel()
 	done := make(chan error, 1)
-	tmp := reflect.New(reflect.TypeOf(dst).Elem()) // so a late query never writes dst
+	tmp := reflect.New(reflect.TypeOf(dst).Elem())
 	go func() {
-		// wmi panics when a property's type doesn't match the field; fail soft instead.
+
 		defer func() {
 			if v := recover(); v != nil {
 				done <- fmt.Errorf("wmi: %s: panic: %v", q, v)

@@ -9,17 +9,15 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// probeRunner runs probes once per sample, following the contract in the package doc.
-// It is driven from the collector's single goroutine; only Run goroutines run concurrently.
 type probeRunner struct {
-	states []*probeState // sorted by name, so Applies run in name order
+	states []*probeState
 }
 
 type probeState struct {
 	Probe
-	n    int         // samples seen
-	last Apply       // result of the last successful Run, reapplied between runs
-	busy atomic.Bool // a Run is still going after its deadline; don't start another
+	n    int
+	last Apply
+	busy atomic.Bool
 }
 
 type probeResult struct {
@@ -27,7 +25,6 @@ type probeResult struct {
 	err   error
 }
 
-// newProbeRunner takes probes sorted by name, as Probes returns them.
 func newProbeRunner(probes []Probe) *probeRunner {
 	pr := &probeRunner{}
 	for _, p := range probes {
@@ -36,8 +33,6 @@ func newProbeRunner(probes []Probe) *probeRunner {
 	return pr
 }
 
-// start launches every probe due this sample and returns finish, which waits for them
-// (each up to its deadline) and applies every probe's latest result to r in name order.
 func (pr *probeRunner) start(ctx context.Context) (finish func(r *report.Report)) {
 	type pending struct {
 		ch     chan probeResult
@@ -53,7 +48,7 @@ func (pr *probeRunner) start(ctx context.Context) (finish func(r *report.Report)
 			continue
 		}
 		if s.busy.Load() {
-			// The previous Run ignored its deadline and is still going.
+
 			s.last = nil
 			slog.Debug("collect: probe still running from an earlier sample", "probe", s.Name)
 			continue
@@ -68,7 +63,7 @@ func (pr *probeRunner) start(ctx context.Context) (finish func(r *report.Report)
 		s.busy.Store(true)
 		go func() {
 			res := runProbe(pctx, s.Run)
-			s.busy.Store(false) // before the send, so the next sample never sees a stale busy
+			s.busy.Store(false)
 			p.ch <- res
 		}()
 	}
@@ -95,14 +90,13 @@ func (pr *probeRunner) start(ctx context.Context) (finish func(r *report.Report)
 	}
 }
 
-// wait returns a probe's result, or a timeout error once its deadline passes.
 func wait(ctx context.Context, ch chan probeResult) probeResult {
 	select {
 	case res := <-ch:
 		return res
 	case <-ctx.Done():
 		select {
-		case res := <-ch: // finished at the deadline
+		case res := <-ch:
 			return res
 		default:
 			return probeResult{err: ctx.Err()}
@@ -110,7 +104,6 @@ func wait(ctx context.Context, ch chan probeResult) probeResult {
 	}
 }
 
-// runProbe calls run, turning a panic into an error.
 func runProbe(ctx context.Context, run func(context.Context) (Apply, error)) (res probeResult) {
 	defer func() {
 		if v := recover(); v != nil {
@@ -121,7 +114,6 @@ func runProbe(ctx context.Context, run func(context.Context) (Apply, error)) (re
 	return probeResult{apply: apply, err: err}
 }
 
-// applyProbe calls apply, turning a panic into an error.
 func applyProbe(apply Apply, r *report.Report) (err error) {
 	defer func() {
 		if v := recover(); v != nil {

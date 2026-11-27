@@ -10,8 +10,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/config"
 )
 
-// TestAlertsAgainstHub drives every alerts call against a real hub and checks the settings
-// change and the test alert arrive on the stream.
 func TestAlertsAgainstHub(t *testing.T) {
 	th := newTestHub(t, config.At(t.TempDir()), "")
 	th.report("dev-a", nil)
@@ -43,7 +41,6 @@ func TestAlertsAgainstHub(t *testing.T) {
 		t.Fatalf("alerts event = %s", e.Raw)
 	}
 
-	// Invalid settings: a 400 with the hub's message.
 	bad := got
 	bad.Rules = append([]alerts.Rule(nil), got.Rules...)
 	bad.Rules[4].Threshold = ptrTo(500.0)
@@ -52,7 +49,6 @@ func TestAlertsAgainstHub(t *testing.T) {
 		t.Fatalf("invalid settings: %v", err)
 	}
 
-	// The next report fires the CPU rule; the log has it.
 	th.report("dev-a", nil)
 	if e := ev.next(EventAlert); json.Unmarshal(e.Raw, &msg) != nil || msg.Event == nil || msg.Event.State != alerts.Firing {
 		t.Fatalf("alert event = %s", e.Raw)

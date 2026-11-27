@@ -11,8 +11,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/config"
 )
 
-// TestStreamIsCompact (B1): the client opts in to our hub's compact stream, so its
-// snapshot carries each device's latest report but no history.
 func TestStreamIsCompact(t *testing.T) {
 	th := newTestHub(t, config.At(t.TempDir()), "")
 	th.report("dev-a", nil)
@@ -27,13 +25,10 @@ func TestStreamIsCompact(t *testing.T) {
 	}
 }
 
-// TestIdleCountsBytes (B1): a snapshot that arrives slowly, as one long line, isn't taken
-// for silence. The watchdog used to reset only per complete line, so a big snapshot over a
-// slow link was cancelled part-way, every time.
 func TestIdleCountsBytes(t *testing.T) {
 	c := fakeHub(t, "k", func(ctx context.Context, w http.ResponseWriter, f http.Flusher) {
 		io.WriteString(w, `data: {"type":"snapshot","devices":[`)
-		for i := range 20 { // 20 × 25 ms: five idle timeouts, with bytes all along
+		for i := range 20 {
 			if i > 0 {
 				io.WriteString(w, ",")
 			}
@@ -71,9 +66,6 @@ func TestIdleCountsBytes(t *testing.T) {
 	}
 }
 
-// TestMergedReportSamples: a report our hub merged while the client was behind carries every
-// sample in "samples"; the event keeps them all, with Sample the newest. A plain upstream
-// report still gives its one sample.
 func TestMergedReportSamples(t *testing.T) {
 	e, ok := decodeEvent(sseEvent{name: "message", data: []byte(
 		`{"type":"report","id":"d","device":{"id":"d"},"sample":{"t":3},"samples":[{"t":1},{"t":2},{"t":3}]}`)})

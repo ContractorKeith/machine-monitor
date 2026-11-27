@@ -11,13 +11,10 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// TestSparkSeed (B1): our hub's compact snapshot has no history, so the selected device's
-// sparklines are filled on demand from /api/history, once, in front of the live samples
-// that arrived meanwhile and without repeating them.
 func TestSparkSeed(t *testing.T) {
 	devs := threeDevices()
 	for i := range devs {
-		devs[i].History = nil // a compact snapshot
+		devs[i].History = nil
 	}
 	f := newFakeHub(devs)
 	m := hubModel(t, f, 120, 40)
@@ -26,7 +23,7 @@ func TestSparkSeed(t *testing.T) {
 	}
 	id := m.cur().id
 	now := float64(hubNow.UnixMilli())
-	live := now - 90e3 // the first live report since the snapshot
+	live := now - 90e3
 	next, _ := m.Update(hubMsg{client.Event{Type: client.EventReport, ID: id, Device: &devs[0],
 		Sample: &history.Point{T: live, CPU: report.Ptr(77.0)}, Samples: []history.Point{{T: live, CPU: report.Ptr(77.0)}}}})
 	m = next.(model)
@@ -34,7 +31,7 @@ func TestSparkSeed(t *testing.T) {
 		t.Fatalf("before seeding: seeded %v, %d samples", d.seeded, len(d.cpu.v))
 	}
 
-	m.seeding = "" // the test drops the commands updates return: start the request again
+	m.seeding = ""
 	cmd := m.sparkSeed()
 	if cmd == nil {
 		t.Fatal("no history request for the selected device")

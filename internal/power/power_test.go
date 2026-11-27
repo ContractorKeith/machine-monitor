@@ -8,8 +8,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// Cases are in testdata/cases.json; the expected numbers in testdata/expected.json come from
-// running upstream's power.js over them (testdata/upstream.js).
 type fixture struct {
 	Estimate []struct {
 		Name   string        `json:"name"`
@@ -107,8 +105,6 @@ func TestJSRound(t *testing.T) {
 	}
 }
 
-// An APU's GPU (flagged integrated by the agent) is part of the package power, even with a
-// large memory carve-out: no discrete-GPU estimate on top (skeptic pass 2, B5).
 func TestEstimateIntegratedGPUAddsNothing(t *testing.T) {
 	r := &report.Report{
 		CPU:   report.CPU{Usage: report.Ptr(10.0)},
@@ -120,7 +116,6 @@ func TestEstimateIntegratedGPUAddsNothing(t *testing.T) {
 	if b == nil || b.GPU != 0 || b.GPUEstimated {
 		t.Fatalf("integrated GPU estimate = %+v, want none", b)
 	}
-	// Not flagged (an upstream agent): the estimate stays, whatever the name says (N16).
 	r.GPUs[0].Integrated = false
 	if b := Estimate(r); b.GPU != 160 {
 		t.Fatalf("discrete GPU = %v W, want 160", b.GPU)

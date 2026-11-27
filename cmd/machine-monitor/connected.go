@@ -9,9 +9,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/tui"
 )
 
-// runConnected is `machine-monitor --hub URL [--key KEY]`: the TUI showing every device on a
-// hub. The key is --key, or the one client.json holds for this same hub; a key saved for a
-// different hub is never sent.
 func runConnected(hubURL, key string, o tui.Options, stderr io.Writer) int {
 	if _, err := client.ParseURL(hubURL); err != nil {
 		fmt.Fprintf(stderr, "machine-monitor --hub: %v\n", err)
@@ -46,7 +43,6 @@ func runConnected(hubURL, key string, o tui.Options, stderr io.Writer) int {
 	return runHubTUI(o, stderr)
 }
 
-// runHubTUI opens the TUI in hub mode; tests replace it.
 var runHubTUI = func(o tui.Options, stderr io.Writer) int {
 	if err := tui.Run(o); err != nil {
 		fmt.Fprintf(stderr, "machine-monitor: %v\n", err)

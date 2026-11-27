@@ -1,10 +1,5 @@
 package tui
 
-// Alerts (PLAN §3 rows 20–22, §7 view 6): the active alerts, the rules with an editor, the
-// delivery channels with a test button, and the event log, all through the hub's
-// /api/alerts. The hub's alert events also raise a banner and ring the terminal bell in
-// every view. Local mode has no alerts engine, so the view points at a hub.
-
 import (
 	"context"
 	"encoding/json"
@@ -31,8 +26,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// AlertsHub is a hub's alerts API. *client.Client implements it; the Alerts view says a
-// Hub that doesn't has no alerts.
 type AlertsHub interface {
 	Alerts(ctx context.Context) (*client.Alerts, error)
 	SetAlerts(ctx context.Context, s alerts.Settings) (alerts.Settings, []alerts.Active, error)
@@ -40,22 +33,20 @@ type AlertsHub interface {
 	ClearAlertLog(ctx context.Context) error
 }
 
-// Limits on what the TUI keeps.
 const (
-	maxAlertLog = 150 // log entries, as GET /api/alerts returns
-	maxSeen     = 64  // alert ids remembered so a repeat never rings twice
+	maxAlertLog = 150
+	maxSeen     = 64
 )
 
-// Alerts messages.
 type (
 	alertsLoadedMsg struct {
 		a   *client.Alerts
 		err error
-		gen int // saves accepted when the fetch began
+		gen int
 	}
 	alertsSavedMsg struct {
 		s        alerts.Settings
-		selectID string // new rule to select after the hub accepts it
+		selectID string
 		active   []alerts.Active
 		err      error
 	}
@@ -66,38 +57,34 @@ type (
 	alertsClearedMsg struct{ err error }
 )
 
-// alertsUI is the Alerts view's state and the banner. It lives in model.al and, like the
-// model, is copied on every Update, so slices are cloned before they change.
 type alertsUI struct {
 	loaded, loading bool
-	err             error // the last load's error
+	err             error
 	cfg             alerts.Settings
 	active          []alerts.Active
-	events          []alerts.Event // newest first
+	events          []alerts.Event
 	priceSet        bool
 
-	cursor  int // selected rule
+	cursor  int
 	scroll  int
-	form    alertForm // the open editor, when form.open
-	confirm string    // "rule" or "log" while asking y/n
-	notice  string    // the last action's result or error
-	gen     int       // saves accepted so far; a fetch begun before one is stale
+	form    alertForm
+	confirm string
+	notice  string
+	gen     int
 
-	banner *alerts.Event // shown in every view until dismissed
-	more   int           // alerts that arrived after the banner's, while it showed
-	seen   []string      // ids of alerts that already rang, newest last
-	bells  int           // bells rung, for tests
+	banner *alerts.Event
+	more   int
+	seen   []string
+	bells  int
 
-	unitPending bool // the hub's tempUnit should follow Settings once the alerts load
+	unitPending bool
 }
 
-// alerter is the hub's alerts API, or nil in local mode or for a Hub without one.
 func (m model) alerter() AlertsHub {
 	a, _ := m.opts.Hub.(AlertsHub)
 	return a
 }
 
-// alertsCall runs an alerts request off the UI goroutine.
 func (m model) alertsCall(f func(ctx context.Context, a AlertsHub) tea.Msg) tea.Cmd {
 	a := m.alerter()
 	if a == nil {
@@ -106,7 +93,6 @@ func (m model) alertsCall(f func(ctx context.Context, a AlertsHub) tea.Msg) tea.
 	return m.hubCall(func(ctx context.Context, _ Hub) tea.Msg { return f(ctx, a) })
 }
 
-// loadAlerts fetches the alerts unless a fetch is already running.
 func (m *model) loadAlerts() tea.Cmd {
 	if m.alerter() == nil || m.al.loading {
 		return nil
@@ -119,7 +105,6 @@ func (m *model) loadAlerts() tea.Cmd {
 	})
 }
 
-// maybeLoadAlerts fetches the alerts when the Alerts view is open.
 func (m *model) maybeLoadAlerts() tea.Cmd {
 	if m.view != viewAlerts {
 		return nil
@@ -127,19 +112,17 @@ func (m *model) maybeLoadAlerts() tea.Cmd {
 	return m.loadAlerts()
 }
 
-// updateAlerts handles alerts messages and the hub's alert events; ok is false for
-// anything else.
 func (m model) updateAlerts(msg tea.Msg) (model, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case alertsLoadedMsg:
 		m.al.loading = false
-		if msg.gen != m.al.gen { // a save landed meanwhile: this answer predates it
+		if msg.gen != m.al.gen {
 			return m, m.loadAlerts(), true
 		}
 		m.al.err = msg.err
 		if msg.err == nil && msg.a != nil {
 			m.al.loaded = true
-			cleanAll(&msg.a) // before the rules and the active list are copied out
+			cleanAll(&msg.a)
 			m.al.active, m.al.priceSet = msg.a.Active, msg.a.PriceSet
 			m.setRules(msg.a.Settings)
 			m.al.events = msg.a.Events
@@ -181,8 +164,6 @@ func (m model) updateAlerts(msg tea.Msg) (model, tea.Cmd, bool) {
 	return m, nil, false
 }
 
-// applyAlert folds an alert or settings event into the state. It returns the bell when the
-// event is a new alert the hub wants shown.
 func (m *model) applyAlert(ev client.Event) tea.Cmd {
 	var msg alerts.Message
 	if json.Unmarshal(ev.Raw, &msg) != nil {
@@ -193,13 +174,11 @@ func (m *model) applyAlert(ev client.Event) tea.Cmd {
 		m.al.active = msg.Active
 	}
 	if msg.Settings != nil {
-		var asked string // the rule the delete question is about
+		var asked string
 		if c := m.al.cursor; m.al.confirm == "rule" && c < len(m.al.cfg.Rules) {
 			asked = m.al.cfg.Rules[c].ID
 		}
 		m.setRules(*msg.Settings)
-		// The rule it asked about may be gone or moved. Its fields changing, or an echo of our
-		// own earlier save arriving late, is not a reason: the delete still hits the same rule.
 		if c := m.al.cursor; m.al.confirm == "rule" && (c >= len(m.al.cfg.Rules) || m.al.cfg.Rules[c].ID != asked) {
 			m.al.confirm, m.al.notice = "", "the rules changed on the hub"
 		}
@@ -212,7 +191,7 @@ func (m *model) applyAlert(ev client.Event) tea.Cmd {
 	if len(m.al.seen) > maxSeen {
 		m.al.seen = m.al.seen[len(m.al.seen)-maxSeen:]
 	}
-	if !e.Test { // the hub doesn't log test alerts either
+	if !e.Test {
 		m.al.events = append([]alerts.Event{*e}, m.al.events...)
 		if len(m.al.events) > maxAlertLog {
 			m.al.events = m.al.events[:maxAlertLog]
@@ -229,8 +208,6 @@ func (m *model) applyAlert(ev client.Event) tea.Cmd {
 	return tea.Raw(string(rune(ansi.BEL)))
 }
 
-// setRules takes settings from the hub. An open rule editor follows its rule to its new
-// place, or closes when the rule is gone, so saving can't overwrite another rule.
 func (m *model) setRules(s alerts.Settings) {
 	m.al.cfg = s
 	if f := &m.al.form; f.open && f.rule >= 0 {
@@ -243,12 +220,8 @@ func (m *model) setRules(s alerts.Settings) {
 	m.clampAlerts()
 }
 
-// wsaConnRefused is Windows' WSAECONNREFUSED, which is not syscall.ECONNREFUSED there.
 const wsaConnRefused = syscall.Errno(10061)
 
-// hubErr turns an error into a sentence for the footer: the hub's own message for a refused
-// request, a plain-words reason for the usual network failures, never Go's "Get \"url\": dial
-// tcp …". Whatever is left is cleaned of control characters.
 func hubErr(err error) string {
 	var se *client.StatusError
 	if errors.As(err, &se) && se.Message != "" {
@@ -275,7 +248,6 @@ func hubErr(err error) string {
 	return clean(text)
 }
 
-// testResult says how a test alert's deliveries went.
 func testResult(d alerts.Delivery, err error) string {
 	if err != nil {
 		return "test failed: " + hubErr(err)
@@ -299,17 +271,12 @@ func testResult(d alerts.Delivery, err error) string {
 	return strings.Join(parts, " · ")
 }
 
-// clampAlerts keeps the rule cursor and the scroll in range.
 func (m *model) clampAlerts() {
 	m.al.cursor = max(0, min(m.al.cursor, len(m.al.cfg.Rules)-1))
 	lines, _ := m.alertsLines()
 	m.al.scroll = max(0, min(m.al.scroll, len(lines)-m.bodyHeight()))
 }
 
-// ---- keys --------------------------------------------------------------------------------
-
-// alertsPreKey takes keys that come before the global ones: the open editor or question,
-// and esc dismissing the banner. ok is false when it didn't take the key.
 func (m model) alertsPreKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
 	switch {
 	case m.al.form.open:
@@ -341,7 +308,6 @@ func (m model) alertsPreKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
 	return m, nil, false
 }
 
-// alertsKey handles the Alerts view's keys.
 func (m model) alertsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.alerter() == nil {
 		return m, nil
@@ -403,7 +369,7 @@ func (m model) alertsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	default:
 		return m, nil
 	}
-	if key.Matches(msg, k.Up, k.Down) { // keep the selected rule in view
+	if key.Matches(msg, k.Up, k.Down) {
 		m.al.cursor = max(0, min(m.al.cursor, n-1))
 		_, sel := m.alertsLines()
 		if sel >= 0 {
@@ -414,8 +380,6 @@ func (m model) alertsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// saveAlerts checks s the way the hub will and sends it. A problem goes to the open form,
-// or the notice.
 func (m model) saveAlerts(s alerts.Settings) (model, tea.Cmd) {
 	b, _ := json.Marshal(s)
 	parsed, err := alerts.ParseSettings(b)
@@ -444,39 +408,33 @@ func cloneSettings(s alerts.Settings) alerts.Settings {
 	return s
 }
 
-// ---- the editor --------------------------------------------------------------------------
-
-// Field kinds.
 const (
-	fieldChoice = iota // ←/→ cycles choices
-	fieldToggle        // space or ←/→ flips it
-	fieldText          // a text input
+	fieldChoice = iota
+	fieldToggle
+	fieldText
 )
 
-// formField is one row of an editor.
 type formField struct {
 	label   string
 	kind    int
-	choices []string // fieldChoice: what is shown
-	values  []string // fieldChoice: what is saved
-	idx     int      // fieldChoice: the chosen one
-	on      bool     // fieldToggle
+	choices []string
+	values  []string
+	idx     int
+	on      bool
 	input   textinput.Model
-	unit    string // fieldText: shown after the value
-	hidden  bool   // not used by the current choices (the threshold of an offline rule)
+	unit    string
+	hidden  bool
 }
 
-// alertForm is the rule or channels editor.
 type alertForm struct {
 	open   bool
-	rule   int    // index of the rule being edited, -1 for a new one; -2 for the channels
-	ruleID string // the edited rule's id, to find it again when the rules change
+	rule   int
+	ruleID string
 	fields []formField
 	cur    int
 	err    string
 }
 
-// Rule form rows.
 const (
 	ruleType = iota
 	ruleDevice
@@ -485,7 +443,6 @@ const (
 	ruleEnabled
 )
 
-// Channel form rows.
 const (
 	chDesktop = iota
 	chResolved
@@ -498,11 +455,9 @@ const (
 
 const channelsForm = -2
 
-// ruleTypes is the type picker's order, as upstream's dashboard lists them.
 var ruleTypes = []string{alerts.TypeOffline, alerts.TypeCPUTemp, alerts.TypeGPUTemp, alerts.TypeCPU,
 	alerts.TypeGPU, alerts.TypeMem, alerts.TypeDisk, alerts.TypePower, alerts.TypeDailyCost}
 
-// defaultThreshold is what a new rule of a type starts at.
 var defaultThreshold = map[string]float64{alerts.TypeCPUTemp: 90, alerts.TypeGPUTemp: 85, alerts.TypeCPU: 90,
 	alerts.TypeGPU: 90, alerts.TypeMem: 90, alerts.TypeDisk: 90, alerts.TypePower: 500, alerts.TypeDailyCost: 5}
 
@@ -512,12 +467,11 @@ func textField(label, value, unit string, limit int) formField {
 	in.CharLimit = limit
 	in.SetValue(value)
 	st := in.Styles()
-	st.Cursor.Blink = false // a steady cursor: the form needs no blink ticks
+	st.Cursor.Blink = false
 	in.SetStyles(st)
 	return formField{label: label, kind: fieldText, input: in, unit: unit}
 }
 
-// openRuleForm opens the editor on rule i, or on a new rule for i < 0.
 func (m *model) openRuleForm(i int) {
 	r := alerts.Rule{Type: alerts.TypeCPUTemp, Device: alerts.AllDevices, Minutes: 2, Enabled: true}
 	if i >= 0 {
@@ -533,7 +487,7 @@ func (m *model) openRuleForm(i int) {
 	for _, d := range m.navOrder() {
 		dev.values, dev.choices = append(dev.values, d.id), append(dev.choices, d.name)
 	}
-	if dev.idx = slices.Index(dev.values, r.Device); dev.idx < 0 { // a device the hub no longer has
+	if dev.idx = slices.Index(dev.values, r.Device); dev.idx < 0 {
 		dev.values, dev.choices = append(dev.values, r.Device), append(dev.choices, r.Device)
 		dev.idx = len(dev.values) - 1
 	}
@@ -552,7 +506,6 @@ func (m *model) openRuleForm(i int) {
 	m.focusField()
 }
 
-// syncRuleForm shows the threshold's unit and hides it for offline rules.
 func (m *model) syncRuleForm() {
 	f := &m.al.form
 	typ := ruleTypes[f.fields[ruleType].idx]
@@ -560,13 +513,12 @@ func (m *model) syncRuleForm() {
 	f.fields[ruleThreshold].unit = m.thresholdUnit(typ)
 	f.fields[ruleMinutes].unit = "min"
 	if typ == alerts.TypeDailyCost {
-		f.fields[ruleMinutes].hidden = true // checked once per day, not over minutes
+		f.fields[ruleMinutes].hidden = true
 	} else {
 		f.fields[ruleMinutes].hidden = false
 	}
 }
 
-// openChannelsForm opens the editor on the delivery channels.
 func (m *model) openChannelsForm() {
 	ch := m.al.cfg.Channels
 	m.al.form = alertForm{open: true, rule: channelsForm, fields: []formField{
@@ -582,7 +534,6 @@ func (m *model) openChannelsForm() {
 	m.focusField()
 }
 
-// focusField focuses the current row's text input, if it has one, and blurs the rest.
 func (m *model) focusField() {
 	f := &m.al.form
 	f.fields = slices.Clone(f.fields)
@@ -596,7 +547,6 @@ func (m *model) focusField() {
 	}
 }
 
-// formKey handles a key while the editor is open.
 func (m model) formKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	f := &m.al.form
 	f.fields = slices.Clone(f.fields)
@@ -651,8 +601,6 @@ func (m model) formKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// ruleTypeChanged resets the threshold to the new type's default. A new rule also takes the
-// type's default minutes; an edited one keeps its own, but offline needs 1 or more.
 func (m *model) ruleTypeChanged() {
 	f := &m.al.form
 	typ := ruleTypes[f.fields[ruleType].idx]
@@ -671,7 +619,6 @@ func (m *model) ruleTypeChanged() {
 	m.syncRuleForm()
 }
 
-// defaultMinutes is how long a new rule of a type waits, as the default rules do.
 func defaultMinutes(typ string) int {
 	switch typ {
 	case alerts.TypeOffline:
@@ -682,10 +629,9 @@ func defaultMinutes(typ string) int {
 	return 2
 }
 
-// saveRule builds the rule from the form and saves every rule with it.
 func (m model) saveRule() (tea.Model, tea.Cmd) {
 	f := m.al.form
-	if f.rule >= len(m.al.cfg.Rules) { // setRules keeps it in range; never index past the end
+	if f.rule >= len(m.al.cfg.Rules) {
 		m.al.form, m.al.notice = alertForm{}, "the rules changed on the hub"
 		return m, nil
 	}
@@ -718,7 +664,6 @@ func (m model) saveRule() (tea.Model, tea.Cmd) {
 	return m.saveAlerts(s)
 }
 
-// saveChannels builds the channels from the form and saves them with the rules.
 func (m model) saveChannels() (tea.Model, tea.Cmd) {
 	fs := m.al.form.fields
 	val := func(i int) string { return strings.TrimSpace(fs[i].input.Value()) }
@@ -727,7 +672,7 @@ func (m model) saveChannels() (tea.Model, tea.Cmd) {
 	s.Channels.Desktop = fs[chDesktop].on
 	s.Channels.Ntfy.Enabled, s.Channels.Ntfy.Server, s.Channels.Ntfy.Topic = fs[chNtfy].on, val(chNtfyServer), val(chNtfyTopic)
 	s.Channels.Webhook.Enabled, s.Channels.Webhook.URL = fs[chWebhook].on, val(chWebhookURL)
-	switch { // the hub would quietly switch these off
+	switch {
 	case s.Channels.Ntfy.Enabled && s.Channels.Ntfy.Topic == "":
 		m.al.form.err = "ntfy needs a topic"
 		return m, nil
@@ -738,13 +683,8 @@ func (m model) saveChannels() (tea.Model, tea.Cmd) {
 	return m.saveAlerts(s)
 }
 
-// ---- drawing -----------------------------------------------------------------------------
-
-// isTempRule reports whether a rule type's threshold is a temperature.
 func isTempRule(typ string) bool { return typ == alerts.TypeCPUTemp || typ == alerts.TypeGPUTemp }
 
-// thresholdIn shows a threshold as the editor and table take it: temperatures in the unit
-// in use (the hub keeps them in °C), to one decimal at most.
 func (m model) thresholdIn(typ string, v float64) string {
 	if isTempRule(typ) {
 		v = math.Round(m.theme.temp(v)*10) / 10
@@ -752,8 +692,6 @@ func (m model) thresholdIn(typ string, v float64) string {
 	return strconv.FormatFloat(v, 'f', -1, 64)
 }
 
-// thresholdOut turns a threshold typed in the editor into what the hub keeps: °C for
-// temperatures, to one decimal.
 func (m model) thresholdOut(typ string, v float64) float64 {
 	if isTempRule(typ) && m.theme.fahrenheit {
 		return math.Round((v-32)*5/9*10) / 10
@@ -761,7 +699,6 @@ func (m model) thresholdOut(typ string, v float64) float64 {
 	return v
 }
 
-// thresholdUnit is the unit a type's threshold is entered in.
 func (m model) thresholdUnit(typ string) string {
 	switch typ {
 	case alerts.TypeCPUTemp, alerts.TypeGPUTemp:
@@ -779,7 +716,6 @@ func (m model) thresholdUnit(typ string) string {
 	return "%"
 }
 
-// limitText is a rule's threshold for the rules table.
 func (m model) limitText(r alerts.Rule) string {
 	if r.Threshold == nil {
 		return none
@@ -795,7 +731,6 @@ func (m model) limitText(r alerts.Rule) string {
 	}
 }
 
-// forText is a rule's duration for the rules table.
 func forText(r alerts.Rule) string {
 	switch {
 	case r.Type == alerts.TypeDailyCost:
@@ -806,7 +741,6 @@ func forText(r alerts.Rule) string {
 	return fmt.Sprintf("%d min", r.Minutes)
 }
 
-// devName is a device id's display name.
 func (m model) devName(id string) string {
 	if id == alerts.AllDevices {
 		return "All devices"
@@ -819,7 +753,6 @@ func (m model) devName(id string) string {
 	return id
 }
 
-// clock is a Unix-ms time as "15:04", with the date when it isn't today.
 func (m model) clock(ms int64) string {
 	now := m.now()
 	t := time.UnixMilli(ms).In(now.Location())
@@ -829,7 +762,6 @@ func (m model) clock(ms int64) string {
 	return t.Format("Jan 2 15:04")
 }
 
-// glyph marks an alert's state.
 func (m model) glyph(state string) string {
 	switch {
 	case state == alerts.Resolved && m.theme.ascii:
@@ -842,7 +774,6 @@ func (m model) glyph(state string) string {
 	return "⚠"
 }
 
-// icon is glyph in the state's colour.
 func (m model) icon(state string) string {
 	if state == alerts.Resolved {
 		return m.theme.normal.Render(m.glyph(state))
@@ -850,7 +781,6 @@ func (m model) icon(state string) string {
 	return m.theme.hot.Render(m.glyph(state))
 }
 
-// alertsView is view 6's body.
 func (m model) alertsView() string {
 	t := m.theme
 	switch {
@@ -874,8 +804,6 @@ func (m model) alertsView() string {
 	return strings.Join(lines[min(m.al.scroll, end):end], "\n")
 }
 
-// alertsLines is the whole Alerts view, and the line index of the selected rule (-1 when
-// there are no rules).
 func (m model) alertsLines() ([]string, int) {
 	t := m.theme
 	a := m.al
@@ -962,7 +890,6 @@ func (m model) alertsLines() ([]string, int) {
 	return lines, sel
 }
 
-// formView is the open editor.
 func (m model) formView() string {
 	t := m.theme
 	f := m.al.form
@@ -1031,7 +958,6 @@ func (m model) formView() string {
 	return strings.Join(lines, "\n")
 }
 
-// alertsFooter is view 6's footer: an open question, the notice, or the keys.
 func (m model) alertsFooter() string {
 	switch {
 	case !m.multi() || m.alerter() == nil:
@@ -1049,8 +975,6 @@ func (m model) alertsFooter() string {
 	return "a add · enter edit · space on/off · D delete · c channels · t test · C clear log"
 }
 
-// bannerRows is the banner's height: one line while an alert is shown and the window has
-// room for it.
 func (m model) bannerRows() int {
 	if m.al.banner != nil && m.height >= 4 {
 		return 1
@@ -1058,7 +982,6 @@ func (m model) bannerRows() int {
 	return 0
 }
 
-// bannerLine is the alert banner shown under the header in every view.
 func (m model) bannerLine() string {
 	e := m.al.banner
 	if e == nil {
@@ -1076,7 +999,6 @@ func (m model) bannerLine() string {
 	return spread(style.Reverse(true).Render(" "+m.glyph(e.State)+text+" "), t.dim.Render("esc dismiss · 6 alerts"), m.width)
 }
 
-// alertsActive is how many alerts are firing, or -1 before the hub has said.
 func (m model) alertsActive() int {
 	if !m.al.loaded {
 		return -1
@@ -1084,7 +1006,6 @@ func (m model) alertsActive() int {
 	return len(m.al.active)
 }
 
-// alertsCount is the dashboard header's alert count, red while any is firing.
 func (m model) alertsCount(n int) string {
 	switch n {
 	case 0:

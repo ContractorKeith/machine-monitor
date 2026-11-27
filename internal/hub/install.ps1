@@ -1,17 +1,6 @@
-# machine-monitor agent installer for Windows, served by a machine-monitor hub with the
-# values below filled in. Works in Windows PowerShell 5.1 and PowerShell 7. No admin rights.
-#   irm -Headers @{Authorization='Bearer KEY'} http://HUB:7777/install.ps1 | iex
-#
-# It downloads the release the hub runs from GitHub, checks the archive against the SHA-256
-# the hub pinned (from the release's signed checksums.txt), installs the binary under
-# %LOCALAPPDATA%\Programs\machine-monitor, pairs with the hub and starts the agent at logon.
-#
-# Everything is inside Install-MachineMonitor, called on the last line: a cut-off download
-# runs nothing instead of half an install.
 function Install-MachineMonitor {
   $ErrorActionPreference = 'Stop'
   $ProgressPreference = 'SilentlyContinue'
-  # Windows PowerShell 5.1 may default to TLS 1.0, which GitHub refuses.
   [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
   $hub = '__HUB__'
@@ -22,7 +11,6 @@ function Install-MachineMonitor {
 
   $dir = Join-Path $env:LOCALAPPDATA 'Programs\machine-monitor'
   $exe = Join-Path $dir 'machine-monitor.exe'
-  # Left by an earlier install or update; still locked if that old binary is running.
   Remove-Item "$exe.old" -Force -ErrorAction SilentlyContinue
 
   $arch = 'amd64'
@@ -54,8 +42,6 @@ function Install-MachineMonitor {
     Expand-Archive $zip -DestinationPath $tmp -Force
 
     New-Item -ItemType Directory -Force $dir | Out-Null
-    # A running agent locks its .exe but it can still be renamed: move it aside, then move
-    # the new one in.
     if (Test-Path $exe) { Move-Item $exe "$exe.old" -Force }
     Move-Item (Join-Path $tmp 'machine-monitor.exe') $exe -Force
     Write-Host "Installed $exe"
@@ -63,14 +49,11 @@ function Install-MachineMonitor {
     Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
   }
 
-  # Saves the hub and key in client.json, after the hub proves it holds the key. The key
-  # goes on stdin so it never shows in the process list.
   $key | & $exe connect --no-agent --key-stdin $hub
   if ($LASTEXITCODE -ne 0) { throw "machine-monitor install: pairing with $hub failed" }
   & $exe service install --role agent --hub $hub
   if ($LASTEXITCODE -ne 0) { throw 'machine-monitor install: service install failed' }
 
-  # Put the binary on this user's PATH for new terminals.
   $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
   if (-not $userPath) { $userPath = '' }
   if (($userPath -split ';') -notcontains $dir) {

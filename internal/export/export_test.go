@@ -19,12 +19,10 @@ import (
 	"github.com/charmbracelet/x/exp/golden"
 )
 
-// now is the fixture clock: testdata/history holds minutes from 2026-10-20 and 2026-10-31.
 var now = time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
 
 func clock() time.Time { return now }
 
-// fixture copies testdata/history to a temp dir, since opening a store may rewrite files.
 func fixture(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -154,8 +152,6 @@ func TestErrors(t *testing.T) {
 	}
 }
 
-// fakeHub serves GET /api/history/{id} from a store the way the hub does: key check, 404 for
-// a device it doesn't know, then Params and Query.
 func fakeHub(t *testing.T, dir, key string, requests *int) *httptest.Server {
 	t.Helper()
 	st, err := history.Open(dir, clock)
@@ -193,7 +189,6 @@ func fakeHub(t *testing.T, dir, key string, requests *int) *httptest.Server {
 	return srv
 }
 
-// TestHubMatchesLocal checks a hub export is byte-for-byte the local one.
 func TestHubMatchesLocal(t *testing.T) {
 	dir := fixture(t)
 	var n int
@@ -211,8 +206,6 @@ func TestHubMatchesLocal(t *testing.T) {
 	}
 }
 
-// TestHubWindows checks a range longer than 3000 minutes comes back whole, at full minute
-// resolution, across several requests.
 func TestHubWindows(t *testing.T) {
 	dir := t.TempDir()
 	var buf bytes.Buffer
@@ -236,7 +229,7 @@ func TestHubWindows(t *testing.T) {
 	if len(got) != minutes || !reflect.DeepEqual(got, want) {
 		t.Errorf("hub returned %d points, want %d identical to local", len(got), minutes)
 	}
-	if n != 4 { // 7 days = 10080 minutes = 4 windows of up to 3000
+	if n != 4 {
 		t.Errorf("%d requests, want 4", n)
 	}
 }
@@ -261,7 +254,6 @@ func TestHubErrors(t *testing.T) {
 	}
 }
 
-// TestHubTooLarge checks a reply cut at maxBody is reported as too large, not as bad JSON.
 func TestHubTooLarge(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"points":[`))
@@ -302,7 +294,7 @@ func TestKeyFor(t *testing.T) {
 	if k, err := KeyFor(path, "http://a:7777"); k != "s3cret" || err != nil {
 		t.Errorf("same hub: %q, %v; want the key", k, err)
 	}
-	// connect writes "hubUrl" (agent.SaveClient), upstream writes "token".
+
 	os.WriteFile(path, []byte(`{"hubUrl":"http://a:7777","token":"fromconnect"}`), 0o600)
 	if k, err := KeyFor(path, "http://a:7777"); k != "fromconnect" || err != nil {
 		t.Errorf("hubUrl file: %q, %v; want the key", k, err)

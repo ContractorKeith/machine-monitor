@@ -14,12 +14,11 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// twoSamples is a fakePS with two samples 2 s apart's worth of counters.
 func twoSamples() *fakePS {
 	return &fakePS{
 		times: [][]cpu.TimesStat{
 			{{User: 100, Idle: 300}, {User: 50, Idle: 150}, {User: 50, Idle: 150}},
-			// total: +60 busy, +140 idle (+20 of it iowait) = 30 %; core0 50 %, core1 10 %
+
 			{{User: 160, Idle: 420, Iowait: 20}, {User: 100, Idle: 200}, {User: 60, Idle: 240}},
 		},
 		count:  2,
@@ -27,7 +26,7 @@ func twoSamples() *fakePS {
 		vm:     &mem.VirtualMemoryStat{Total: 32 << 30, Available: 20 << 30},
 		diskIO: []map[string]disk.IOCountersStat{
 			{"nvme0n1": {ReadBytes: 1000, WriteBytes: 50000}},
-			{"nvme0n1": {ReadBytes: 3000, WriteBytes: 40000}}, // write went backwards: reset
+			{"nvme0n1": {ReadBytes: 3000, WriteBytes: 40000}},
 		},
 		netIO: [][]net.IOCountersStat{
 			{{Name: "lo", BytesRecv: 5, BytesSent: 5}, {Name: "wlan0", BytesRecv: 1000, BytesSent: 100}},
@@ -36,11 +35,11 @@ func twoSamples() *fakePS {
 		ifaces: net.InterfaceStatList{
 			{Name: "lo", HardwareAddr: "", Flags: []string{"up", "loopback"}},
 			{Name: "wlan0", HardwareAddr: "A4:BB:6D:12:34:56", Flags: []string{"up"}},
-			{Name: "eth0", HardwareAddr: "a4:bb:6d:12:34:56", Flags: []string{"up"}},        // duplicate
-			{Name: "docker0", HardwareAddr: "02:42:ac:11:00:02", Flags: []string{"up"}},     // locally administered
-			{Name: "eth1", HardwareAddr: "00:00:00:00:00:00", Flags: []string{"up"}},        // zero
-			{Name: "eth2", HardwareAddr: "00:1b:21:aa:bb:cc", Flags: []string{"broadcast"}}, // real, down is fine
-			{Name: "ib0", HardwareAddr: "80:00:02:08:fe:80:00:00:00:00", Flags: []string{}}, // not 6 bytes
+			{Name: "eth0", HardwareAddr: "a4:bb:6d:12:34:56", Flags: []string{"up"}},
+			{Name: "docker0", HardwareAddr: "02:42:ac:11:00:02", Flags: []string{"up"}},
+			{Name: "eth1", HardwareAddr: "00:00:00:00:00:00", Flags: []string{"up"}},
+			{Name: "eth2", HardwareAddr: "00:1b:21:aa:bb:cc", Flags: []string{"broadcast"}},
+			{Name: "ib0", HardwareAddr: "80:00:02:08:fe:80:00:00:00:00", Flags: []string{}},
 		},
 	}
 }
@@ -148,8 +147,6 @@ func deref(p *float64) any {
 	return *p
 }
 
-// stuckSource is a Linux source whose memory read waits for its ctx (a command that obeys
-// its timeout) and whose network read ignores ctx entirely (a hung statfs or WMI call).
 type stuckSource struct {
 	linuxSource
 	release chan struct{}
@@ -157,7 +154,7 @@ type stuckSource struct {
 
 func (s stuckSource) memory(ctx context.Context) report.Memory {
 	<-ctx.Done()
-	return report.Memory{} // like vm_stat killed at the deadline
+	return report.Memory{}
 }
 
 func (s stuckSource) netIO(context.Context) []ifaceBytes {

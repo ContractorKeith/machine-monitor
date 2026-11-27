@@ -95,9 +95,6 @@ func TestChecksumsRefusesBadSignature(t *testing.T) {
 	}
 }
 
-// The realistic attack: Fulcio certificates are public, so an attacker replays a genuine
-// certificate and signature, edits checksums.txt and drops the bundle's messageDigest. Only
-// the signature check itself can refuse that.
 func TestChecksumsRefusesEditedChecksumsWithoutDigest(t *testing.T) {
 	rel := updatetest.New(t, "v1.4.0", allPlatforms)
 	var b map[string]any
@@ -203,8 +200,6 @@ func TestManagedBy(t *testing.T) {
 	}
 }
 
-// A real cosign keyless bundle: goreleaser's own v2.19.0 release, signed by its release.yml
-// through the public Fulcio CA, checks out against the embedded root.
 func TestVerifyRealSigstoreBundle(t *testing.T) {
 	dir := filepath.Join("testdata", "goreleaser-v2.19.0")
 	sums, err := os.ReadFile(filepath.Join(dir, "checksums.txt"))

@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/ContractorKeith/machine-monitor/internal/collect"
-	_ "github.com/ContractorKeith/machine-monitor/internal/collect/all" // register probes
+	_ "github.com/ContractorKeith/machine-monitor/internal/collect/all"
 	"github.com/ContractorKeith/machine-monitor/internal/config"
 	"github.com/ContractorKeith/machine-monitor/internal/discovery"
 	"github.com/ContractorKeith/machine-monitor/internal/hub"
@@ -24,8 +24,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/tui"
 )
 
-// runHub is `machine-monitor hub [--port 7777] [--show-key]`: a headless hub that also
-// monitors this machine. --show-key prints this machine's hub key and exits.
 func runHub(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("hub", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -59,8 +57,7 @@ func runHub(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, key)
 		return 0
 	}
-	// A terminal hangup must not kill a headless hub or abandon its pending history.
-	// Keep settings and pairings in place; configuration changes require a restart.
+
 	hangups := make(chan os.Signal, 1)
 	signal.Notify(hangups, syscall.SIGHUP)
 	defer signal.Stop(hangups)
@@ -72,7 +69,7 @@ func runHub(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "machine-monitor hub: %v\n", err)
 		return 1
 	}
-	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", *port)) // dual-stack: IPv4 and IPv6
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
 	if err != nil {
 		h.Close()
 		fmt.Fprintf(stderr, "machine-monitor hub: %v (is a hub already running on port %d?)\n", err, *port)
@@ -89,8 +86,7 @@ func runHub(args []string, stdout, stderr io.Writer) int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	// No WriteTimeout: SSE streams stay open while a TUI is connected. The stream handler sets
-	// a deadline on each write instead (hub.StreamWriteTimeout).
+
 	srv := &http.Server{Handler: h.Handler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
 		IdleTimeout: 2 * time.Minute, ErrorLog: logger}
 	served := make(chan error, 1)
@@ -101,21 +97,18 @@ func runHub(args []string, stdout, stderr io.Writer) int {
 			stop()
 		}
 	}()
-	h.Run(ctx) // returns once SSE streams have ended, so Shutdown doesn't wait on them
+	h.Run(ctx)
 
 	sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	srv.Shutdown(sctx)
-	if err := h.Close(); err != nil { // after Shutdown: no report can arrive later
+	if err := h.Close(); err != nil {
 		logger.Printf("hub: close: %v", err)
 		return 1
 	}
 	return 0
 }
 
-// printKey prints the hub key line. The full key only goes to a person's terminal: under a
-// service manager stdout lands in a log (the systemd journal, the launchd log) that others
-// may read, so there it is masked.
 func printKey(w io.Writer, key string) {
 	if isTerminal(w) {
 		fmt.Fprintf(w, "  key:           %s\n", key)
@@ -124,8 +117,6 @@ func printKey(w io.Writer, key string) {
 	}
 }
 
-// isTerminal reports whether w is a character device: a terminal, not a pipe, file or log
-// (the systemd journal, a launchd log). /dev/null counts too, which is harmless.
 func isTerminal(w io.Writer) bool {
 	f, ok := w.(*os.File)
 	if !ok {
@@ -135,7 +126,6 @@ func isTerminal(w io.Writer) bool {
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
 
-// maskKey shows only the first four characters of a key.
 func maskKey(key string) string {
 	if len(key) <= 4 {
 		return strings.Repeat("•", len(key))
@@ -143,7 +133,6 @@ func maskKey(key string) string {
 	return key[:4] + strings.Repeat("•", len(key)-4)
 }
 
-// pairCommand is the pair command for a hub on port: --port only when it isn't the default.
 func pairCommand(port int) string {
 	if port == hub.DefaultPort {
 		return "machine-monitor pair"

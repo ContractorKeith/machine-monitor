@@ -22,11 +22,10 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/hub"
 )
 
-// countingHub wraps the real client and counts the stream's connections.
 type countingHub struct {
 	*client.Client
 	connects, drops atomic.Int32
-	lastDrop        atomic.Value // error
+	lastDrop        atomic.Value
 }
 
 func (c *countingHub) Stream(ctx context.Context) <-chan client.Event {
@@ -54,8 +53,6 @@ func (c *countingHub) Stream(ctx context.Context) <-chan client.Event {
 	return out
 }
 
-// program drives a model the way Bubble Tea does: commands run on goroutines, their
-// messages go through Update one at a time, and every update is followed by a full frame.
 type program struct {
 	mu     sync.Mutex
 	m      model
@@ -103,12 +100,6 @@ func (p *program) run(ctx context.Context) {
 	}
 }
 
-// TestHub250: a connected TUI follows a real hub with 250 busy devices (PLAN MaxDevices),
-// each reporting every 2 s, without falling behind: one connection for the whole run (no
-// drop-and-resnapshot loop), every device on the dashboard with a recent report, and the
-// heap bounded. Skeptic report H3: before the fix the TUI redrew every card for every
-// report, its 256-event buffer overflowed within seconds, and each reconnect fetched
-// another full snapshot.
 func TestHub250(t *testing.T) {
 	if raceDetector {
 		t.Skip("timing test; the race detector slows everything several times over")
@@ -120,11 +111,10 @@ func TestHub250(t *testing.T) {
 		devices  = hub.MaxDevices
 		interval = 2 * time.Second
 		duration = 15 * time.Second
-		heapMax  = 300 << 20 // hub and TUI together: about 140 MB; 570 MB here before the fix
+		heapMax  = 300 << 20
 	)
-	// The hub's clock replays the last ten minutes while the history is filled in, then
-	// runs in real time.
-	var fake atomic.Int64 // Unix ms; 0 is the real clock
+
+	var fake atomic.Int64
 	clock := func() time.Time {
 		if ms := fake.Load(); ms != 0 {
 			return time.UnixMilli(ms)
@@ -154,7 +144,6 @@ func TestHub250(t *testing.T) {
 		h.Close()
 	})
 
-	// The recorded upstream agent report, one per device.
 	raw, err := os.ReadFile("../report/testdata/linux-agent.sh.json")
 	if err != nil {
 		t.Fatal(err)
@@ -184,8 +173,7 @@ func TestHub250(t *testing.T) {
 		}
 		return nil
 	}
-	// Ten minutes of history for every device (hub.LiveHistory), so the snapshot the TUI
-	// gets on connecting is as big as a busy hub's: about 20 MB.
+
 	start := time.Now().Add(-hub.LiveHistory)
 	handler := h.Handler()
 	for n := range int(hub.LiveHistory / interval) {
@@ -208,7 +196,7 @@ func TestHub250(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range devices {
 		wg.Go(func() {
-			// Spread the devices over the interval, as real agents are.
+
 			first := time.NewTimer(time.Duration(i) * interval / devices)
 			defer first.Stop()
 			select {
@@ -251,7 +239,7 @@ func TestHub250(t *testing.T) {
 		peak = max(peak, ms.HeapAlloc)
 	}
 	wg.Wait()
-	time.Sleep(interval) // let the last reports arrive
+	time.Sleep(interval)
 
 	p.mu.Lock()
 	got, frames := p.m, p.frames
@@ -262,7 +250,7 @@ func TestHub250(t *testing.T) {
 	if n := ch.connects.Load(); n != 1 || ch.drops.Load() != 0 {
 		t.Errorf("the stream connected %d times and dropped %d times (last: %v); want one connection", n, ch.drops.Load(), ch.lastDrop.Load())
 	}
-	// Batching: a few frames a second, not one per report (125 a second here).
+
 	if fps := float64(frames) / (duration + interval).Seconds(); fps > 20 {
 		t.Errorf("%.0f frames a second; stream events are not batched", fps)
 	}

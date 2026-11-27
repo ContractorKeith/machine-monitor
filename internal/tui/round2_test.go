@@ -18,8 +18,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-// TestCleanStripsTerminalControls: escape sequences, controls and invisible format
-// characters never reach the screen (skeptic pass 2, B4).
 func TestCleanStripsTerminalControls(t *testing.T) {
 	for in, want := range map[string]string{
 		"plain name": "plain name",
@@ -42,8 +40,6 @@ func TestCleanStripsTerminalControls(t *testing.T) {
 	}
 }
 
-// TestProcessNamesCannotWriteEscapes: a process named with SGR and an OSC 8 link renders as
-// text. Without clean the frame carries the link.
 func TestProcessNamesCannotWriteEscapes(t *testing.T) {
 	f := newActionFake()
 	m := actModel(t, f, 120, 30)
@@ -62,7 +58,6 @@ func TestProcessNamesCannotWriteEscapes(t *testing.T) {
 	}
 }
 
-// TestDeviceFieldsAreCleaned: names and report strings from the hub are cleaned on arrival.
 func TestDeviceFieldsAreCleaned(t *testing.T) {
 	devs := threeDevices()
 	devs[0].Name = "ws\x1b[41m-red\u202e"
@@ -82,7 +77,6 @@ func TestDeviceFieldsAreCleaned(t *testing.T) {
 	}
 }
 
-// TestFilterIsGlobal: the one `/` filter applies on the dashboard and in Processes.
 func TestFilterIsGlobal(t *testing.T) {
 	m := actModel(t, newActionFake(), 120, 30)
 	m = runActs(t, m, keyMsg("/"), keyMsg("s"), keyMsg("s"), keyMsg("h"), keyMsg("enter"), keyMsg("3"))
@@ -95,7 +89,6 @@ func TestFilterIsGlobal(t *testing.T) {
 	}
 }
 
-// TestMoveNoticeClearsOnNextKey: the J/K refusal answers one key press.
 func TestMoveNoticeClearsOnNextKey(t *testing.T) {
 	m := hubModel(t, newFakeHub(threeDevices()), 100, 30)
 	m.filterValue = "o"
@@ -109,8 +102,6 @@ func TestMoveNoticeClearsOnNextKey(t *testing.T) {
 	}
 }
 
-// TestStaleRightAfterDisconnect: when the stream drops, online flags are unknown at once,
-// not after staleAfter.
 func TestStaleRightAfterDisconnect(t *testing.T) {
 	m := hubModel(t, newFakeHub(threeDevices()), 100, 30)
 	m = run(t, m, hubMsg{client.Event{Type: client.EventDisconnected, Err: fmt.Errorf("dial: %w", syscall.ECONNREFUSED), Retry: time.Second}})
@@ -123,7 +114,6 @@ func TestStaleRightAfterDisconnect(t *testing.T) {
 	}
 }
 
-// TestHubErrIsASentence: Go's network errors become plain words, without the URL.
 func TestHubErrIsASentence(t *testing.T) {
 	refused := &url.Error{Op: "Get", URL: "http://127.0.0.1:17840/api/info?nonce=89c9",
 		Err: &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}}
@@ -144,14 +134,13 @@ func TestHubErrIsASentence(t *testing.T) {
 	}
 }
 
-// TestHubOwnPort: through a port forward the install URL uses the hub's port, not the TUI's.
 func TestHubOwnPort(t *testing.T) {
 	info := &client.Info{Port: 17840}
 	for _, c := range []struct{ raw, via, want string }{
 		{"http://192.168.77.5:17842", "127.0.0.1:17842", "http://192.168.77.5:17840"},
 		{"http://192.168.77.5:7777", "localhost:7777", "http://192.168.77.5:17840"},
-		{"http://hub.lan:7777", "hub.lan:7777", "http://hub.lan:7777"},          // not loopback: as is
-		{"http://127.0.0.1:17842", "127.0.0.1:17842", "http://127.0.0.1:17842"}, // nothing better
+		{"http://hub.lan:7777", "hub.lan:7777", "http://hub.lan:7777"},
+		{"http://127.0.0.1:17842", "127.0.0.1:17842", "http://127.0.0.1:17842"},
 	} {
 		if got := hubOwnPort(c.raw, c.via, info); got != c.want {
 			t.Errorf("hubOwnPort(%q via %q) = %q, want %q", c.raw, c.via, got, c.want)
@@ -162,7 +151,6 @@ func TestHubOwnPort(t *testing.T) {
 	}
 }
 
-// TestAddDeviceUpstreamText: an upstream hub has 5 tries in all and a bash installer.
 func TestAddDeviceUpstreamText(t *testing.T) {
 	m := hubModel(t, newFakeHub(nil), 100, 30)
 	if s := m.pairLimits(); !strings.Contains(s, "5 tries per device") {
@@ -174,7 +162,6 @@ func TestAddDeviceUpstreamText(t *testing.T) {
 	}
 }
 
-// TestVersionOption: Settings shows the version the caller gives.
 func TestVersionOption(t *testing.T) {
 	m := New(Options{Hub: newFakeHub(nil), Version: "1.2.3"}).(model)
 	if m.version() != "1.2.3" {
@@ -184,8 +171,6 @@ func TestVersionOption(t *testing.T) {
 
 var _ tea.Msg = hubMsg{}
 
-// TestLocalHostnameIsCleaned: in local mode the hostname is cleaned before it names the
-// device, so it can't reach the cards, History or Energy.
 func TestLocalHostnameIsCleaned(t *testing.T) {
 	m := New(Options{Interval: time.Hour}).(model)
 	r := &report.Report{Hostname: report.Ptr("box\x1b]8;;http://evil.example/\aLINK\x1b[41mRED\u202e")}

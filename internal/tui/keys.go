@@ -2,17 +2,16 @@ package tui
 
 import "charm.land/bubbles/v2/key"
 
-// keyMap is every binding; it also feeds the ? help screen.
 type keyMap struct {
 	Dashboard, Device, Processes, History, Energy key.Binding
 	Alerts, Next, Settings                        key.Binding
 	Help, Quit                                    key.Binding
 	Up, Down, PageUp, PageDown, Top, Bottom       key.Binding
 	Filter, Sort, Reverse, Clear                  key.Binding
-	Left, Right, MoveUp, MoveDown, Rename, Remove key.Binding // hub mode
-	Wake, Power, Add                              key.Binding // hub mode actions
+	Left, Right, MoveUp, MoveDown, Rename, Remove key.Binding
+	Wake, Power, Add                              key.Binding
 
-	hub bool // hub mode: help lists the device keys
+	hub bool
 }
 
 func newKeyMap(hub bool) keyMap {
@@ -50,12 +49,10 @@ func newKeyMap(hub bool) keyMap {
 	}
 }
 
-// ShortHelp implements help.KeyMap.
 func (k keyMap) ShortHelp() []key.Binding {
 	return []key.Binding{k.Help, k.Quit}
 }
 
-// FullHelp implements help.KeyMap: one column per group.
 func (k keyMap) FullHelp() [][]key.Binding {
 	groups := [][]key.Binding{
 		{k.Dashboard, k.Device, k.Processes, k.History, k.Energy, k.Alerts, k.Next, k.Settings, k.Help, k.Quit},

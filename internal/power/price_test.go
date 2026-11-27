@@ -67,7 +67,7 @@ func TestRateAt(t *testing.T) {
 		want float64
 	}{
 		{0, 0, 0.05}, {6, 59, 0.05}, {7, 0, 0.10}, {15, 59, 0.10}, {16, 0, 0.40},
-		{20, 30, 0.40}, // overlapping periods: the first (sorted) wins
+		{20, 30, 0.40},
 		{21, 0, 0.99}, {22, 0, 0.10}, {23, 59, 0.10},
 	} {
 		if got := s.RateAt(day.Add(time.Duration(c.h)*time.Hour + time.Duration(c.m)*time.Minute)); got != c.want {
@@ -81,7 +81,6 @@ func TestRateAt(t *testing.T) {
 
 func TestDayRateAndRange(t *testing.T) {
 	s := Settings{Rate: 0.10, TOU: []Period{{16, 21, 0.40}}}
-	// 19 h × 0.10 + 5 h × 0.40 = 3.9 over 24 h.
 	if got := s.DayRate(); !near(got, 3.9/24) {
 		t.Errorf("DayRate = %v, want %v", got, 3.9/24)
 	}
@@ -95,7 +94,6 @@ func TestDayRateAndRange(t *testing.T) {
 
 func near(a, b float64) bool { return a-b < 1e-12 && b-a < 1e-12 }
 
-// Overlapping time-of-use periods are refused with a sentence; touching ones are fine (B9).
 func TestParseSettingsRefusesOverlap(t *testing.T) {
 	const head = `{"region":"US","rate":0.1,"currency":"USD","tou":`
 	_, err := ParseSettings([]byte(head + `[{"from":16,"to":21,"rate":0.35},{"from":18,"to":23,"rate":0.5}]}`))
@@ -107,7 +105,6 @@ func TestParseSettingsRefusesOverlap(t *testing.T) {
 	}
 }
 
-// LoadSettings keeps the flat rate and currency of a price whose periods overlap.
 func TestLoadSettingsDropsOverlappingPeriods(t *testing.T) {
 	s, err := LoadSettings([]byte(`{"region":"US","rate":0.2,"currency":"USD","tou":[` +
 		`{"from":16,"to":21,"rate":0.4},{"from":18,"to":23,"rate":0.5}]}`))

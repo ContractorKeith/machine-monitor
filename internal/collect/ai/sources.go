@@ -1,8 +1,5 @@
 package ai
 
-// Ported from Forward-Future/device-monitor agent/agent.sh (AI_PY) and agent/agent.ps1
-// (Get-AiModels) at c3a4c41. MIT License, Copyright (c) 2026 Matt.
-
 import (
 	"bytes"
 	"context"
@@ -26,9 +23,8 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/report"
 )
 
-const maxBody = 8 << 20 // cap on any HTTP or exec output we parse
+const maxBody = 8 << 20
 
-// client talks only to loopback apps: no proxy, no redirects.
 var client = &http.Client{
 	Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true},
 	CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -36,7 +32,6 @@ var client = &http.Client{
 	},
 }
 
-// getJSON fetches http://host:port/path into v with upstream's 1.5 s timeout.
 func (d *detector) getJSON(ctx context.Context, port, path string, v any) error {
 	ctx, cancel := context.WithTimeout(ctx, httpTimeout)
 	defer cancel()
@@ -55,8 +50,6 @@ func (d *detector) getJSON(ctx context.Context, port, path string, v any) error 
 	return json.NewDecoder(io.LimitReader(resp.Body, maxBody)).Decode(v)
 }
 
-// runCmd runs argv with ctx's deadline and a stripped environment and returns stdout, or
-// "" on any failure.
 func runCmd(ctx context.Context, argv ...string) string {
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Env = strippedEnv()
@@ -69,7 +62,6 @@ func runCmd(ctx context.Context, argv ...string) string {
 	return out.String()
 }
 
-// strippedEnv keeps only what the vendor tools need to find their binaries and config.
 func strippedEnv() []string {
 	var env []string
 	for _, k := range []string{"PATH", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "SystemRoot", "TEMP", "TMP", "TMPDIR"} {
@@ -80,7 +72,6 @@ func strippedEnv() []string {
 	return env
 }
 
-// limitWriter drops output past n bytes.
 type limitWriter struct {
 	w io.Writer
 	n int
@@ -95,11 +86,8 @@ func (l *limitWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// lookPath finds a tool on PATH.
 func lookPath(name string) (string, error) { return exec.LookPath(name) }
 
-// gpuProcs maps pid to GPU memory in bytes from nvidia-smi's compute apps; nil when
-// nvidia-smi is missing or fails.
 func (d *detector) gpuProcs(ctx context.Context) map[int]float64 {
 	if len(d.nvidiaSMI) == 0 {
 		return nil
@@ -108,7 +96,6 @@ func (d *detector) gpuProcs(ctx context.Context) map[int]float64 {
 	return parseComputeApps(runCmd(ctx, argv...))
 }
 
-// parseComputeApps parses "pid, used_memory_MiB" lines, summing a pid seen on several GPUs.
 func parseComputeApps(out string) map[int]float64 {
 	gpu := map[int]float64{}
 	for _, line := range strings.Split(out, "\n") {
@@ -119,15 +106,13 @@ func parseComputeApps(out string) map[int]float64 {
 		pid, err1 := strconv.Atoi(strings.TrimSpace(f[0]))
 		mib, err2 := strconv.ParseFloat(strings.TrimSpace(f[1]), 64)
 		if err1 != nil || err2 != nil || pid <= 0 || !(mib >= 0) || math.IsInf(mib, 0) {
-			continue // "[N/A]", "[Insufficient Permissions]", ...
+			continue
 		}
 		gpu[pid] += mib * 1048576
 	}
 	return gpu
 }
 
-// ollama reads the models Ollama has in memory from /api/ps; nil when it isn't running or
-// has nothing loaded.
 func (d *detector) ollama(ctx context.Context) *report.AIGroup {
 	var j struct {
 		Models []struct {
@@ -153,7 +138,6 @@ func (d *detector) ollama(ctx context.Context) *report.AIGroup {
 	return g
 }
 
-// lmsModel is one entry of `lms ps --json`.
 type lmsModel struct {
 	DisplayName *string  `json:"displayName"`
 	Identifier  *string  `json:"identifier"`
@@ -161,7 +145,6 @@ type lmsModel struct {
 	SizeBytes   *float64 `json:"sizeBytes"`
 }
 
-// name is the first of displayName, identifier and modelKey that is set.
 func (m lmsModel) name() *string {
 	for _, s := range []*string{m.DisplayName, m.Identifier, m.ModelKey} {
 		if s != nil && *s != "" {
@@ -171,8 +154,6 @@ func (m lmsModel) name() *string {
 	return nil
 }
 
-// lmsModels asks the LM Studio CLI what is loaded, and returns LM Studio's pids. Only when
-// LM Studio is already running: `lms` starts its server otherwise.
 func (d *detector) lmsModels(ctx context.Context) ([]lmsModel, []int) {
 	if len(d.lms) == 0 {
 		return nil, nil
@@ -192,7 +173,6 @@ func (d *detector) lmsModels(ctx context.Context) ([]lmsModel, []int) {
 	return arr, pids
 }
 
-// lmsPIDs lists LM Studio app and llmster daemon processes.
 func lmsPIDs(ctx context.Context) []int {
 	if runtime.GOOS == "windows" {
 		return parseTasklist(runCmd(ctx, "tasklist", "/FO", "CSV", "/NH"), "lm studio.exe", "llmster.exe")
@@ -206,8 +186,6 @@ func lmsPIDs(ctx context.Context) []int {
 	return pids
 }
 
-// parseTasklist returns the pids of `tasklist /FO CSV /NH` rows whose image is one of names
-// (lower case).
 func parseTasklist(out string, names ...string) []int {
 	var pids []int
 	for _, line := range strings.Split(out, "\n") {
@@ -222,7 +200,6 @@ func parseTasklist(out string, names ...string) []int {
 	return pids
 }
 
-// comfyRunning reports whether a ComfyUI server answers on the default port.
 func (d *detector) comfyRunning(ctx context.Context) bool {
 	var j struct {
 		System struct {
@@ -232,10 +209,6 @@ func (d *detector) comfyRunning(ctx context.Context) bool {
 	return d.getJSON(ctx, d.comfyPort, "/system_stats", &j) == nil && j.System.Version != ""
 }
 
-// comfy lists the models ComfyUI loaded. ComfyUI doesn't say what it holds in memory, so
-// this uses the loader nodes of the last workflow it ran. home is the server's working
-// directory (its models live in home/models); file sizes are looked up there and in
-// d.comfyRoots.
 func (d *detector) comfy(ctx context.Context, port, home string, mem *float64) report.AIGroup {
 	g := report.AIGroup{App: report.Ptr("ComfyUI"), Mem: mem, Models: []report.AIModel{}}
 	var hist map[string]struct {
@@ -283,8 +256,6 @@ func (d *detector) comfy(ctx context.Context, port, home string, mem *float64) r
 	return g
 }
 
-// modelSize finds name in any subfolder of roots (checkpoints/, loras/, ...) and returns its
-// size, or nil. Names that could escape the root are not looked up.
 func modelSize(roots []string, name string) *float64 {
 	if name == "" || filepath.IsAbs(name) || strings.Contains(name, "..") {
 		return nil
@@ -306,7 +277,6 @@ func modelSize(roots []string, name string) *float64 {
 	return nil
 }
 
-// sortedKeys returns m's keys in a stable order: numeric ids ascending, then the rest.
 func sortedKeys[V any](m map[string]V) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {

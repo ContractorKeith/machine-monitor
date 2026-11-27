@@ -17,6 +17,9 @@ Last touched 2026-11-01.
 
 ## Pointers
 - `docs/PLAN.md` — the build plan: architecture, feature matrix, milestones, acceptance.
+- `docs/adr/` — decision records: the non-obvious *why* behind the code. Read the ADR for a
+  package before changing it.
+- `NOTICE.md` — upstream MIT notice and the files that port upstream logic.
 
 ## Commands
 ```bash
@@ -45,6 +48,7 @@ One owner per package; change another package's exported API only through its ow
 | `internal/history`, `power`, `alerts` | M5–M6 ports of `history.js`, `power.js`, `alerts.js` |
 | `internal/discovery`, `tailscale`, `client`, `service` | M4, M7, M8 |
 | `internal/tui` | §7 views (M2, M4–M6) |
+| `internal/lint/nocomment` | comment ban ratchet (`baseline.json`) |
 
 ## Conventions & Gotchas
 - Go, `CGO_ENABLED=0` on every target. Shelling out to vendor tools (`nvidia-smi`,
@@ -56,8 +60,12 @@ One owner per package; change another package's exported API only through its ow
 - Probes fail soft and follow the contract in `internal/collect/collect.go`.
 - All data files go through `config.WriteFile0600`. `MACHINE_MONITOR_DIR` overrides the
   data dir (tests, second instance).
-- Upstream reference source is pinned at `c3a4c41`. Ported logic carries a header comment
-  naming the upstream file and its MIT notice (PLAN §11).
+- Upstream reference source is pinned at `c3a4c41`. Porting upstream logic into a file means
+  adding that file to `NOTICE.md` (PLAN §11).
+- No code comments. `internal/lint/nocomment` fails `go test ./...` when a file gains one;
+  directives (`//go:`, `//nolint`, `// Code generated`) are allowed. Put the why in a name, a
+  test, or an ADR in `docs/adr/`. Use the `delete-comment` skill to clear any that remain and
+  lower `baseline.json`.
 
 ## Out of Scope
 - Browser dashboard, Electron/tray app, PWA.

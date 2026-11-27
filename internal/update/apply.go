@@ -18,7 +18,6 @@ import (
 	"strings"
 )
 
-// CheckSHA256 reports whether data hashes to want (lowercase hex).
 func CheckSHA256(data []byte, want string) error {
 	sum := sha256.Sum256(data)
 	if got := hex.EncodeToString(sum[:]); got != want {
@@ -27,8 +26,6 @@ func CheckSHA256(data []byte, want string) error {
 	return nil
 }
 
-// ExtractBinary returns the machine-monitor binary from a release archive: a .tar.gz, or a
-// .zip for Windows (machine-monitor.exe).
 func ExtractBinary(archiveName string, data []byte) ([]byte, error) {
 	if strings.HasSuffix(archiveName, ".zip") {
 		return extractZip(data)
@@ -91,10 +88,6 @@ func readLimited(r io.Reader) ([]byte, error) {
 	return b, nil
 }
 
-// Replace swaps the binary at exe for bin. The new file is written next to exe and renamed
-// over it, so exe is always either the old or the new binary, never half of one. Windows
-// can't overwrite a running .exe but can rename it, so there the old binary is moved aside
-// to exe+".old" first (CleanOld removes it on a later run).
 func Replace(exe string, bin []byte) error {
 	return replace(exe, bin, runtime.GOOS == "windows")
 }
@@ -147,12 +140,8 @@ func replace(exe string, bin []byte, renameAside bool) (err error) {
 	return nil
 }
 
-// CleanOld removes exe+".old" left by an earlier Windows update. It fails silently: the old
-// binary may still be running.
 func CleanOld(exe string) { os.Remove(exe + ".old") }
 
-// ManagedBy names the package manager that owns exe ("Homebrew", "Scoop"), or "" when the
-// binary is the user's to replace.
 func ManagedBy(exe string) string {
 	p := filepath.ToSlash(exe)
 	switch {

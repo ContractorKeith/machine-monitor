@@ -23,7 +23,7 @@ func TestProcessesAndAction(t *testing.T) {
 	if err != nil || !p.Supported || p.Procs != nil {
 		t.Fatalf("first Processes = %+v, %v; want supported, no list yet", p, err)
 	}
-	th.report("dev-a", withProcs) // now watched: the hub keeps it
+	th.report("dev-a", withProcs)
 	if p, err = c.Processes(ctx, "dev-a"); err != nil || p.Procs == nil || len(p.Procs.List) != 1 {
 		t.Fatalf("watched Processes = %+v, %v", p, err)
 	}

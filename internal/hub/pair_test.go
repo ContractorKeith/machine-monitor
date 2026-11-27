@@ -10,7 +10,6 @@ import (
 	"time"
 )
 
-// newCode asks the hub for a pairing code with the key.
 func (th *testHub) newCode() string {
 	th.t.Helper()
 	w := th.keyed("POST", "/api/pair/code", "")
@@ -35,14 +34,12 @@ func (th *testHub) pair(code string) (int, map[string]any) {
 	return th.pairFrom("127.0.0.1:50000", code)
 }
 
-// pairFrom tries code from the address remote.
 func (th *testHub) pairFrom(remote, code string) (int, map[string]any) {
 	th.t.Helper()
 	w := th.req("POST", "/api/pair", "", fmt.Sprintf(`{"code":%q}`, code), "RemoteAddr", remote)
 	return w.Code, decode[map[string]any](th.t, w)
 }
 
-// wrongCode is a code that differs from code.
 func wrongCode(code string) string {
 	if code == "000000" {
 		return "000001"
@@ -63,7 +60,6 @@ func TestPairGivesKeyOnce(t *testing.T) {
 		t.Fatalf("no active code: %d %v", code, body)
 	}
 	c := th.newCode()
-	// Spaces and dashes are ignored.
 	code, body := th.pair(c[:3] + " - " + c[3:])
 	if code != 200 || body["token"] != th.Token() {
 		t.Fatalf("pair: %d %v", code, body)
@@ -83,7 +79,7 @@ func TestPairCodeExpires(t *testing.T) {
 	}
 
 	c = th.newCode()
-	th.clk.Add(PairTTL) // exactly at the deadline still works, as upstream (now > expires)
+	th.clk.Add(PairTTL)
 	if code, _ := th.pair(c); code != 200 {
 		t.Fatalf("code at deadline: %d", code)
 	}
@@ -107,12 +103,10 @@ func TestPairCodeDiesAfterFiveTries(t *testing.T) {
 	if code, body := th.pair(c); code != 403 || body["token"] != nil {
 		t.Fatalf("right code after %d wrong tries: %d %v", PairTries, code, body)
 	}
-	// The tries are this source's: another machine can still use the code.
 	if code, body := th.pairFrom("192.168.1.9:4000", c); code != 200 || body["token"] != th.Token() {
 		t.Fatalf("another source after one burned its tries: %d %v", code, body)
 	}
 
-	// A new code resets the count; four wrong tries still leave it alive.
 	c = th.newCode()
 	for range PairTries - 1 {
 		th.pair(wrongCode(c))
@@ -126,7 +120,7 @@ func TestNewCodeReplacesOld(t *testing.T) {
 	th := newTestHub(t)
 	old := th.newCode()
 	var c string
-	for c = th.newCode(); c == old; c = th.newCode() { // 1 in a million
+	for c = th.newCode(); c == old; c = th.newCode() {
 	}
 	if code, _ := th.pair(old); code != 403 {
 		t.Fatalf("old code: %d", code)
@@ -146,7 +140,6 @@ func TestPairIsRateLimited(t *testing.T) {
 	if w := th.req("POST", "/api/pair", "", `{}`); w.Code != 429 {
 		t.Fatalf("over the limit: %d", w.Code)
 	}
-	// Another address has its own allowance.
 	if w := th.req("POST", "/api/pair", "", `{}`, "RemoteAddr", "192.168.1.9:4000"); w.Code != 403 {
 		t.Fatalf("other address: %d", w.Code)
 	}
@@ -159,7 +152,7 @@ func TestPairIsRateLimited(t *testing.T) {
 func TestPairBroadcastsPaired(t *testing.T) {
 	th := newTestHub(t)
 	srv := httptest.NewServer(th.h)
-	t.Cleanup(srv.Close) // after the stream body closes (cleanups run last-in first-out)
+	t.Cleanup(srv.Close)
 	s := openStream(t, srv, th.Token())
 	s.next("snapshot")
 	c := th.newCode()
@@ -169,7 +162,6 @@ func TestPairBroadcastsPaired(t *testing.T) {
 	s.next("paired")
 }
 
-// An IPv6 source is its /64, since a machine can use any address in it.
 func TestPairTriesPerIPv6Prefix(t *testing.T) {
 	th := newTestHub(t)
 	c := th.newCode()
@@ -184,7 +176,6 @@ func TestPairTriesPerIPv6Prefix(t *testing.T) {
 	}
 }
 
-// Many sources together still kill the code after pairMaxWrong wrong guesses.
 func TestPairCodeDiesAfterMaxWrong(t *testing.T) {
 	th := newTestHub(t)
 	c := th.newCode()
@@ -199,7 +190,6 @@ func TestPairCodeDiesAfterMaxWrong(t *testing.T) {
 	}
 }
 
-// Through a trusted proxy each forwarded client has its own tries.
 func TestPairTriesUseForwardedClient(t *testing.T) {
 	th := newTestHub(t)
 	th.mu.Lock()
@@ -209,7 +199,7 @@ func TestPairTriesUseForwardedClient(t *testing.T) {
 	try := func(fwd, code string) int {
 		return th.req("POST", "/api/pair", "", fmt.Sprintf(`{"code":%q}`, code), "RemoteAddr", "192.168.1.2:5000", "X-Forwarded-For", fwd).Code
 	}
-	for i := range PairTries { // a spoofed leftmost entry doesn't buy fresh tries
+	for i := range PairTries {
 		try(fmt.Sprintf("10.0.0.%d, 100.64.0.7", i+1), wrongCode(c))
 	}
 	if code := try("10.0.0.99, 100.64.0.7", c); code != 403 {
@@ -220,9 +210,6 @@ func TestPairTriesUseForwardedClient(t *testing.T) {
 	}
 }
 
-// One live code at a time: {"replace": false}, as `machine-monitor pair` sends, is refused
-// while a code is active, so two runs can't each show a code of which only one works.
-// Without it a new code replaces the old one and says so with a "pairEnded" event.
 func TestPairCodeOneAtATime(t *testing.T) {
 	th := newTestHub(t)
 	srv := httptest.NewServer(th.h)
@@ -235,7 +222,6 @@ func TestPairCodeOneAtATime(t *testing.T) {
 	if w.Code != 409 || got["active"] != true || got["expires"] != first["expires"] || got["code"] != nil {
 		t.Fatalf("second exclusive code: %d %v", w.Code, got)
 	}
-	// Upstream clients (and the TUI's "new code") replace, and the first code's holder hears.
 	second := decode[map[string]any](t, th.keyed("POST", "/api/pair/code", ""))
 	if second["id"] == first["id"] {
 		t.Fatalf("same id for a new code: %v", second["id"])
@@ -246,16 +232,13 @@ func TestPairCodeOneAtATime(t *testing.T) {
 	if code, _ := th.pair(first["code"].(string)); code != 403 {
 		t.Fatalf("replaced code: %d", code)
 	}
-	// "paired" names the code used.
 	if code, _ := th.pair(second["code"].(string)); code != 200 {
 		t.Fatal("pair failed")
 	}
 	if ev := s.next("paired"); ev["id"] != second["id"] {
 		t.Fatalf("paired = %v, want id %v", ev, second["id"])
 	}
-	// Once used, a new exclusive code is fine.
 	third := decode[map[string]any](t, th.keyed("POST", "/api/pair/code", `{"replace":false}`))
-	// Cancelling another id leaves the code alone; its own id ends it.
 	if w := th.keyed("DELETE", fmt.Sprintf("/api/pair/code?id=%v", second["id"]), ""); w.Code != 200 || decode[map[string]any](t, w)["ok"] != false {
 		t.Fatalf("cancel of a used code: %d %s", w.Code, w.Body)
 	}
@@ -271,7 +254,6 @@ func TestPairCodeOneAtATime(t *testing.T) {
 	if w := th.req("DELETE", "/api/pair/code?id=1", "", ""); w.Code != 401 {
 		t.Fatalf("cancel without key: %d", w.Code)
 	}
-	// An expired code doesn't block a new one.
 	th.keyed("POST", "/api/pair/code", `{"replace":false}`)
 	th.clk.Add(PairTTL + time.Second)
 	if w := th.keyed("POST", "/api/pair/code", `{"replace":false}`); w.Code != 200 {
@@ -279,13 +261,12 @@ func TestPairCodeOneAtATime(t *testing.T) {
 	}
 }
 
-// A full hub refuses to pair, in a sentence, rather than pair a device that can never report.
 func TestPairRefusedWhenFull(t *testing.T) {
 	th := newTestHub(t)
 	for i := range MaxDevices - 1 {
 		th.postReport(fmt.Sprintf("d%d", i), nil)
 	}
-	c := th.newCode() // issued with one slot left
+	c := th.newCode()
 	th.postReport("last", nil)
 	code, body := th.pair(c)
 	if code != 409 || body["token"] != nil || body["error"] != fullMessage {
@@ -295,18 +276,12 @@ func TestPairRefusedWhenFull(t *testing.T) {
 	if body := decode[map[string]any](t, w); w.Code != 409 || body["error"] != fullMessage {
 		t.Fatalf("new code on a full hub: %d %v", w.Code, body)
 	}
-	// Removing a device makes room; the refused attempt didn't count as a guess.
 	th.keyed("DELETE", "/api/devices/d0", "")
 	if code, body := th.pair(c); code != 200 || body["token"] != th.Token() {
 		t.Fatalf("after removing one: %d %v", code, body)
 	}
 }
 
-// TestPairCodeEndsWithItsStream is skeptic report N3: a pair killed before it could cancel
-// its code (SIGHUP, SIGKILL, a crash) left the code live for up to PairTTL, so the next pair
-// refused. A code issued with an owner ends PairGrace after that owner's last stream
-// closes, with a "pairEnded" event, unless the owner reconnects first (a TUI on a flaky
-// link); a code for an owner with no open stream isn't issued at all.
 func TestPairCodeEndsWithItsStream(t *testing.T) {
 	th := newTestHub(t)
 	th.pairGrace = 300 * time.Millisecond
@@ -338,12 +313,10 @@ func TestPairCodeEndsWithItsStream(t *testing.T) {
 		t.Fatalf("code: %d %s", w.Code, w.Body)
 	}
 	issued := decode[map[string]any](t, w)
-	// While its stream is open the code holds.
 	if w := th.keyed("POST", "/api/pair/code", `{"replace":false}`); w.Code != 409 {
 		t.Fatalf("second code while the first's stream is open: %d %s", w.Code, w.Body)
 	}
 
-	// A reconnect within the grace keeps the code.
 	resp.Body.Close()
 	resp = open()
 	time.Sleep(2 * th.pairGrace)
@@ -351,7 +324,7 @@ func TestPairCodeEndsWithItsStream(t *testing.T) {
 		t.Fatalf("the code ended though its owner reconnected: %d %s", w.Code, w.Body)
 	}
 
-	resp.Body.Close() // the pair process dies: its connection closes
+	resp.Body.Close()
 	if ev := watcher.next("pairEnded"); ev["id"] != issued["id"] || ev["reason"] != "abandoned" {
 		t.Fatalf("pairEnded = %v, want id %v abandoned", ev, issued["id"])
 	}

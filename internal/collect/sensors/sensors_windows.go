@@ -12,16 +12,12 @@ import (
 )
 
 func init() {
-	// WMI is slow, so check every 5th sample with room to finish; the collector repeats the
-	// last result in between.
+
 	collect.Register(collect.Probe{Name: "sensors/windows", Every: 5, Timeout: 10 * time.Second, Run: func(ctx context.Context) (collect.Apply, error) {
 		return readWindows(ctx, queryLHM, queryThermalZones).apply(), nil
 	}})
 }
 
-// readWindows reads LibreHardwareMonitor (or OpenHardwareMonitor) sensors and falls back to
-// the ACPI thermal zone for the CPU temperature, as agent.ps1 does. The two queries are
-// parameters so tests can feed recorded rows.
 func readWindows(ctx context.Context, lhm func(context.Context) []lhmSensor, zones func(context.Context) []thermalZone) reading {
 	s := fromLHM(lhm(ctx))
 	if s.cpuTemp == nil {
@@ -32,7 +28,6 @@ func readWindows(ctx context.Context, lhm func(context.Context) []lhmSensor, zon
 	return s
 }
 
-// queryLHM returns the sensors of the first hardware monitor that is running, or nil.
 func queryLHM(ctx context.Context) []lhmSensor {
 	for _, ns := range []string{`root\LibreHardwareMonitor`, `root\OpenHardwareMonitor`} {
 		if ctx.Err() != nil {
@@ -46,7 +41,6 @@ func queryLHM(ctx context.Context) []lhmSensor {
 	return nil
 }
 
-// queryThermalZones returns the ACPI thermal zones, or nil.
 func queryThermalZones(ctx context.Context) []thermalZone {
 	var rows []thermalZone
 	_ = wmiq.Query(ctx, "SELECT Name, HighPrecisionTemperature FROM Win32_PerfFormattedData_Counters_ThermalZoneInformation", `root\cimv2`, &rows)

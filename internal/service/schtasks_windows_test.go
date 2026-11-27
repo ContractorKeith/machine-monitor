@@ -10,10 +10,6 @@ import (
 	"time"
 )
 
-// TestSchtasksHelperProcess is the task's payload, not a test: the integration test runs
-// a copy of this binary as `-test.run=^TestSchtasksHelperProcess$ <heartbeat>`. It
-// rewrites the heartbeat file every 200ms for up to a minute, so the test can see both
-// that it started and that /End stopped it.
 func TestSchtasksHelperProcess(t *testing.T) {
 	if flag.NArg() != 1 {
 		t.Skip("only runs as the scheduled task's payload")
@@ -24,7 +20,6 @@ func TestSchtasksHelperProcess(t *testing.T) {
 	}
 }
 
-// copyFile copies src to dst.
 func copyFile(t *testing.T, src, dst string) {
 	t.Helper()
 	b, err := os.ReadFile(src)
@@ -36,7 +31,6 @@ func copyFile(t *testing.T, src, dst string) {
 	}
 }
 
-// beating reports whether the heartbeat file changes within 2s.
 func beating(path string) bool {
 	first, _ := os.ReadFile(path)
 	for range 10 {
@@ -48,9 +42,6 @@ func beating(path string) bool {
 	return false
 }
 
-// TestSchtasksLogonTaskIntegration creates a real logon task through the same XML and
-// schtasks calls as install, runs it once, checks /End stops
-// it (reinstall relies on that), and deletes it.
 func TestSchtasksLogonTaskIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("creates a real scheduled task")
@@ -59,7 +50,7 @@ func TestSchtasksLogonTaskIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.DataDir = t.TempDir() // the scratch XML goes here, not in the real data dir
+	m.DataDir = t.TempDir()
 	if m.User == "" {
 		t.Fatal("no current user")
 	}
@@ -76,8 +67,7 @@ func TestSchtasksLogonTaskIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Run a copy so a payload that outlives the test can't lock go test's own binary.
-	// The space proves the quoted <Command> path works, as under C:\Program Files.
+
 	dir := filepath.Join(t.TempDir(), "with space")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
