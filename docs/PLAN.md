@@ -301,5 +301,6 @@ machine-monitor update
 ## 11. Licensing
 
 Upstream is MIT (© 2026 Matt). Ported logic (`power.js` model, price table, alert wording and
-thresholds, `normalizeReport` clamps, history aggregation) carries a header comment
-crediting the upstream file and its MIT notice. The rest is written fresh.
+thresholds, `normalizeReport` clamps, history aggregation) is listed file by file, with
+upstream's MIT notice, in `NOTICE.md`, which ships in every release archive. Source files carry
+no header comments (see `docs/adr/0001-no-code-comments.md`). The rest is written fresh.

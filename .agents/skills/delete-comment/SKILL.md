@@ -50,11 +50,14 @@ go test -count=1 ./internal/lint/nocomment -run TestOnlyCommentsChanged -args -b
 
 ## 4. Decision Records → ADRs
 
-`docs/adr/NNNN-kebab-title.md`, numbered after the highest existing one, listed in
-`docs/adr/README.md`. Group by topic, not one ADR per comment. Before adding, read the existing
-ADRs: extend the matching one instead of creating a near-duplicate. Format:
-`# NNNN. Title`, `Status: Accepted (YYYY-MM-DD)`, then `## Context`, `## Decision`,
-`## Consequences`, `## Where` (package or file paths, not line numbers).
+ADRs are per area (`docs/adr/README.md` lists them: 0002 TUI, 0003 hub, 0004 collectors,
+0005 agent/client/service/update, 0006 alerts/history/report/power, 0007 CLI/discovery/export).
+Add each decision as a `### <topic>` section under `## Decisions` in the matching area ADR,
+or extend the section that already covers it. Never one section per comment. Section shape:
+`**Context:**`, `**Decision:**`, `**Consequences:**` and `**Where:**` (file paths, not line
+numbers), each its own paragraph. A new area or a cross-cutting rule gets a new numbered ADR
+(`# NNNN. Title`, `Status: Accepted (YYYY-MM-DD)`, `## Context`, `## Decision`,
+`## Consequences`, `## Where`) and a row in the README.
 
 ## 5. Excuses → issues
 
