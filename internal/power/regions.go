@@ -208,10 +208,12 @@ func localeCountry(locale string) string {
 	locale, _, _ = strings.Cut(locale, ".")
 	locale, _, _ = strings.Cut(locale, "@")
 	parts := strings.FieldsFunc(locale, func(r rune) bool { return r == '_' || r == '-' })
-	if len(parts) < 2 {
-		return ""
+	for _, p := range parts[min(1, len(parts)):] {
+		if len(p) == 2 {
+			return strings.ToUpper(p)
+		}
 	}
-	return strings.ToUpper(parts[1])
+	return ""
 }
 
 func localTimeZone() string {
@@ -235,5 +237,5 @@ func localLocale() string {
 			return v
 		}
 	}
-	return ""
+	return systemLocale()
 }

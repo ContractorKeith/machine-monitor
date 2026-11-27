@@ -36,6 +36,8 @@ func TestGuessRegion(t *testing.T) {
 		{"America/Chicago", "es_MX.UTF-8", "MX"},
 		{"", "en-GB", "GB"},
 		{"", "de_DE@euro", "DE"},
+		{"", "zh-Hant-TW", "TW"},
+		{"", "de-Latn-AT", "AT"},
 		{"", "en_ZZ.UTF-8", "US"},
 		{"", "C", "US"},
 		{"", "", "US"},
