@@ -536,6 +536,8 @@ func (m model) statusLine() string {
 	switch {
 	case m.collectErr != nil:
 		return "collect error: " + hubErr(m.collectErr)
+	case m.opts.History != nil && m.opts.History.WriteErr() != nil:
+		return "history not saved: " + hubErr(m.opts.History.WriteErr())
 	case m.report() == nil:
 		return "collecting…"
 	default:

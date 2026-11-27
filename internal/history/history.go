@@ -90,6 +90,7 @@ type Store struct {
 	unwritten      map[string]*retry
 	write          func(f *os.File, b []byte) (int, error)
 	failKind       string
+	failErr        error
 	warnings       []string
 	needsRewrite   map[string]bool
 	migrationPeers map[string][]string
@@ -445,9 +446,10 @@ func truncate(path string, size int64) {
 
 func (s *Store) reportErr(err error) error {
 	if err == nil {
-		s.failKind = ""
+		s.failKind, s.failErr = "", nil
 		return nil
 	}
+	s.failErr = err
 	kind := err.Error()
 	var pe *os.PathError
 	if errors.As(err, &pe) {
@@ -458,6 +460,12 @@ func (s *Store) reportErr(err error) error {
 	}
 	s.failKind = kind
 	return err
+}
+
+func (s *Store) WriteErr() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.failErr
 }
 
 func (s *Store) Add(id string, p Point) error {
