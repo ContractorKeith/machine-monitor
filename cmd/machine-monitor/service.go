@@ -28,19 +28,13 @@ const serviceUsage = `Usage:
                                                                (what the Windows logon task starts)
 `
 
-// Seams for tests.
 var (
 	newServiceManager = service.Default
 	serviceExecutable = service.Executable
 )
 
-// agentBuilt reports whether this binary's agent command is real rather than the stub.
-// It asks the dispatcher with -h, which a real command answers with usage and no side
-// effects. Set in init: the commands table refers to runService, so a package-level
-// initializer would be a cycle.
 var agentBuilt func() bool
 
-// roleCommand is the dispatcher entry for a role; set in init for the same reason.
 var roleCommand func(r service.Role) func(args []string, stdout, stderr io.Writer) int
 
 func init() {
@@ -54,16 +48,12 @@ func init() {
 	}
 }
 
-// redirectOutput points the whole process's output at f and, on Windows, detaches from
-// the console so no window stays open. Tests replace it.
 var redirectOutput = func(f *os.File) {
 	os.Stdout, os.Stderr = f, f
 	log.SetOutput(f)
 	detachConsole()
 }
 
-// runServiceRun is `service run -- hub|agent [flags]`: the role's command with its output
-// appended to <data dir>/logs/<role>.log.
 func runServiceRun(args []string, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "--" {
 		args = args[1:]
@@ -100,8 +90,6 @@ func runServiceRun(args []string, stderr io.Writer) int {
 	return code
 }
 
-// runService is `machine-monitor service install|uninstall|status`: a user-level autostart
-// (systemd user unit, LaunchAgent or logon task). No admin rights needed.
 func runService(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
 		fmt.Fprint(stderr, "machine-monitor service: missing action\n\n"+serviceUsage)
@@ -179,14 +167,12 @@ func runService(args []string, stdout, stderr io.Writer) int {
 		if inTempDir(exe) {
 			fmt.Fprintf(stderr, "warning: %s is in a temp directory (go run?); the service will break when it's cleaned up\n", exe)
 		}
-		// A role that wasn't installed before and fails halfway is removed again; one that was
-		// installed is left as it is, since its old definition can't be put back.
+
 		before, statusErr := m.Status(ctx, role)
 		if err := m.Install(ctx, spec, stdout); err != nil {
 			fmt.Fprintf(stderr, "machine-monitor service install: %v\n", err)
-			if statusErr == nil && !before.Installed { // unknown prior state: don't remove anything
-				// Uninstall can fail on a role that never got far enough to have anything to
-				// remove; what matters is what status says now.
+			if statusErr == nil && !before.Installed {
+
 				if rmErr := m.Uninstall(ctx, role, io.Discard); rmErr == nil || stillGone(ctx, m, role) {
 					fmt.Fprintf(stderr, "Rolled back: the %s service is not installed.\n", role)
 				} else {
@@ -224,9 +210,6 @@ func runService(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// pairedHub is the hub an agent service will report to: --hub, or the hub in client.json when
-// that is empty. The agent crash-loops without a pairing, so a machine that isn't paired with
-// that hub is refused (exit code 1) with what to do. A ?key= in --hub is refused too (2).
 func pairedHub(hubFlag string, stderr io.Writer) (string, int) {
 	fail := func(code int, format string, a ...any) (string, int) {
 		fmt.Fprintf(stderr, "machine-monitor service install: "+format+"\n", a...)
@@ -264,7 +247,6 @@ func pairedHub(hubFlag string, stderr io.Writer) (string, int) {
 	return saved, 0
 }
 
-// inTempDir reports whether path is under the OS temp directory.
 func inTempDir(path string) bool {
 	tmp, err := filepath.EvalSymlinks(os.TempDir())
 	if err != nil {
@@ -274,7 +256,6 @@ func inTempDir(path string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-// stillGone reports whether status says the role isn't installed (after a failed removal).
 func stillGone(ctx context.Context, m *service.Manager, r service.Role) bool {
 	st, err := m.Status(ctx, r)
 	return err == nil && !st.Installed

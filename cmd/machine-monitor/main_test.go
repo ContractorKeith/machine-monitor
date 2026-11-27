@@ -9,13 +9,12 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/tui"
 )
 
-// built lists the commands that are no longer stubs; each has its own test.
 var built = map[string]bool{"status": true, "hub": true, "agent": true, "connect": true}
 
 type runCase struct {
 	args        []string
 	code        int
-	out, errOut string // substrings expected on stdout and stderr
+	out, errOut string
 }
 
 func TestRun(t *testing.T) {

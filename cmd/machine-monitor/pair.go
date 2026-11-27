@@ -27,18 +27,11 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/hub"
 )
 
-// Clock and tick for pair's countdown; tests replace them.
 var (
 	pairNow  = time.Now
 	pairTick = time.Second
 )
 
-// runPair is `machine-monitor pair [--port 7777] [--replace]`, run on the hub's machine: it
-// asks the hub running here for a one-time pairing code (with the key in this machine's
-// config.json), prints it and counts down until a device uses it or it expires. On a
-// terminal the countdown updates in place; otherwise it prints a plain line each minute. It
-// exits 1 when the hub goes away, since the code goes with it. Only one code is live at a
-// time: while another is, pair says so, unless --replace.
 func runPair(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("pair", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -74,24 +67,17 @@ func runPair(args []string, stdout, stderr io.Writer) int {
 	hubURL := "http://" + addr
 	hc := localHubClient(key)
 
-	// SIGHUP (terminal closed, SSH dropped) ends the run like Ctrl+C, so its code is
-	// cancelled (skeptic report N3). So does stdout's reader quitting (`pair | head -1`):
-	// with SIGPIPE caught, a write to the closed pipe fails with EPIPE instead of killing
-	// the process (os/signal), and quitOnError turns that failure into a stop. Windows has no
-	// SIGPIPE; the write just fails there.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGPIPE)
 	defer stop()
 	ctx, quit := context.WithCancel(ctx)
 	defer quit()
-	tty := isTerminal(stdout) // before the wrap: it looks for an *os.File
+	tty := isTerminal(stdout)
 	stdout = &quitOnError{w: stdout, quit: quit}
-	// The owner ties the code to this run's stream: if the run dies without cancelling
-	// (SIGKILL, a crash), the hub ends the code when the stream closes.
+
 	ob := make([]byte, 16)
 	rand.Read(ob)
 	owner := hex.EncodeToString(ob)
-	// Follow the stream before asking for the code, so its "paired" event can't be missed.
-	// Every connection proves it reaches the hub itself before the key goes over it.
+
 	sctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	events, err := pairStream(sctx, hc, hubURL, key, owner)
@@ -123,7 +109,7 @@ func runPair(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprint(stdout, "\r\033[K")
 		}
 	}
-	// render shows the time left and reports whether any is.
+
 	lastMinute := int64(-1)
 	render := func() bool {
 		left := expires.Sub(pairNow()).Round(time.Second)
@@ -134,7 +120,7 @@ func runPair(args []string, stdout, stderr io.Writer) int {
 			return false
 		case tty:
 			fmt.Fprintf(stdout, "\r\033[KExpires in %s   (Ctrl+C to stop)", clockText(left))
-		case int64(left/time.Minute) != lastMinute: // a plain line on each new minute
+		case int64(left/time.Minute) != lastMinute:
 			lastMinute = int64(left / time.Minute)
 			fmt.Fprintf(stdout, "Expires in %s\n", clockText(left))
 		}
@@ -151,7 +137,7 @@ func runPair(args []string, stdout, stderr io.Writer) int {
 			if tty {
 				fmt.Fprintln(stdout)
 			}
-			// End this run's code, so the next pair needn't wait it out.
+
 			cctx, ccancel := context.WithTimeout(context.Background(), 3*time.Second)
 			cancelPairCode(cctx, hc, hubURL, key, id)
 			ccancel()
@@ -159,15 +145,15 @@ func runPair(args []string, stdout, stderr io.Writer) int {
 		case ev, ok := <-events:
 			switch {
 			case !ok && ctx.Err() != nil:
-				// Stopped: the stream closed with ctx. The hub ends the code with it.
+
 				return 1
 			case !ok:
-				// The hub stopped or restarted, and an active code lives only in its memory.
+
 				clearLine()
 				fmt.Fprintln(stdout, "Lost the hub, and the code with it. Run machine-monitor pair again once the hub is back.")
 				return 1
 			case ev.ID != id:
-				// another code's event
+
 			case ev.Type == "paired":
 				clearLine()
 				fmt.Fprintln(stdout, "Paired: a device used the code.")
@@ -185,7 +171,6 @@ func runPair(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
-// quitOnError passes writes to w, and calls quit once one fails.
 type quitOnError struct {
 	w    io.Writer
 	quit func()
@@ -199,19 +184,10 @@ func (q *quitOnError) Write(b []byte) (int, error) {
 	return n, err
 }
 
-// errNotHub is a program on the port that can't prove, for this very connection, that it is
-// the hub holding this machine's key.
 var errNotHub = errors.New("the program on this port can't prove it is the hub with this machine's key, so the key was not sent")
 
-// errOldHub is the hub with this machine's key, but a version from before pair checked the
-// connection (no connProof), e.g. still running after `update`. Its plain proof can be
-// relayed, so it doesn't get the key either.
 var errOldHub = errors.New("the hub running here predates this pair command, so the key was not sent: stop the running hub, start it again (machine-monitor hub, or re-run machine-monitor service install --role hub), then run pair again")
 
-// localHubClient talks to the hub on this machine. Each new connection first proves it
-// reaches the hub itself (proveHub), and only then carries the key. A program squatting on
-// the port (say another user's, when the hub runs on another port) can relay the plain hub
-// proof but not this one, so it never sees the key.
 func localHubClient(key string) *http.Client {
 	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
 		conn, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, network, addr)
@@ -225,17 +201,13 @@ func localHubClient(key string) *http.Client {
 		return conn, nil
 	}
 	return &http.Client{Transport: &http.Transport{
-		Proxy:                 nil, // never send the key to a proxy
+		Proxy:                 nil,
 		DialContext:           dial,
 		ResponseHeaderTimeout: 15 * time.Second,
 		MaxIdleConnsPerHost:   2,
 	}}
 }
 
-// proveHub sends GET /api/info?nonce= on conn itself and checks the hub's connProof: an HMAC
-// under the key of the nonce and both ends of conn, this end and the address it dialled
-// (hub.ConnProof). A relay's connection to the real hub has other ends, so its answer can't
-// match.
 func proveHub(conn net.Conn, addr, key string) error {
 	local, ok := conn.LocalAddr().(*net.TCPAddr)
 	remote, ok2 := conn.RemoteAddr().(*net.TCPAddr)
@@ -273,7 +245,7 @@ func proveHub(conn net.Conn, addr, key string) error {
 		Proof     string `json:"proof"`
 		ConnProof string `json:"connProof"`
 	}
-	// Nothing may follow the reply: the connection is handed on for the next request.
+
 	if json.Unmarshal(b, &info) != nil || resp.Close || br.Buffered() > 0 {
 		return errNotHub
 	}
@@ -286,23 +258,17 @@ func proveHub(conn net.Conn, addr, key string) error {
 	return nil
 }
 
-// plainProof is the hub proof every hub sends, upstream's too:
-// hex(HMAC-SHA256(key, "device-monitor-hub:" + nonce)).
 func plainProof(key, nonce string) string {
 	m := hmac.New(sha256.New, []byte(key))
 	m.Write([]byte("device-monitor-hub:" + nonce))
 	return hex.EncodeToString(m.Sum(nil))
 }
 
-// pairEvent is the part of a stream event pair follows.
 type pairEvent struct {
 	Type string `json:"type"`
 	ID   int64  `json:"id"`
 }
 
-// pairStream opens the hub's live stream as owner and returns its "paired" and "pairEnded"
-// events. The channel closes when the stream ends. The hub registers a stream before it
-// sends the reply headers, so once this returns no event can be missed.
 func pairStream(ctx context.Context, hc *http.Client, hubURL, key, owner string) (<-chan pairEvent, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, hubURL+"/api/stream?pair="+owner, nil)
 	if err != nil {
@@ -313,7 +279,7 @@ func pairStream(ctx context.Context, hc *http.Client, hubURL, key, owner string)
 	if err != nil {
 		var ue *url.Error
 		if errors.As(err, &ue) {
-			err = ue.Err // the URL is already in the caller's message
+			err = ue.Err
 		}
 		return nil, err
 	}
@@ -325,7 +291,7 @@ func pairStream(ctx context.Context, hc *http.Client, hubURL, key, owner string)
 	go func() {
 		defer close(out)
 		defer resp.Body.Close()
-		// Lines too long for the buffer (the snapshot) are skipped: pair's events are small.
+
 		br := bufio.NewReaderSize(resp.Body, 64<<10)
 		long := false
 		for {
@@ -356,13 +322,10 @@ func pairStream(ctx context.Context, hc *http.Client, hubURL, key, owner string)
 	return out, nil
 }
 
-// codeActiveError is the hub refusing a new code because another is live.
 type codeActiveError struct{ expires time.Time }
 
 func (e *codeActiveError) Error() string { return "a pairing code is already active" }
 
-// requestPairCode asks the hub for a new pairing code, tied to owner's stream. Unless
-// replace, the hub refuses while another code is live (codeActiveError).
 func requestPairCode(ctx context.Context, hc *http.Client, hubURL, key, owner string, replace bool) (code string, expires time.Time, id int64, err error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -380,7 +343,7 @@ func requestPairCode(ctx context.Context, hc *http.Client, hubURL, key, owner st
 	defer resp.Body.Close()
 	var v struct {
 		Code    string `json:"code"`
-		Expires int64  `json:"expires"` // Unix ms
+		Expires int64  `json:"expires"`
 		ID      int64  `json:"id"`
 		Active  bool   `json:"active"`
 		Error   string `json:"error"`
@@ -403,7 +366,6 @@ func requestPairCode(ctx context.Context, hc *http.Client, hubURL, key, owner st
 	return v.Code, time.UnixMilli(v.Expires), v.ID, nil
 }
 
-// cancelPairCode ends code id on the hub, if it is still the live one. Best effort.
 func cancelPairCode(ctx context.Context, hc *http.Client, hubURL, key string, id int64) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, fmt.Sprintf("%s/api/pair/code?id=%d", hubURL, id), nil)
 	if err != nil {
@@ -415,10 +377,8 @@ func cancelPairCode(ctx context.Context, hc *http.Client, hubURL, key string, id
 	}
 }
 
-// virtualIface matches adapters other devices can't reach the hub through.
 var virtualIface = regexp.MustCompile(`(?i)vEthernet|WSL|VirtualBox|VMware|docker|^br-|^veth|^virbr`)
 
-// hubAddress is the address other devices reach this hub at: its first real LAN address.
 func hubAddress(port int) string {
 	addrs := hub.LANAddresses()
 	for _, a := range addrs {
@@ -432,7 +392,6 @@ func hubAddress(port int) string {
 	return fmt.Sprintf("http://<this machine's address>:%d", port)
 }
 
-// clockText is a duration as m:ss.
 func clockText(d time.Duration) string {
 	s := int64(d / time.Second)
 	return fmt.Sprintf("%d:%02d", s/60, s%60)

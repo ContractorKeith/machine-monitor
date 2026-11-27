@@ -16,7 +16,6 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/tui"
 )
 
-// TestNotATerminal: /dev/null is a character device but not a terminal (B17).
 func TestNotATerminal(t *testing.T) {
 	null, err := os.Open(os.DevNull)
 	if err != nil {
@@ -34,8 +33,6 @@ func TestNotATerminal(t *testing.T) {
 	}
 }
 
-// TestConnectSaysHowToReport: on a terminal connect still tells the user that pairing alone
-// doesn't make this machine report, around the TUI (B8).
 func TestConnectSaysHowToReport(t *testing.T) {
 	h, srv, _ := connectHub(t)
 	stubAgent(t)
@@ -48,7 +45,6 @@ func TestConnectSaysHowToReport(t *testing.T) {
 	}
 }
 
-// TestConnectFlagsAfterURL: the usage line says why (flag stops at the URL).
 func TestConnectFlagsAfterURL(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if rc := run([]string{"connect", "http://127.0.0.1:7777", "--code", "123456"}, &out, &errOut); rc != 2 ||
@@ -57,7 +53,6 @@ func TestConnectFlagsAfterURL(t *testing.T) {
 	}
 }
 
-// TestTUIOptionsCarryVersion: Settings shows what --version prints (B22).
 func TestTUIOptionsCarryVersion(t *testing.T) {
 	old := version
 	version = "9.9.9"
@@ -67,8 +62,6 @@ func TestTUIOptionsCarryVersion(t *testing.T) {
 	}
 }
 
-// TestLoadPairingBothSpellings: the agent and the service read the same client.json
-// shapes as the TUI and export (B21).
 func TestLoadPairingBothSpellings(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "client.json")
@@ -94,7 +87,6 @@ func TestLoadPairingBothSpellings(t *testing.T) {
 	}
 }
 
-// TestServiceRefusalNamesNoTUI: the different-hub refusal points at a flag that exists.
 func TestServiceRefusalNamesNoTUI(t *testing.T) {
 	pairClient(t, "http://10.0.0.2:7777")
 	var errOut bytes.Buffer
@@ -103,7 +95,6 @@ func TestServiceRefusalNamesNoTUI(t *testing.T) {
 	}
 }
 
-// TestKeyFromEnvAndWarning: --key warns about argv; the environment variable doesn't.
 func TestKeyFromEnvAndWarning(t *testing.T) {
 	var errOut bytes.Buffer
 	if got := keyArg("abc", &errOut); got != "abc" || !strings.Contains(errOut.String(), "process list") {
@@ -116,8 +107,6 @@ func TestKeyFromEnvAndWarning(t *testing.T) {
 	}
 }
 
-// TestExportKeyHandling: a ?key= URL is refused as everywhere else, a wrong key is called
-// wrong, and localhost finds a key saved for 127.0.0.1 (B21).
 func TestExportKeyHandling(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv(config.DirEnv, dir)
@@ -145,15 +134,13 @@ func TestExportKeyHandling(t *testing.T) {
 	}
 }
 
-// TestRollbackMessageFollowsStatus: when removing a half-installed service fails but status
-// says it isn't installed, the message says rolled back (B21).
 func TestRollbackMessageFollowsStatus(t *testing.T) {
 	pairClient(t, "http://10.0.0.2:7777")
 	fakeService(t)
 	m, _ := newServiceManager()
 	run0 := m.Run
 	m.Run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		if slices.Contains(args, "daemon-reload") { // install fails, and so does the rollback after removing the unit
+		if slices.Contains(args, "daemon-reload") {
 			return []byte("boom"), errors.New("exit status 1")
 		}
 		return run0(ctx, name, args...)

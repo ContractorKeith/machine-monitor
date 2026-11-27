@@ -27,10 +27,8 @@ shows it. Without --hub it reads this machine's history (kept by machine-monitor
 is the last 24h.
 `
 
-// exportNow is the clock for export; tests replace it.
 var exportNow = time.Now
 
-// runExport is `machine-monitor export ID --range 7d --format csv`.
 func runExport(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("export", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -42,7 +40,6 @@ func runExport(args []string, stdout, stderr io.Writer) int {
 	hubURL := fs.String("hub", "", "hub to read from")
 	keyFlag := fs.String("key", "", "hub key (default: the key in client.json for that hub)")
 
-	// flag stops at the first positional, so take the ID wherever it sits among the flags.
 	var ids []string
 	for {
 		if err := fs.Parse(args); err != nil {
@@ -107,8 +104,6 @@ func runExport(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// savedKey is the key client.json holds for hub u. "localhost" and the loopback addresses
-// are the same hub, so a client.json that says 127.0.0.1 serves --hub localhost too.
 func savedKey(clientPath, u string) (string, error) {
 	key, err := export.KeyFor(clientPath, u)
 	if key != "" || err != nil || !strings.Contains(u, "localhost") {
@@ -122,8 +117,6 @@ func savedKey(clientPath, u string) (string, error) {
 	return "", nil
 }
 
-// lockedWithKey rewrites export's "locked and this machine has no key" when a key was sent
-// and the hub still refused it: the key is wrong, not missing.
 func lockedWithKey(err error, hub, key string) error {
 	if key != "" && strings.Contains(err.Error(), "is locked and this machine has no key") {
 		return fmt.Errorf("the hub at %s refused the key. Check it with the one the hub prints (machine-monitor hub --show-key), or pair again: machine-monitor connect %s", hub, hub)

@@ -16,10 +16,8 @@ import (
 	"github.com/ContractorKeith/machine-monitor/internal/service"
 )
 
-func init() { built["service"] = true } // keeps main_test.go out of this change
+func init() { built["service"] = true }
 
-// fakeService points the service command at a Linux manager in a temp dir whose
-// systemctl calls are recorded, never run.
 func fakeService(t *testing.T) (*[]string, string) {
 	t.Helper()
 	root := t.TempDir()
@@ -37,7 +35,6 @@ func fakeService(t *testing.T) (*[]string, string) {
 	return &calls, filepath.Join(m.ConfigHome, "systemd", "user")
 }
 
-// pairClient writes a client.json in a fresh data dir, as connect does.
 func pairClient(t *testing.T, hubURL string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -90,7 +87,7 @@ func TestServiceWarnsWhenAgentIsStub(t *testing.T) {
 		t.Errorf("stub agent: exit %d, stderr %q; want 0 and a warning", code, errOut.String())
 	}
 
-	commands["agent"] = func(_ []string, _, _ io.Writer) int { return 0 } // a built agent answering -h
+	commands["agent"] = func(_ []string, _, _ io.Writer) int { return 0 }
 	fakeService(t)
 	errOut.Reset()
 	if code := run(args, &out, &errOut); code != 0 || strings.Contains(errOut.String(), warning) {
@@ -104,7 +101,7 @@ func TestServiceRun(t *testing.T) {
 	oldAgent, oldRedirect := commands["agent"], redirectOutput
 	t.Cleanup(func() { commands["agent"], redirectOutput = oldAgent, oldRedirect })
 	redirected := false
-	redirectOutput = func(*os.File) { redirected = true } // keep go test's own output
+	redirectOutput = func(*os.File) { redirected = true }
 	var got []string
 	commands["agent"] = func(args []string, stdout, _ io.Writer) int {
 		got = args
@@ -156,7 +153,7 @@ func TestServiceUsage(t *testing.T) {
 }
 
 func TestInTempDir(t *testing.T) {
-	dir := os.TempDir() // not t.TempDir(): that follows GOTMPDIR, which os.TempDir() ignores
+	dir := os.TempDir()
 	if r, err := filepath.EvalSymlinks(dir); err == nil {
 		dir = r
 	}
@@ -168,8 +165,6 @@ func TestInTempDir(t *testing.T) {
 	}
 }
 
-// install --role agent with no --hub uses client.json's hub, so the hint connect prints
-// works as printed (skeptic M2).
 func TestServiceInstallAgentUsesPairedHub(t *testing.T) {
 	pairClient(t, "http://10.0.0.2:7777")
 	_, unitDir := fakeService(t)
@@ -183,7 +178,6 @@ func TestServiceInstallAgentUsesPairedHub(t *testing.T) {
 	}
 }
 
-// An unpaired machine, or one paired with another hub, gets no agent unit (skeptic M3).
 func TestServiceInstallAgentRefusesWithoutPairing(t *testing.T) {
 	t.Setenv(config.DirEnv, t.TempDir())
 	calls, unitDir := fakeService(t)
@@ -210,7 +204,6 @@ func TestServiceInstallAgentRefusesWithoutPairing(t *testing.T) {
 	}
 }
 
-// A ?key= in --hub is refused and never reaches a unit file (skeptic L4).
 func TestServiceInstallRejectsKeyInURL(t *testing.T) {
 	pairClient(t, "http://10.0.0.2:7777")
 	_, unitDir := fakeService(t)
@@ -224,7 +217,6 @@ func TestServiceInstallRejectsKeyInURL(t *testing.T) {
 	}
 }
 
-// A failed install removes what it wrote, unless the role was already installed.
 func TestServiceInstallRollsBack(t *testing.T) {
 	pairClient(t, "http://10.0.0.2:7777")
 	calls, unitDir := fakeService(t)
@@ -247,7 +239,6 @@ func TestServiceInstallRollsBack(t *testing.T) {
 		t.Errorf("unit left behind after a failed install; calls %q", *calls)
 	}
 
-	// An existing install is left alone when a re-install fails.
 	fail = false
 	errOut.Reset()
 	if code := run([]string{"service", "install", "--role", "agent"}, &out, &errOut); code != 0 {

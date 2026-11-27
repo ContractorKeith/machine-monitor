@@ -5,7 +5,6 @@ import (
 	"time"
 )
 
-// Ranges are the named spans --range accepts (PLAN §7, History view).
 var Ranges = map[string]time.Duration{
 	"1h":  time.Hour,
 	"6h":  6 * time.Hour,
@@ -14,12 +13,8 @@ var Ranges = map[string]time.Duration{
 	"30d": 30 * 24 * time.Hour,
 }
 
-// rangeNames is Ranges' keys in order, for error messages.
 const rangeNames = "1h, 6h, 24h, 7d or 30d"
 
-// ParseRange turns --range or --from/--to into a time span. --range ends now; --to defaults
-// to now and --from to 24h before --to. --range can't be combined with --from or --to.
-// --from and --to take RFC 3339 times or YYYY-MM-DD dates (midnight in loc).
 func ParseRange(rng, from, to string, now time.Time, loc *time.Location) (time.Time, time.Time, error) {
 	if rng != "" && (from != "" || to != "") {
 		return time.Time{}, time.Time{}, sentence("Use either --range or --from/--to, not both.")
@@ -55,7 +50,6 @@ func ParseRange(rng, from, to string, now time.Time, loc *time.Location) (time.T
 	return start, end, nil
 }
 
-// parseTime reads an RFC 3339 time or a YYYY-MM-DD date.
 func parseTime(s string, loc *time.Location) (time.Time, error) {
 	if t, err := time.Parse(time.RFC3339, s); err == nil {
 		return t, nil

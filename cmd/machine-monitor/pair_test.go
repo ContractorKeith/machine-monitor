@@ -25,7 +25,6 @@ import (
 
 func init() { built["pair"] = true }
 
-// syncBuffer is a bytes.Buffer safe to read while a command writes it.
 type syncBuffer struct {
 	mu sync.Mutex
 	b  bytes.Buffer
@@ -38,8 +37,6 @@ func (s *syncBuffer) Write(p []byte) (int, error) {
 }
 func (s *syncBuffer) String() string { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
 
-// pairHub starts a hub whose data dir is this machine's (MACHINE_MONITOR_DIR) and returns
-// it with its --port value.
 func pairHub(t *testing.T) (*hub.Hub, *httptest.Server, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -49,21 +46,18 @@ func pairHub(t *testing.T) (*hub.Hub, *httptest.Server, string) {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(h.Handler())
-	// Drop connections first: a pair a failed test left running holds its stream open,
-	// and srv.Close would wait on it for ever.
+
 	t.Cleanup(func() { srv.CloseClientConnections(); srv.Close(); h.Close() })
 	u, _ := url.Parse(srv.URL)
 	return h, srv, u.Port()
 }
 
-// startPair runs `pair --port port` in the background.
 func startPair(port string) (out, errOut *syncBuffer, rc chan int) {
 	out = &syncBuffer{}
 	errOut, rc = startPairTo(port, out)
 	return out, errOut, rc
 }
 
-// startPairTo runs `pair --port port` in the background with stdout out.
 func startPairTo(port string, out io.Writer) (errOut *syncBuffer, rc chan int) {
 	errOut, rc = &syncBuffer{}, make(chan int, 1)
 	go func() { rc <- run([]string{"pair", "--port", port}, out, errOut) }()
@@ -110,8 +104,6 @@ func TestPairPrintsCodeUntilUsed(t *testing.T) {
 	}
 }
 
-// closedPipe is stdout piped to a reader that quit after the first line (`pair | head -1`):
-// every write after the one that finishes that line fails with EPIPE.
 type closedPipe struct {
 	syncBuffer
 	closed bool
@@ -131,7 +123,6 @@ func (p *closedPipe) Write(b []byte) (int, error) {
 	return n, err
 }
 
-// newCodeAllowed asks the hub for an exclusive code: only possible when none is live.
 func newCodeAllowed(t *testing.T, h *hub.Hub, srv *httptest.Server) {
 	t.Helper()
 	req, _ := http.NewRequest("POST", srv.URL+"/api/pair/code", strings.NewReader(`{"replace":false}`))
@@ -147,10 +138,6 @@ func newCodeAllowed(t *testing.T, h *hub.Hub, srv *httptest.Server) {
 	}
 }
 
-// TestPairStopsWhenStdoutCloses is skeptic report N3: `pair | head -1` left its code live,
-// so the next pair refused for up to 10 minutes. A failed write to stdout must end the run
-// and cancel the code. (A real broken pipe gives the same EPIPE: pair catches SIGPIPE, and
-// on Windows the write just fails.)
 func TestPairStopsWhenStdoutCloses(t *testing.T) {
 	h, srv, port := pairHub(t)
 	out := &closedPipe{}
@@ -164,8 +151,6 @@ func TestPairStopsWhenStdoutCloses(t *testing.T) {
 	newCodeAllowed(t, h, srv)
 }
 
-// TestPairSighupCancelsCode is skeptic report N3: a pair stopped by SIGHUP (terminal
-// closed, SSH dropped) left its code live. It must end the run's code, as Ctrl+C does.
 func TestPairSighupCancelsCode(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("no SIGHUP on Windows")
@@ -220,7 +205,7 @@ func TestPairNeedsLocalHub(t *testing.T) {
 	if c := run([]string{"pair"}, &out, &errOut); c != 1 || !strings.Contains(errOut.String(), "machine-monitor hub") {
 		t.Fatalf("no hub key here: exit %d, %q", c, errOut.String())
 	}
-	// A key, but no hub answering on the port.
+
 	_, srv, port := pairHub(t)
 	srv.Close()
 	if c := run([]string{"pair", "--port", port}, &out, &errOut); c != 1 || !strings.Contains(errOut.String(), "is machine-monitor hub running") {
@@ -244,7 +229,6 @@ func TestHubShowKey(t *testing.T) {
 	}
 }
 
-// The key is masked when stdout is a pipe or log, as under systemd or launchd.
 func TestHubKeyMaskedWhenNotTerminal(t *testing.T) {
 	key := "c4bb99e367a5f6fcf4e8ccfa"
 	var buf bytes.Buffer
@@ -264,13 +248,11 @@ func TestHubKeyMaskedWhenNotTerminal(t *testing.T) {
 	}
 }
 
-// A program squatting on the port pair targets, relaying to the real hub, never gets the
-// key: not an HTTP relay that forwards every request, nor a raw TCP relay.
 func TestPairKeyNotSentToRelay(t *testing.T) {
 	h, srv, _ := pairHub(t)
 	target, _ := url.Parse(srv.URL)
 	var mu sync.Mutex
-	var seen []string // what reached the squatter
+	var seen []string
 
 	httpRelay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
@@ -308,7 +290,7 @@ func TestPairKeyNotSentToRelay(t *testing.T) {
 		}
 	}()
 
-	t.Cleanup(srv.CloseClientConnections) // a pair that wrongly got through holds a stream
+	t.Cleanup(srv.CloseClientConnections)
 	leaked := func() string {
 		mu.Lock()
 		defer mu.Unlock()
@@ -351,8 +333,6 @@ type writerFunc func(p []byte)
 
 func (f writerFunc) Write(p []byte) (int, error) { f(p); return len(p), nil }
 
-// Two pair runs at once: the second says a code is already active instead of quietly
-// killing the first one's code. --replace ends the first, which then says so.
 func TestPairOneCodeAtATime(t *testing.T) {
 	_, srv, port := pairHub(t)
 	out1, err1, rc1 := startPair(port)
@@ -387,7 +367,6 @@ func TestPairOneCodeAtATime(t *testing.T) {
 	}
 }
 
-// The banner's pair hint names the port when it isn't the default.
 func TestPairCommandHint(t *testing.T) {
 	if got := pairCommand(hub.DefaultPort); got != "machine-monitor pair" {
 		t.Errorf("default port: %q", got)
@@ -397,8 +376,6 @@ func TestPairCommandHint(t *testing.T) {
 	}
 }
 
-// A hub from before connProof (still running after `update`) proves the key the old way.
-// pair still doesn't send the key, and says the hub must be restarted.
 func TestPairRefusesOlderHub(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv(config.DirEnv, dir)

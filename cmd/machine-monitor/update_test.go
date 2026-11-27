@@ -18,8 +18,6 @@ import (
 
 func init() { built["update"] = true }
 
-// fakeUpdate serves release tag with a build for this platform and points update at a
-// fake binary in a temp dir. It returns the release and the binary's path.
 func fakeUpdate(t *testing.T, tag string) (*updatetest.Release, string) {
 	t.Helper()
 	rel := updatetest.New(t, tag, map[string][]byte{runtime.GOOS + "/" + runtime.GOARCH: []byte("new binary")})
@@ -104,7 +102,7 @@ func TestUpdateRefusesBadChecksum(t *testing.T) {
 
 func TestUpdateRefusesBadSignature(t *testing.T) {
 	rel, exe := fakeUpdate(t, "v1.1.0")
-	// A matching checksums.txt for a tampered archive, signed by someone else's CA.
+
 	name := update.ArchiveName("1.1.0", runtime.GOOS, runtime.GOARCH)
 	evil := updatetest.Archive(t, name, []byte("evil binary"))
 	rel.Set(name, evil)
@@ -132,7 +130,7 @@ func TestUpdateLeavesPackageManagersAlone(t *testing.T) {
 }
 
 func TestPrintableStripsEscapes(t *testing.T) {
-	if got := printable("a\x1b[31mred\x07\u009b"); got != "ared" { // the whole CSI sequence goes, not just the ESC byte
+	if got := printable("a\x1b[31mred\x07\u009b"); got != "ared" {
 		t.Fatalf("printable = %q", got)
 	}
 }
@@ -149,7 +147,6 @@ func sha256Hex(data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// Before the first release GitHub answers 404; update says so and exits 0 (skeptic L8).
 func TestUpdateWithNoReleaseYet(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	defer srv.Close()
