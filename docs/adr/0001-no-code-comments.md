@@ -5,9 +5,10 @@ Status: Accepted (2026-11-27)
 ## Context
 
 The codebase was mostly written by agents and carried about 4,600 lines of comments in 3,094
-groups. An audit sorted every one into four kinds. About 79% restated the code (Tautology).
-About 1% described code that had since changed (Stale). Fewer than 1% justified a shortcut
-(Excuse). About 20% recorded a real, non-obvious reason (Decision Record). The Decision Records
+groups. An audit sorted every one into four kinds. About 74% restated the code (Tautology).
+Under 1% described code that had since changed (Stale). Under 1% justified a shortcut
+(Excuse). About 24% recorded a real, non-obvious reason (Decision Record). The other 1% were
+upstream attribution headers. The Decision Records
 were spread across hundreds of files. Excuses let the same shortcut be copied without anyone
 looking at it again.
 
